@@ -81,6 +81,9 @@ Route::prefix('v1')->middleware('auth:sanctum')->group(function () {
         // POST /api/v1/paquetes/enviar
         Route::post('enviar', [PaquetesController::class, 'enviar'])->name('paquetes.enviar');
 
+        // GET /api/v1/paquetes/validar-recepcion?codigo_recepcion=X&codigo_sucursal=0&codigo_punto_venta=0
+        Route::get('validar-recepcion', [PaquetesController::class, 'validarRecepcion'])->name('paquetes.validar-recepcion');
+
         // GET  /api/v1/paquetes/{id}/estado
         Route::get('{id}/estado', [PaquetesController::class, 'estado'])->name('paquetes.estado');
     });

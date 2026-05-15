@@ -347,6 +347,61 @@ class PaquetesController extends Controller
 
     // ─────────────────────────────────────────────────────────────────────────
 
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Valida un paquete en SIAT usando su codigoRecepcion.
+     * Útil para paquetes enviados antes de que existiera siat_package_id.
+     *
+     * Query params: ?codigo_recepcion=XXX&codigo_sucursal=0&codigo_punto_venta=0
+     */
+    public function validarRecepcion(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'codigo_recepcion'   => 'required|string',
+            'codigo_sucursal'    => 'required|integer|min:0',
+            'codigo_punto_venta' => 'required|integer|min:0',
+        ]);
+
+        try {
+            $ctx = $this->invoiceService->getContext(
+                (int) $validated['codigo_sucursal'],
+                (int) $validated['codigo_punto_venta'],
+            );
+        } catch (\Exception $e) {
+            return response()->json(['ok' => false, 'mensaje' => 'Sin contexto SIAT: ' . $e->getMessage()], 503);
+        }
+
+        /** @var \App\Models\SiatCufd $cufdModel */
+        $cufdModel = $ctx['cufd'];
+
+        $siatService = app(\App\Services\Siat\FacturacionService::class);
+        $res = $siatService->validacionPaquete(
+            $validated['codigo_recepcion'],
+            $cufdModel->codigo,
+            $ctx['cuis'],
+            (int) $validated['codigo_sucursal'],
+            (int) $validated['codigo_punto_venta'],
+        );
+
+        if ($res instanceof \SoapFault) {
+            return response()->json(['ok' => false, 'mensaje' => 'Error SOAP: ' . $res->getMessage()], 503);
+        }
+
+        $respuesta = $res->RespuestaServicioFacturacion ?? $res;
+
+        return response()->json([
+            'ok'                => true,
+            'codigoRecepcion'   => $validated['codigo_recepcion'],
+            'codigoEstado'      => $respuesta->codigoEstado ?? null,
+            'codigoDescripcion' => $respuesta->codigoDescripcion ?? null,
+            'transaccion'       => $respuesta->transaccion ?? null,
+            'mensajes'          => $respuesta->mensajesList ?? null,
+        ]);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
     /**
      * Lista los paquetes enviados, opcionalmente filtrados por sucursal/PV.
      *
