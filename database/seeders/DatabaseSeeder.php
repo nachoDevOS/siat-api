@@ -15,11 +15,13 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        // User::factory(10)->create();
+        // Usuario administrador del panel. Cambiar la contrasena en produccion.
+        User::updateOrCreate(
+            ['email' => 'admin@admin.com'],
+            ['name' => 'Administrador', 'password' => bcrypt('password')],
+        );
 
-        User::factory()->create([
-            'name' => 'Test User',
-            'email' => 'test@example.com',
-        ]);
+        // Casos de prueba del piloto (seccion 12.2).
+        $this->call(CasosPruebaSeeder::class);
     }
 }
