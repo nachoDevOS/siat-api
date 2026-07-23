@@ -15,6 +15,30 @@ beforeEach(function () {
 
 // Smoke tests: confirman que las vistas Blade del panel renderizan sin error.
 
+test('el dashboard renderiza con sus indicadores', function () {
+    Empresa::factory()->count(3)->create();
+
+    $this->get(route('admin.dashboard'))
+        ->assertOk()
+        ->assertSee('Dashboard')
+        ->assertSee('Empresas')
+        ->assertSee('Salud SIAT');
+});
+
+test('la consola de administracion de la API renderiza', function () {
+    $empresa = Empresa::factory()->create();
+
+    $this->get(route('admin.api'))
+        ->assertOk()
+        ->assertSee('Endpoints disponibles')
+        ->assertSee('v1/facturas')
+        ->assertSee($empresa->nombre_comercial);
+});
+
+test('la raiz redirige al dashboard', function () {
+    $this->get('/')->assertRedirect(route('admin.dashboard'));
+});
+
 test('el listado de empresas renderiza', function () {
     Empresa::factory()->count(2)->create();
 

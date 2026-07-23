@@ -1,7 +1,9 @@
 <?php
 
+use App\Http\Controllers\Admin\ApiController;
 use App\Http\Controllers\Admin\CertificadoController;
 use App\Http\Controllers\Admin\CodigoController;
+use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\EmpresaController;
 use App\Http\Controllers\Admin\MonitorController;
 use App\Http\Controllers\Admin\PruebaPilotoController;
@@ -10,7 +12,7 @@ use App\Http\Controllers\Admin\SucursalController;
 use App\Http\Controllers\Auth\LoginController;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/', fn () => redirect()->route('admin.empresas.index'));
+Route::get('/', fn () => redirect()->route('admin.dashboard'));
 
 /*
 |--------------------------------------------------------------------------
@@ -33,6 +35,10 @@ Route::post('logout', [LoginController::class, 'destroy'])->middleware('auth')->
 | redirigido al login.
 */
 Route::prefix('admin')->name('admin.')->middleware('auth')->group(function () {
+
+    // Tablero principal y consola de administracion de la API REST.
+    Route::get('/', [DashboardController::class, 'index'])->name('dashboard');
+    Route::get('api', [ApiController::class, 'index'])->name('api');
 
     Route::resource('empresas', EmpresaController::class);
 
