@@ -82,3 +82,28 @@ test('crear una empresa genera su API key una sola vez', function () {
     $respuesta->assertSessionHas('api_key');
     expect($empresa->api_key_hash)->not->toBeNull();
 });
+
+test('el panel rechaza un webhook que apunta a la red interna', function () {
+    $this->post(route('admin.empresas.store'), [
+        'nombre_comercial' => 'Ferreteria Test',
+        'razon_social' => 'FERRETERIA TEST SRL',
+        'nit' => '7654321',
+        'codigo_ambiente' => 2,
+        'codigo_modalidad' => 1,
+        'estado' => 'EN_REGISTRO',
+        'webhook_url' => 'https://127.0.0.1/hook',
+    ])->assertSessionHasErrors('webhook_url');
+
+    expect(Empresa::where('nit', '7654321')->exists())->toBeFalse();
+});
+
+test('el panel rechaza un estado que no existe en el ciclo de vida', function () {
+    $this->post(route('admin.empresas.store'), [
+        'nombre_comercial' => 'Ferreteria Test',
+        'razon_social' => 'FERRETERIA TEST SRL',
+        'nit' => '7654322',
+        'codigo_ambiente' => 2,
+        'codigo_modalidad' => 1,
+        'estado' => 'INVENTADO',
+    ])->assertSessionHasErrors('estado');
+});

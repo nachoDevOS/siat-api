@@ -3,11 +3,13 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Exceptions\CufdVencidoException;
+use App\Exceptions\FacturaInvalidaException;
 use App\Exceptions\FacturaObservadaException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\AnularFacturaRequest;
 use App\Http\Requests\EmitirFacturaRequest;
 use App\Http\Resources\FacturaResource;
+use App\Jobs\AnularFacturaEnSiat;
 use App\Models\Empresa;
 use App\Models\Factura;
 use App\Models\FacturaAnulada;
@@ -24,6 +26,18 @@ use Symfony\Component\HttpFoundation\Response;
 class FacturaController extends Controller
 {
     /**
+     * Estados en los que el SIN ya conoce la factura y por lo tanto acepta su
+     * anulacion.
+     *
+     * @var list<string>
+     */
+    private const ESTADOS_ANULABLES = [
+        Factura::ESTADO_ENVIADA,
+        Factura::ESTADO_RECIBIDA,
+        Factura::ESTADO_VALIDADA,
+    ];
+
+    /**
      * POST /api/v1/facturas — emite una factura y responde con el CUF.
      */
     public function store(EmitirFacturaRequest $request, EmisorFactura $emisor): JsonResponse
@@ -32,6 +46,14 @@ class FacturaController extends Controller
 
         try {
             $factura = $emisor->emitir($empresa, $request->venta());
+        } catch (FacturaInvalidaException $e) {
+            // Reglas de negocio que el FormRequest no cubre.
+            return response()->json([
+                'exito' => false,
+                'error' => 'FACTURA_INVALIDA',
+                'mensaje' => 'La venta no cumple las validaciones previas al envio.',
+                'detalles' => $e->errores,
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
         } catch (CufdVencidoException $e) {
             // Sin CUFD vigente y sin contingencia configurada: el SIAT no esta disponible.
             return response()->json([
@@ -104,14 +126,35 @@ class FacturaController extends Controller
     {
         $factura = $this->buscar($request, $cuf);
 
-        // Se registra la anulacion y se marca la factura. El envio de la
-        // anulacion al SIAT lo hace ServicioFacturacion (via job) contra el WSDL.
+        // Repetir la anulacion no vuelve a registrarla ni a molestar al SIAT.
+        if ($factura->estado === Factura::ESTADO_ANULADA) {
+            return response()->json([
+                'exito' => true,
+                'mensaje' => 'La factura ya estaba anulada.',
+                'cuf' => $factura->cuf,
+            ]);
+        }
+
+        // Solo se puede anular lo que el SIN ya conoce; una factura que todavia
+        // no viajo se corrige antes de enviarla, no se anula.
+        if (! in_array($factura->estado, self::ESTADOS_ANULABLES, true)) {
+            return response()->json([
+                'exito' => false,
+                'error' => 'FACTURA_NO_ANULABLE',
+                'mensaje' => "Una factura en estado {$factura->estado} no se puede anular.",
+            ], Response::HTTP_CONFLICT);
+        }
+
+        // Se registra la anulacion y se marca la factura de inmediato; la
+        // transmision al SIAT la hace AnularFacturaEnSiat en segundo plano.
         FacturaAnulada::updateOrCreate(
             ['factura_id' => $factura->id],
             ['motivo' => $request->integer('motivo'), 'anulada_en' => now()],
         );
 
         $factura->update(['estado' => Factura::ESTADO_ANULADA]);
+
+        AnularFacturaEnSiat::dispatch($factura->id);
 
         return response()->json([
             'exito' => true,

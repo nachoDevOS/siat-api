@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Un cliente contribuyente del proveedor. Es la raiz del aislamiento
@@ -44,6 +45,38 @@ class Empresa extends Model
             'codigo_ambiente' => 'integer',
             'codigo_modalidad' => 'integer',
         ];
+    }
+
+    /**
+     * El middleware cachea la empresa resuelta desde su API key. Si no se
+     * invalidara, una key revocada o una empresa sacada de PRODUCCION seguiria
+     * facturando hasta que expire el TTL.
+     */
+    protected static function booted(): void
+    {
+        static::saved(fn (self $empresa) => $empresa->olvidarCacheApiKey());
+        static::deleted(fn (self $empresa) => $empresa->olvidarCacheApiKey());
+    }
+
+    public static function claveCacheApiKey(string $hash): string
+    {
+        return "empresa.apikey.{$hash}";
+    }
+
+    /**
+     * Borra del cache tanto el hash actual como el anterior, por si la API key
+     * se acaba de rotar.
+     */
+    public function olvidarCacheApiKey(): void
+    {
+        $hashes = array_filter([
+            $this->api_key_hash,
+            $this->getOriginal('api_key_hash'),
+        ]);
+
+        foreach (array_unique($hashes) as $hash) {
+            Cache::forget(self::claveCacheApiKey($hash));
+        }
     }
 
     /**

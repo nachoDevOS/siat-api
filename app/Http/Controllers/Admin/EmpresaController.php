@@ -4,10 +4,12 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Empresa;
+use App\Services\Webhooks\DestinoWebhook;
+use Closure;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
 /**
@@ -16,6 +18,20 @@ use Illuminate\View\View;
  */
 class EmpresaController extends Controller
 {
+    /**
+     * Estados validos del ciclo de vida ante el SIN. Se listan para que el
+     * formulario no pueda dejar la empresa en un estado inventado.
+     *
+     * @var list<string>
+     */
+    private const ESTADOS = [
+        Empresa::ESTADO_EN_REGISTRO,
+        Empresa::ESTADO_EN_PRUEBAS,
+        Empresa::ESTADO_PILOTO_APROBADO,
+        Empresa::ESTADO_PRODUCCION,
+        Empresa::ESTADO_OBSERVADO,
+    ];
+
     public function index(): View
     {
         $empresas = Empresa::latest()->paginate(20);
@@ -59,10 +75,8 @@ class EmpresaController extends Controller
 
     public function update(Request $request, Empresa $empresa): RedirectResponse
     {
+        // El propio modelo invalida el cache por api_key_hash al guardarse.
         $empresa->update($this->validar($request, $empresa));
-
-        // La empresa esta cacheada por su api_key_hash; se limpia por las dudas.
-        Cache::forget("empresa.apikey.{$empresa->api_key_hash}");
 
         return redirect()
             ->route('admin.empresas.show', $empresa)
@@ -89,8 +103,16 @@ class EmpresaController extends Controller
             'token_delegado' => ['nullable', 'string'],
             'codigo_ambiente' => ['required', 'integer', 'in:1,2'],
             'codigo_modalidad' => ['required', 'integer', 'in:1,2'],
-            'estado' => ['required', 'string', 'max:30'],
-            'webhook_url' => ['nullable', 'url', 'max:255'],
+            'estado' => ['required', Rule::in(self::ESTADOS)],
+            // Se valida el destino aca y no solo al notificar: asi el operador
+            // ve el error al guardar en vez de descubrirlo por webhooks mudos.
+            'webhook_url' => ['nullable', 'url', 'max:255', function (string $atributo, mixed $valor, Closure $falla) {
+                $motivo = app(DestinoWebhook::class)->motivoRechazo((string) $valor);
+
+                if ($motivo !== null) {
+                    $falla($motivo);
+                }
+            }],
         ]);
     }
 }

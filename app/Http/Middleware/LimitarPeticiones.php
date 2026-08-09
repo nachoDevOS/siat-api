@@ -27,7 +27,9 @@ class LimitarPeticiones
             return $next($request);
         }
 
-        $limite = (int) env('SIAT_RATE_LIMIT', 120);
+        // Via config y no env(): con "config:cache" env() devuelve null y el
+        // limite quedaria en 0, rechazando absolutamente todo.
+        $limite = (int) config('siat.api.rate_limit');
         $clave = "empresa:{$empresa->id}";
 
         if (RateLimiter::tooManyAttempts($clave, $limite)) {

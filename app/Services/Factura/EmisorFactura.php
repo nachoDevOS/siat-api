@@ -3,11 +3,13 @@
 namespace App\Services\Factura;
 
 use App\Exceptions\CufdVencidoException;
+use App\Exceptions\FacturaInvalidaException;
 use App\Jobs\EnviarFacturaAlSiat;
 use App\Models\Cufd;
 use App\Models\Empresa;
 use App\Models\Factura;
 use App\Models\PuntoVenta;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
@@ -33,15 +35,26 @@ class EmisorFactura
      *
      * @param  array<string, mixed>  $venta
      *
+     * @throws FacturaInvalidaException si la venta no pasa las reglas locales.
      * @throws CufdVencidoException si el punto de venta no tiene CUFD vigente.
      */
     public function emitir(Empresa $empresa, array $venta): Factura
     {
+        $referencia = $venta['referencia_externa'] ?? null;
+
         // Idempotencia: si esa referencia ya genero factura, se devuelve esa.
-        $existente = $this->buscarExistente($empresa, $venta['referencia_externa'] ?? null);
+        $existente = $this->buscarExistente($empresa, $referencia);
 
         if ($existente !== null) {
             return $existente;
+        }
+
+        // Reglas de negocio que el FormRequest no cubre. Se corta antes de
+        // reservar numero para no dejar huecos en el correlativo.
+        $errores = $this->validador->validar($venta);
+
+        if ($errores !== []) {
+            throw new FacturaInvalidaException($errores);
         }
 
         $puntoVenta = $this->resolverPuntoVenta($empresa, $venta);
@@ -63,8 +76,36 @@ class EmisorFactura
             (float) ($venta['anticipo'] ?? 0),
         );
 
-        // Todo el bloque va en transaccion con bloqueo de fila del punto de venta:
-        // asi dos cajas nunca reservan el mismo numero de factura.
+        try {
+            return $this->emitirEnTransaccion($empresa, $puntoVenta, $cufd, $venta, $totales);
+        } catch (UniqueConstraintViolationException $e) {
+            // Dos peticiones con la misma referencia entraron a la vez: la que
+            // perdio la carrera devuelve la factura que gano, no un error.
+            $ganadora = $this->buscarExistente($empresa, $referencia);
+
+            if ($ganadora !== null) {
+                return $ganadora;
+            }
+
+            throw $e;
+        }
+    }
+
+    /**
+     * Reserva el numero, crea la factura y encola su envio, todo en una sola
+     * transaccion con bloqueo de fila del punto de venta: asi dos cajas nunca
+     * reservan el mismo numero de factura.
+     *
+     * @param  array<string, mixed>  $venta
+     * @param  array<string, mixed>  $totales
+     */
+    private function emitirEnTransaccion(
+        Empresa $empresa,
+        PuntoVenta $puntoVenta,
+        Cufd $cufd,
+        array $venta,
+        array $totales,
+    ): Factura {
         return DB::transaction(function () use ($empresa, $puntoVenta, $cufd, $venta, $totales) {
             $numero = $this->reservarNumero($puntoVenta);
             $fecha = now();
@@ -94,7 +135,9 @@ class EmisorFactura
             $factura->update(['xml_firmado' => $xml]);
 
             // Del paso 12 en adelante es asincrono: el worker envia al SIAT.
-            EnviarFacturaAlSiat::dispatch($factura->id);
+            // afterCommit para que el worker no busque una factura que todavia
+            // no existe (o que un rollback posterior deje sin existir).
+            EnviarFacturaAlSiat::dispatch($factura->id)->afterCommit();
 
             return $factura;
         });

@@ -40,3 +40,6 @@ Schedule::command('siat:avisar-certificados')->dailyAt('07:00');
 
 // Domingo 03:00: sincroniza catalogos globales.
 Schedule::command('siat:sincronizar-globales')->weeklyOn(0, '03:00');
+
+// Diario 04:00: poda la auditoria SOAP fuera del periodo de retencion.
+Schedule::command('siat:purgar-logs')->dailyAt('04:00');

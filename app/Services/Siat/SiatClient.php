@@ -81,6 +81,29 @@ class SiatClient
     }
 
     /**
+     * Invoca una operacion aplicando el timeout de LECTURA del socket.
+     *
+     * ext-soap no acepta un timeout de lectura entre las opciones del
+     * SoapClient: lo toma del ini "default_socket_timeout" en el momento de la
+     * llamada. Sin esto, un SIAT que acepta la conexion y nunca responde deja
+     * al worker colgado para siempre.
+     *
+     * @param  array<string, mixed>  $parametros
+     */
+    public function llamar(SoapClient $soap, string $operacion, array $parametros): mixed
+    {
+        $anterior = ini_get('default_socket_timeout');
+
+        ini_set('default_socket_timeout', (string) config('siat.timeout'));
+
+        try {
+            return $soap->{$operacion}($parametros);
+        } finally {
+            ini_set('default_socket_timeout', $anterior);
+        }
+    }
+
+    /**
      * XML de la ultima peticion enviada. Null si aun no se invoco nada o si
      * la traza esta desactivada.
      */
@@ -121,8 +144,8 @@ class SiatClient
             'connection_timeout' => config('siat.connection_timeout'),
             'cache_wsdl' => config('siat.wsdl_cache'),
             'stream_context' => $contexto,
-            // Timeout de lectura del socket (segundos) para no colgar al worker.
-            'default_socket_timeout' => config('siat.timeout'),
+            // El timeout de LECTURA no se configura aca: ext-soap lo ignora.
+            // Lo aplica llamar() sobre el ini default_socket_timeout.
         ];
     }
 }

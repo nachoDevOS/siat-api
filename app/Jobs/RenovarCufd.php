@@ -4,8 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Cufd;
 use App\Models\PuntoVenta;
-use App\Services\Siat\ServicioCodigos;
-use App\Services\Siat\SiatClient;
+use App\Services\Siat\FabricaServicios;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
@@ -21,7 +20,7 @@ class RenovarCufd implements ShouldQueue
 
     public function __construct(public readonly int $puntoVentaId) {}
 
-    public function handle(): void
+    public function handle(FabricaServicios $fabrica): void
     {
         $puntoVenta = PuntoVenta::with('sucursal.empresa')->find($this->puntoVentaId);
 
@@ -37,8 +36,7 @@ class RenovarCufd implements ShouldQueue
             return;
         }
 
-        $servicio = new ServicioCodigos($empresa, new SiatClient($empresa));
-        $respuesta = $servicio->solicitarCufd($puntoVenta, $cuis->codigo);
+        $respuesta = $fabrica->codigos($empresa)->solicitarCufd($puntoVenta, $cuis->codigo);
 
         // Se guarda el nuevo CUFD; nunca se sobreescribe el anterior.
         Cufd::create([

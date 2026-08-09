@@ -4,8 +4,7 @@ namespace App\Jobs;
 
 use App\Exceptions\SiatException;
 use App\Models\Factura;
-use App\Services\Siat\ServicioFacturacion;
-use App\Services\Siat\SiatClient;
+use App\Services\Siat\FabricaServicios;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
@@ -23,7 +22,7 @@ class VerificarEstadoFactura implements ShouldQueue
 
     public function __construct(public readonly int $facturaId) {}
 
-    public function handle(): void
+    public function handle(FabricaServicios $fabrica): void
     {
         $factura = Factura::with(['empresa', 'puntoVenta.sucursal', 'cufd'])->find($this->facturaId);
 
@@ -34,8 +33,8 @@ class VerificarEstadoFactura implements ShouldQueue
         $cufd = $factura->cufd?->codigo ?? optional($factura->puntoVenta->cufdVigente())->codigo;
 
         try {
-            $servicio = new ServicioFacturacion($factura->empresa, new SiatClient($factura->empresa));
-            $respuesta = $servicio->verificarEstado($factura, (string) $cufd);
+            $respuesta = $fabrica->facturacion($factura->empresa)
+                ->verificarEstado($factura, (string) $cufd);
 
             $codigoEstado = (string) data_get($respuesta, 'RespuestaServicioFacturacion.codigoEstado');
 

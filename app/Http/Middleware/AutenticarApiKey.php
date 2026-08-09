@@ -30,10 +30,16 @@ class AutenticarApiKey
 
         $hash = hash('sha256', $key);
 
-        // La empresa se cachea por su hash durante 5 minutos.
-        $empresa = Cache::remember("empresa.apikey.{$hash}", now()->addMinutes(5), function () use ($hash) {
-            return Empresa::where('api_key_hash', $hash)->first();
-        });
+        // La empresa se cachea por su hash. El propio modelo invalida esta
+        // entrada al guardarse, asi que una key revocada deja de servir al toque
+        // y no cuando venza el TTL.
+        $minutos = (int) config('siat.api.cache_apikey_minutos');
+
+        $empresa = Cache::remember(
+            Empresa::claveCacheApiKey($hash),
+            now()->addMinutes($minutos),
+            fn () => Empresa::where('api_key_hash', $hash)->first(),
+        );
 
         if ($empresa === null) {
             return $this->rechazar();

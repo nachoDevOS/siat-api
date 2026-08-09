@@ -69,6 +69,50 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | API REST que consume el sistema de ventas del cliente
+    |--------------------------------------------------------------------------
+    | Estos valores se leen con config() y NO con env() directo: en produccion
+    | se corre "config:cache" y ahi env() devuelve null, lo que dejaria el
+    | limite en 0 y rechazaria todas las peticiones con 429.
+    */
+    'api' => [
+        // Peticiones por minuto y por empresa.
+        'rate_limit' => (int) env('SIAT_RATE_LIMIT', 120),
+
+        // Minutos que se cachea la empresa resuelta desde su API key.
+        'cache_apikey_minutos' => (int) env('SIAT_CACHE_APIKEY_MINUTOS', 5),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Webhooks hacia el sistema del cliente
+    |--------------------------------------------------------------------------
+    | La URL la elige el cliente, asi que es una entrada no confiable: se
+    | resuelve el host y se rechazan las direcciones internas para que nadie
+    | pueda usar nuestro servidor como proxy hacia su red (SSRF).
+    */
+    'webhooks' => [
+        // Secreto con el que se firma el cuerpo (HMAC-SHA256) para que el
+        // receptor pueda comprobar que la notificacion salio de aca.
+        'secreto' => env('SIAT_WEBHOOK_SECRET'),
+
+        // Permitir destinos privados/loopback. Solo para desarrollo local.
+        'permitir_destinos_privados' => (bool) env('SIAT_WEBHOOK_PERMITIR_PRIVADOS', false),
+
+        'timeout' => (int) env('SIAT_WEBHOOK_TIMEOUT', 10),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Retencion de la auditoria SOAP
+    |--------------------------------------------------------------------------
+    | logs_siat guarda el XML completo de cada llamada (incluye datos del
+    | comprador), asi que crece rapido y no puede quedarse para siempre.
+    */
+    'retencion_logs_dias' => (int) env('SIAT_RETENCION_LOGS_DIAS', 90),
+
+    /*
+    |--------------------------------------------------------------------------
     | Timeouts del SoapClient (segundos)
     |--------------------------------------------------------------------------
     | El SIAT puede tardar entre 0.8 y 4 segundos. Damos margen para no cortar
@@ -85,8 +129,12 @@ return [
     | En produccion se cachea en disco para no descargarlo en cada peticion.
     | Valores validos de PHP: WSDL_CACHE_NONE=0, WSDL_CACHE_DISK=1,
     | WSDL_CACHE_MEMORY=2, WSDL_CACHE_BOTH=3.
+    |
+    | Se usa el numero y no la constante WSDL_CACHE_NONE porque este archivo se
+    | carga muy temprano (y se cachea con config:cache): si ext-soap no estuviera
+    | disponible, la constante haria fallar el arranque entero.
     */
-    'wsdl_cache' => (int) env('SIAT_WSDL_CACHE', WSDL_CACHE_NONE),
+    'wsdl_cache' => (int) env('SIAT_WSDL_CACHE', 0),
 
     /*
     |--------------------------------------------------------------------------

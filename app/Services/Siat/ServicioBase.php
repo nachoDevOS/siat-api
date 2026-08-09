@@ -63,7 +63,8 @@ abstract class ServicioBase
 
             // El SIN espera los parametros envueltos en una clave con el nombre
             // de la operacion; verificar el nombre del wrapper contra el WSDL.
-            $respuesta = $soap->{$operacion}($parametros);
+            // Se llama via el cliente para que aplique el timeout de lectura.
+            $respuesta = $this->cliente->llamar($soap, $operacion, $parametros);
 
             $this->registrarLog($servicioNombre, $operacion, $inicio, true);
 

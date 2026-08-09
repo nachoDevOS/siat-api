@@ -6,6 +6,7 @@ use App\Models\EventoSignificativo;
 use App\Models\Factura;
 use App\Models\Paquete;
 use App\Models\PuntoVenta;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Gestiona el paso a contingencia y la recuperacion cuando el SIAT se cae.
@@ -38,25 +39,34 @@ class GestorContingencia
      */
     public function recuperar(EventoSignificativo $evento): ?Paquete
     {
-        $facturas = Factura::where('punto_venta_id', $evento->punto_venta_id)
-            ->where('estado', Factura::ESTADO_CONTINGENCIA)
-            ->get();
+        return DB::transaction(function () use ($evento) {
+            // Se congela el conjunto: las facturas sin paquete asignado que
+            // existen AHORA. Una que entre a contingencia despues de este punto
+            // quedara para el paquete siguiente y no se dara por enviada.
+            $ids = Factura::where('punto_venta_id', $evento->punto_venta_id)
+                ->where('estado', Factura::ESTADO_CONTINGENCIA)
+                ->whereNull('paquete_id')
+                ->lockForUpdate()
+                ->pluck('id');
 
-        if ($facturas->isEmpty()) {
             $evento->update(['estado' => 'CERRADO', 'fecha_fin' => now()]);
 
-            return null;
-        }
+            if ($ids->isEmpty()) {
+                return null;
+            }
 
-        $evento->update(['estado' => 'CERRADO', 'fecha_fin' => now()]);
+            $paquete = Paquete::create([
+                'empresa_id' => $evento->empresa_id,
+                'punto_venta_id' => $evento->punto_venta_id,
+                'evento_id' => $evento->id,
+                'cantidad_facturas' => $ids->count(),
+                'estado' => 'PENDIENTE',
+            ]);
 
-        return Paquete::create([
-            'empresa_id' => $evento->empresa_id,
-            'punto_venta_id' => $evento->punto_venta_id,
-            'evento_id' => $evento->id,
-            'cantidad_facturas' => $facturas->count(),
-            'estado' => 'PENDIENTE',
-        ]);
+            Factura::whereIn('id', $ids)->update(['paquete_id' => $paquete->id]);
+
+            return $paquete;
+        });
     }
 
     /**

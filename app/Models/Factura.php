@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * Una factura emitida. El XML firmado que guarda es el documento legal;
@@ -83,9 +84,22 @@ class Factura extends Model
         return $this->hasMany(FacturaItem::class);
     }
 
-    public function anulacion(): BelongsTo
+    /**
+     * Paquete de contingencia que transporta esta factura. Null mientras no se
+     * haya armado ninguno.
+     */
+    public function paquete(): BelongsTo
     {
-        return $this->belongsTo(FacturaAnulada::class, 'id', 'factura_id');
+        return $this->belongsTo(Paquete::class);
+    }
+
+    /**
+     * Registro de anulacion. Es hasOne: la clave foranea (factura_id) vive en
+     * facturas_anuladas, no aca.
+     */
+    public function anulacion(): HasOne
+    {
+        return $this->hasOne(FacturaAnulada::class);
     }
 
     /**

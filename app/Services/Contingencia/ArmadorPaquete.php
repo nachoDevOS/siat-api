@@ -21,9 +21,12 @@ class ArmadorPaquete
      */
     public function armar(Paquete $paquete): string
     {
-        $facturas = Factura::where('punto_venta_id', $paquete->punto_venta_id)
-            ->where('estado', Factura::ESTADO_CONTINGENCIA)
+        // Se toman SOLO las facturas asignadas a este paquete. Filtrar por
+        // punto de venta + estado incluiria facturas que entraron a
+        // contingencia despues de armarlo.
+        $facturas = Factura::where('paquete_id', $paquete->id)
             ->whereNotNull('xml_firmado')
+            ->orderBy('numero_factura')
             ->get();
 
         // Envoltorio simple: una raiz con cada factura firmada dentro.

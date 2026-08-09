@@ -6,8 +6,7 @@ use App\Exceptions\SiatException;
 use App\Models\Factura;
 use App\Models\Paquete;
 use App\Services\Contingencia\ArmadorPaquete;
-use App\Services\Siat\ServicioFacturacion;
-use App\Services\Siat\SiatClient;
+use App\Services\Siat\FabricaServicios;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
@@ -25,9 +24,9 @@ class EnviarPaqueteContingencia implements ShouldQueue
 
     public function __construct(public readonly int $paqueteId) {}
 
-    public function handle(ArmadorPaquete $armador): void
+    public function handle(ArmadorPaquete $armador, FabricaServicios $fabrica): void
     {
-        $paquete = Paquete::with('empresa')->find($this->paqueteId);
+        $paquete = Paquete::with(['empresa', 'puntoVenta.sucursal'])->find($this->paqueteId);
 
         if ($paquete === null || $paquete->estado === 'ENVIADO') {
             return;
@@ -36,9 +35,10 @@ class EnviarPaqueteContingencia implements ShouldQueue
         $xml = $armador->armar($paquete);
 
         try {
-            $servicio = new ServicioFacturacion($paquete->empresa, new SiatClient($paquete->empresa));
-            $respuesta = $servicio->recepcionarPaquete([
-                'codigoPuntoVenta' => $paquete->punto_venta_id,
+            // Codigos del SIN, no ids internos de nuestras tablas.
+            $respuesta = $fabrica->facturacion($paquete->empresa)->recepcionarPaquete([
+                'codigoSucursal' => $paquete->puntoVenta->sucursal->codigo_sucursal,
+                'codigoPuntoVenta' => $paquete->puntoVenta->codigo_punto_venta,
             ], $xml);
 
             $paquete->update([
@@ -47,8 +47,8 @@ class EnviarPaqueteContingencia implements ShouldQueue
                 'codigo_recepcion' => (string) data_get($respuesta, 'RespuestaServicioFacturacion.codigoRecepcion'),
             ]);
 
-            // Las facturas del paquete pasan de contingencia a enviadas.
-            Factura::where('punto_venta_id', $paquete->punto_venta_id)
+            // Solo las facturas de ESTE paquete pasan de contingencia a enviadas.
+            Factura::where('paquete_id', $paquete->id)
                 ->where('estado', Factura::ESTADO_CONTINGENCIA)
                 ->update(['estado' => Factura::ESTADO_ENVIADA, 'enviada_en' => now()]);
         } catch (SiatException) {
