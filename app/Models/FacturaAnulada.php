@@ -11,6 +11,15 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class FacturaAnulada extends Model
 {
+    /** Registrada en local, todavia sin respuesta del SIN. */
+    public const ESTADO_PENDIENTE = 'PENDIENTE';
+
+    /** El SIN la acepto y devolvio codigo de recepcion. */
+    public const ESTADO_CONFIRMADA = 'CONFIRMADA';
+
+    /** El SIN la rechazo: la factura sigue vigente ante el SIN. */
+    public const ESTADO_RECHAZADA = 'RECHAZADA';
+
     protected $table = 'facturas_anuladas';
 
     protected $guarded = ['id'];

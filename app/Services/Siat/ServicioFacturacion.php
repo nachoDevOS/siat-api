@@ -11,29 +11,40 @@ use App\Models\Factura;
  * El XML firmado se envia comprimido en GZIP y acompanado de su hash SHA-256,
  * como exige el SIN.
  *
- * OJO: nombres de operaciones y campos documentados por el SIN; verificar
- * contra el WSDL vigente antes de produccion (rule 7).
+ * PENDIENTE DE VERIFICAR CONTRA EL WSDL VIGENTE: los nombres de operacion
+ * ('recepcionFactura', 'anulacionFactura', ...) y los de cada campo salen de la
+ * documentacion del SIN, no del contrato real. Para contrastarlos:
+ *
+ *     php artisan siat:inspeccionar-wsdl {empresa} --servicio=compra_venta --tipos
+ *
+ * Ese comando solo reporta lo que expone el WSDL; no cambia nada.
  */
 class ServicioFacturacion extends ServicioBase
 {
     /**
      * Envia una factura individual en linea (recepcionFactura).
+     *
+     * @param  string  $cuis  CUIS vigente del punto de venta: el SIN lo exige
+     *                        tambien en esta operacion, no solo al pedir codigos.
      */
-    public function recepcionarFactura(Factura $factura, string $cufd): mixed
+    public function recepcionarFactura(Factura $factura, string $cufd, string $cuis): mixed
     {
-        $xml = (string) $factura->xml_firmado;
-
         $solicitud = $this->solicitudBase();
         $solicitud['codigoSucursal'] = $factura->puntoVenta->sucursal->codigo_sucursal;
         $solicitud['codigoPuntoVenta'] = $factura->puntoVenta->codigo_punto_venta;
         $solicitud['codigoDocumentoSector'] = $factura->codigo_documento_sector;
         $solicitud['codigoEmision'] = $factura->tipo_emision;
         $solicitud['cufd'] = $cufd;
-        $solicitud['tipoFacturaDocumento'] = 1;
-        // El SIN recibe el XML comprimido en gzip + su hash para integridad.
-        $solicitud['archivo'] = $this->comprimir($xml);
+        $solicitud['cuis'] = $cuis;
+        $solicitud['tipoFacturaDocumento'] = config('siat.codigos.tipo_factura_documento');
         $solicitud['fechaEnvio'] = now()->format('Y-m-d\TH:i:s.v');
-        $solicitud['hashArchivo'] = hash('sha256', $xml);
+
+        // El SIN recibe el XML comprimido en gzip, y el hash es EL DEL GZIP,
+        // no el del XML original. Verificado contra un sistema en produccion:
+        // con el hash del XML plano el SIN rechaza el envio por integridad.
+        [$solicitud['archivo'], $solicitud['hashArchivo']] = $this->comprimirYHashear(
+            (string) $factura->xml_firmado,
+        );
 
         return $this->invocar('compra_venta', 'recepcionFactura', [
             'SolicitudServicioRecepcionFactura' => $solicitud,
@@ -83,9 +94,9 @@ class ServicioFacturacion extends ServicioBase
     public function recepcionarPaquete(array $datosPaquete, string $archivoPaquete): mixed
     {
         $solicitud = array_merge($this->solicitudBase(), $datosPaquete);
-        $solicitud['archivo'] = $this->comprimir($archivoPaquete);
-        $solicitud['hashArchivo'] = hash('sha256', $archivoPaquete);
         $solicitud['fechaEnvio'] = now()->format('Y-m-d\TH:i:s.v');
+
+        [$solicitud['archivo'], $solicitud['hashArchivo']] = $this->comprimirYHashear($archivoPaquete);
 
         return $this->invocar('compra_venta', 'recepcionPaqueteFactura', [
             'SolicitudServicioRecepcionPaquete' => $solicitud,
@@ -107,11 +118,18 @@ class ServicioFacturacion extends ServicioBase
     }
 
     /**
-     * Comprime el XML en gzip y lo devuelve en binario (el SoapClient lo
-     * codifica en base64 al serializar el tipo base64Binary).
+     * Comprime el XML en gzip y calcula el hash SHA-256 del RESULTADO
+     * comprimido, que es lo que el SIN compara del otro lado.
+     *
+     * El binario se devuelve tal cual: el SoapClient lo codifica en base64 al
+     * serializar el tipo base64Binary del WSDL.
+     *
+     * @return array{0: string, 1: string} [gzip, hash del gzip]
      */
-    private function comprimir(string $xml): string
+    private function comprimirYHashear(string $xml): array
     {
-        return gzencode($xml, 9);
+        $comprimido = gzencode($xml, 9);
+
+        return [$comprimido, hash('sha256', $comprimido)];
     }
 }

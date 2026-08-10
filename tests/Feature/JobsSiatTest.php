@@ -102,7 +102,9 @@ test('un envio exitoso guarda el codigo de recepcion y encola la verificacion', 
         app(FabricaServicios::class),
     );
 
-    expect($factura->fresh()->estado)->toBe(Factura::ESTADO_ENVIADA)
+    // RECIBIDA y no ENVIADA: el SIN acuso recibo de ESTA factura. ENVIADA
+    // queda para las que viajan dentro de un paquete de contingencia.
+    expect($factura->fresh()->estado)->toBe(Factura::ESTADO_RECIBIDA)
         ->and($factura->fresh()->codigo_recepcion)->toBe('1234567890');
 
     Queue::assertPushed(VerificarEstadoFactura::class);
@@ -153,4 +155,60 @@ test('el paquete viaja con los codigos del SIN y no con ids internos', function 
 
     // La que no iba en el paquete sigue esperando su turno.
     expect($ajena->fresh()->estado)->toBe(Factura::ESTADO_CONTINGENCIA);
+});
+
+/**
+ * Deja un paquete PENDIENTE con una factura en contingencia adentro.
+ */
+function paquetePendiente(): Paquete
+{
+    $factura = facturaParaEnviar();
+    $factura->update(['estado' => Factura::ESTADO_CONTINGENCIA]);
+
+    $paquete = Paquete::create([
+        'empresa_id' => $factura->empresa_id,
+        'punto_venta_id' => $factura->punto_venta_id,
+        'cantidad_facturas' => 1,
+        'estado' => 'PENDIENTE',
+    ]);
+
+    $factura->update(['paquete_id' => $paquete->id]);
+
+    return $paquete;
+}
+
+test('el paquete se reintenta con el backoff declarado y no con un fijo', function () {
+    $paquete = paquetePendiente();
+
+    $servicio = Mockery::mock(ServicioFacturacion::class);
+    $servicio->shouldReceive('recepcionarPaquete')->andThrow(new SiatException('SIAT caido'));
+    fabricaQueDevuelve($servicio);
+
+    $job = (new EnviarPaqueteContingencia($paquete->id))->withFakeQueueInteractions();
+    $job->job->attempts = 1;
+
+    $job->handle(app(ArmadorPaquete::class), app(FabricaServicios::class));
+
+    // El primer reintento usa backoff[0] = 60s, no el release(300) fijo de antes.
+    $job->assertReleased(60);
+    expect($paquete->fresh()->estado)->toBe('PENDIENTE');
+});
+
+test('agotados los reintentos el paquete queda pendiente y la falla se propaga', function () {
+    $paquete = paquetePendiente();
+
+    $servicio = Mockery::mock(ServicioFacturacion::class);
+    $servicio->shouldReceive('recepcionarPaquete')->andThrow(new SiatException('SIAT caido'));
+    fabricaQueDevuelve($servicio);
+
+    $job = (new EnviarPaqueteContingencia($paquete->id))->withFakeQueueInteractions();
+    $job->job->attempts = $job->tries;
+
+    expect(fn () => $job->handle(app(ArmadorPaquete::class), app(FabricaServicios::class)))
+        ->toThrow(SiatException::class);
+
+    // Las facturas siguen siendo validas: solo falta transmitirlas.
+    expect($paquete->fresh()->estado)->toBe('PENDIENTE');
+    expect(Factura::where('paquete_id', $paquete->id)->first()->estado)
+        ->toBe(Factura::ESTADO_CONTINGENCIA);
 });

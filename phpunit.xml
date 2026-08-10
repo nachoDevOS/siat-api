@@ -12,6 +12,16 @@
             <directory>tests/Feature</directory>
         </testsuite>
     </testsuites>
+    <!--
+        El grupo "mysql" queda fuera de la corrida normal: son pruebas de
+        concurrencia que necesitan un MySQL levantado y tardan segundos.
+        Se corren aparte pasandole a "php artisan test" la opcion group=mysql.
+    -->
+    <groups>
+        <exclude>
+            <group>mysql</group>
+        </exclude>
+    </groups>
     <source>
         <include>
             <directory>app</directory>

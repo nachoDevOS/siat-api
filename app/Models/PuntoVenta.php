@@ -28,7 +28,20 @@ class PuntoVenta extends Model
             'tipo_punto_venta' => 'integer',
             'siguiente_factura' => 'integer',
             'activo' => 'boolean',
+            'registrado_en_siat' => 'datetime',
         ];
+    }
+
+    /**
+     * Si el SIN ya le asigno codigo a este punto de venta.
+     *
+     * Registrarlo dos veces no es un reintento inocuo: el SIN crea uno NUEVO
+     * cada vez y un punto de venta no se puede borrar, solo cerrar, y un punto
+     * de venta cerrado no se reabre.
+     */
+    public function estaRegistradoEnSiat(): bool
+    {
+        return $this->registrado_en_siat !== null;
     }
 
     public function sucursal(): BelongsTo
@@ -52,14 +65,23 @@ class PuntoVenta extends Model
     }
 
     /**
-     * CUFD vigente: el mas reciente cuya fecha_vigencia todavia no paso.
-     * Devuelve null si no hay ninguno y hay que solicitar uno nuevo.
+     * CUFD vigente: el ULTIMO EMITIDO que todavia no vencio.
+     *
+     * Se ordena por id y no por fecha_vigencia. Parece lo mismo —un codigo mas
+     * nuevo suele vencer despues— pero no lo es: al corregir la zona horaria a
+     * America/La_Paz, los codigos guardados en UTC quedaron con una vigencia 4
+     * horas mas lejana que los nuevos, asi que ordenando por vencimiento
+     * "el vigente" pasaba a ser uno viejo, de otro punto de venta. El SIN
+     * respondia entonces "PUNTO DE VENTA INEXISTENTE O INVALIDO".
+     *
+     * El id es monotono y no depende del reloj: el ultimo insertado es siempre
+     * el ultimo que emitio el SIN.
      */
     public function cufdVigente(): ?Cufd
     {
         return $this->cufds()
             ->where('fecha_vigencia', '>', now())
-            ->latest('fecha_vigencia')
+            ->latest('id')
             ->first();
     }
 
@@ -70,7 +92,7 @@ class PuntoVenta extends Model
     {
         return $this->cuis()
             ->where('fecha_vigencia', '>', now())
-            ->latest('fecha_vigencia')
+            ->latest('id')
             ->first();
     }
 }

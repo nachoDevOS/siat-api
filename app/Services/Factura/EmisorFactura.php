@@ -28,6 +28,7 @@ class EmisorFactura
         private readonly GeneradorCuf $generadorCuf,
         private readonly ConstructorXml $constructorXml,
         private readonly FirmadorXml $firmadorXml,
+        private readonly ResolutorActividad $resolutor,
     ) {}
 
     /**
@@ -69,6 +70,12 @@ class EmisorFactura
             );
         }
 
+        // La actividad economica de cada item y la leyenda de la cabecera son
+        // obligatorias en el XSD del SIN y no vienen en la venta: se deducen de
+        // los catalogos del NIT antes de reservar numero, porque un producto no
+        // homologado corta la emision.
+        $actividades = $this->resolverActividades($empresa, $venta['items']);
+
         $totales = $this->calculador->calcular(
             $venta['items'],
             (float) ($venta['descuento_global'] ?? 0),
@@ -77,7 +84,7 @@ class EmisorFactura
         );
 
         try {
-            return $this->emitirEnTransaccion($empresa, $puntoVenta, $cufd, $venta, $totales);
+            return $this->emitirEnTransaccion($empresa, $puntoVenta, $cufd, $venta, $totales, $actividades);
         } catch (UniqueConstraintViolationException $e) {
             // Dos peticiones con la misma referencia entraron a la vez: la que
             // perdio la carrera devuelve la factura que gano, no un error.
@@ -98,6 +105,7 @@ class EmisorFactura
      *
      * @param  array<string, mixed>  $venta
      * @param  array<string, mixed>  $totales
+     * @param  list<string|null>  $actividades  actividad economica por item.
      */
     private function emitirEnTransaccion(
         Empresa $empresa,
@@ -105,8 +113,9 @@ class EmisorFactura
         Cufd $cufd,
         array $venta,
         array $totales,
+        array $actividades,
     ): Factura {
-        return DB::transaction(function () use ($empresa, $puntoVenta, $cufd, $venta, $totales) {
+        return DB::transaction(function () use ($empresa, $puntoVenta, $cufd, $venta, $totales, $actividades) {
             $numero = $this->reservarNumero($puntoVenta);
             $fecha = now();
 
@@ -116,21 +125,29 @@ class EmisorFactura
                 'sucursal' => $puntoVenta->sucursal->codigo_sucursal,
                 'modalidad' => $empresa->codigo_modalidad,
                 'tipo_emision' => Factura::EMISION_EN_LINEA,
-                'tipo_factura' => 1,
+                'tipo_factura' => config('siat.codigos.tipo_factura_documento'),
                 'tipo_documento_sector' => config('siat.codigos.documento_sector'),
                 'numero_factura' => $numero,
                 'punto_venta' => $puntoVenta->codigo_punto_venta,
             ], $cufd->codigo_control);
 
-            $factura = $this->crearFactura($empresa, $puntoVenta, $cufd, $venta, $totales, $numero, $cuf, $fecha);
+            $factura = $this->crearFactura(
+                $empresa, $puntoVenta, $cufd, $venta, $totales, $numero, $cuf, $fecha, $actividades,
+            );
 
-            // Arma y firma el XML con el certificado activo de la empresa.
+            // Arma y firma el XML con el certificado activo de la empresa. La
+            // modalidad electronica NO admite un documento sin firmar: si no hay
+            // certificado se corta aca en vez de emitir algo que el SIN rechaza.
             $xml = $this->constructorXml->construir($factura);
             $certificado = $empresa->certificadoActivo;
 
-            if ($certificado !== null) {
-                $xml = $this->firmadorXml->firmar($xml, $certificado);
+            if ($certificado === null) {
+                throw new FacturaInvalidaException([
+                    'La empresa no tiene un certificado digital activo: no se puede firmar la factura.',
+                ]);
             }
+
+            $xml = $this->firmadorXml->firmar($xml, $certificado);
 
             $factura->update(['xml_firmado' => $xml]);
 
@@ -144,6 +161,12 @@ class EmisorFactura
     }
 
     /**
+     * Resuelve el punto de venta por sus codigos del SIN, no por id interno.
+     *
+     * Se exige 'activo': un punto de venta dado de baja ante el SIN sigue en la
+     * tabla por su historial de facturas, pero emitir con el produce facturas
+     * que el SIN rechaza. Mejor cortar aca con un 404 claro.
+     *
      * @param  array<string, mixed>  $venta
      */
     private function resolverPuntoVenta(Empresa $empresa, array $venta): PuntoVenta
@@ -154,6 +177,7 @@ class EmisorFactura
                     ->where('codigo_sucursal', $venta['sucursal'] ?? 0);
             })
             ->where('codigo_punto_venta', $venta['punto_venta'] ?? 0)
+            ->where('activo', true)
             ->firstOrFail();
     }
 
@@ -171,8 +195,44 @@ class EmisorFactura
     }
 
     /**
+     * Actividad economica de cada item, en el mismo orden que los items.
+     *
+     * Un producto ausente del catalogo solo es un error cuando la empresa YA
+     * sincronizo sus productos homologados: con el catalogo vacio (cliente
+     * recien dado de alta) bloquear la emision dejaria el sistema inusable.
+     *
+     * @param  list<array<string, mixed>>  $items
+     * @return list<string|null>
+     *
+     * @throws FacturaInvalidaException si un producto no esta homologado.
+     */
+    private function resolverActividades(Empresa $empresa, array $items): array
+    {
+        $exigir = $this->resolutor->tieneCatalogoDeProductos($empresa);
+        $actividades = [];
+        $errores = [];
+
+        foreach ($items as $i => $item) {
+            $actividad = $this->resolutor->actividadDeProducto($empresa, $item['codigo_producto_sin']);
+
+            if ($actividad === null && $exigir) {
+                $errores[] = "Item {$i}: el codigo de producto {$item['codigo_producto_sin']} no esta homologado por el SIN para este NIT.";
+            }
+
+            $actividades[] = $actividad;
+        }
+
+        if ($errores !== []) {
+            throw new FacturaInvalidaException($errores);
+        }
+
+        return $actividades;
+    }
+
+    /**
      * @param  array<string, mixed>  $venta
      * @param  array<string, mixed>  $totales
+     * @param  list<string|null>  $actividades
      */
     private function crearFactura(
         Empresa $empresa,
@@ -183,6 +243,7 @@ class EmisorFactura
         int $numero,
         string $cuf,
         Carbon $fecha,
+        array $actividades,
     ): Factura {
         $comprador = $venta['comprador'];
 
@@ -209,7 +270,11 @@ class EmisorFactura
             'monto_total' => $totales['monto_total'],
             'monto_total_moneda' => $totales['monto_total'],
             'monto_total_sujeto_iva' => $totales['monto_total_sujeto_iva'],
-            'leyenda' => $venta['leyenda'] ?? null,
+            // La leyenda la puede imponer el cliente; si no, sale del catalogo
+            // de leyendas de la actividad del primer item, que es lo que el SIN
+            // espera ver en la cabecera.
+            'leyenda' => $venta['leyenda']
+                ?? $this->resolutor->leyendaDeActividad($empresa, $actividades[0] ?? null),
             'usuario' => $venta['usuario'] ?? null,
             'codigo_documento_sector' => config('siat.codigos.documento_sector'),
             'tipo_emision' => Factura::EMISION_EN_LINEA,
@@ -220,6 +285,7 @@ class EmisorFactura
         foreach ($venta['items'] as $i => $item) {
             $factura->items()->create([
                 'codigo_producto_sin' => $item['codigo_producto_sin'],
+                'codigo_actividad' => $actividades[$i] ?? null,
                 'codigo_interno' => $item['codigo_interno'] ?? null,
                 'descripcion' => $item['descripcion'],
                 'cantidad' => $item['cantidad'],

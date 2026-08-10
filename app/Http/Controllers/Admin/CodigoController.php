@@ -8,8 +8,8 @@ use App\Models\Cafc;
 use App\Models\Cufd;
 use App\Models\Cuis;
 use App\Models\PuntoVenta;
+use App\Services\Siat\FabricaServicios;
 use App\Services\Siat\ServicioCodigos;
-use App\Services\Siat\SiatClient;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 
@@ -25,6 +25,12 @@ use Illuminate\Http\Request;
  */
 class CodigoController extends Controller
 {
+    /**
+     * La fabrica se resuelve del contenedor en vez de construir el servicio a
+     * mano: es lo que permite probar estas acciones sin el SIAT al otro lado.
+     */
+    public function __construct(private readonly FabricaServicios $fabrica) {}
+
     // --- Solicitud al SIAT --------------------------------------------------
 
     public function solicitarCuis(PuntoVenta $puntoVenta): RedirectResponse
@@ -147,7 +153,7 @@ class CodigoController extends Controller
         $empresa = $puntoVenta->sucursal->empresa;
 
         try {
-            $accion(new ServicioCodigos($empresa, new SiatClient($empresa)));
+            $accion($this->fabrica->codigos($empresa));
         } catch (SiatException $e) {
             return $this->volver($puntoVenta, 'Error del SIAT: '.$e->getMessage());
         }

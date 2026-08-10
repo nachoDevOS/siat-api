@@ -58,7 +58,10 @@ test('la ficha de una empresa renderiza con sus relaciones', function () {
 test('el panel de pruebas piloto renderiza', function () {
     $empresa = Empresa::factory()->create();
 
-    $this->get(route('admin.pruebas.show', $empresa))->assertOk()->assertSee('Requisitos previos');
+    $this->get(route('admin.pruebas.show', $empresa))
+        ->assertOk()
+        ->assertSee('Secuencia del piloto')
+        ->assertSee('Token delegado');
 });
 
 test('el monitor renderiza', function () {

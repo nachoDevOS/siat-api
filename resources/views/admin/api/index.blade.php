@@ -61,7 +61,7 @@
                                 <span class="pill amb-pilo">Piloto</span>
                             @endif
                         </td>
-                        <td><span class="pill">{{ $empresa->estado }}</span></td>
+                        <td><x-estado-empresa :estado="$empresa->estado" /></td>
                         <td>
                             @if (filled($empresa->api_key_hash))
                                 <span class="ok">configurada</span>

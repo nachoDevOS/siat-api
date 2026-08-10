@@ -23,11 +23,24 @@
 </div>
 <div class="campo">
     <label>Codigo de sistema (lo asigna el SIN)</label>
-    <input name="codigo_sistema" value="{{ old('codigo_sistema', $e?->codigo_sistema) }}">
+    {{-- Al dar de alta viene precargado con el del proveedor. Si el SIN emite
+         uno propio para este contribuyente, se pisa aca. --}}
+    <input name="codigo_sistema"
+           value="{{ old('codigo_sistema', $e?->codigo_sistema ?? config('siat.proveedor.codigo_sistema')) }}">
+    @unless ($e)
+        <small style="color:var(--suave); font-size:12px;">
+            Precargado con el codigo del proveedor. Cambialo si el SIN le asigno uno propio a este cliente.
+        </small>
+    @endunless
 </div>
 <div class="campo">
     <label>Token delegado</label>
-    <input name="token_delegado" value="{{ old('token_delegado', $e?->token_delegado) }}">
+    {{-- Nunca se devuelve al navegador: es la credencial con la que se firma
+         cada llamada al SIN. En edicion el campo va vacio y solo se guarda si
+         se escribe algo; dejarlo en blanco conserva el token actual. --}}
+    <input name="token_delegado" type="password" autocomplete="off"
+           value="{{ old('token_delegado') }}"
+           placeholder="{{ $e && filled($e->token_delegado) ? 'Cargado — escribi uno nuevo solo si querés reemplazarlo' : '' }}">
 </div>
 <div class="campo">
     <label>Ambiente</label>

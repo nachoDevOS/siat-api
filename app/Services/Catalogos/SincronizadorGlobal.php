@@ -4,8 +4,7 @@ namespace App\Services\Catalogos;
 
 use App\Models\Catalogo;
 use App\Models\Empresa;
-use App\Services\Siat\ServicioSincronizacion;
-use App\Services\Siat\SiatClient;
+use App\Services\Siat\FabricaServicios;
 use Illuminate\Support\Facades\Cache;
 
 /**
@@ -36,30 +35,25 @@ class SincronizadorGlobal
         'tipos_punto_venta' => 'sincronizarParametricaTipoPuntoVenta',
     ];
 
-    public function __construct(private readonly ServicioSincronizacion $servicio) {}
-
     /**
-     * Crea el sincronizador usando las credenciales de una empresa activa.
+     * La fabrica se resuelve del contenedor en vez de construir el servicio a
+     * mano: es lo que permite sustituir la capa SOAP en las pruebas.
      */
-    public static function paraEmpresa(Empresa $empresa): self
-    {
-        $servicio = new ServicioSincronizacion($empresa, new SiatClient($empresa));
-
-        return new self($servicio);
-    }
+    public function __construct(private readonly FabricaServicios $fabrica) {}
 
     /**
-     * Sincroniza todas las parametricas globales. Devuelve cuantos registros
-     * se guardaron por tipo.
+     * Sincroniza todas las parametricas globales con las credenciales de una
+     * empresa activa. Devuelve cuantos registros se guardaron por tipo.
      *
      * @return array<string, int>
      */
-    public function sincronizarTodo(string $cuis): array
+    public function sincronizarTodo(Empresa $empresa, string $cuis): array
     {
+        $servicio = $this->fabrica->sincronizacion($empresa);
         $resumen = [];
 
         foreach (self::PARAMETRICAS as $tipo => $operacion) {
-            $respuesta = $this->servicio->parametrica($operacion, $cuis);
+            $respuesta = $servicio->parametrica($operacion, $cuis);
             $lista = $this->extraerLista($respuesta);
             $resumen[$tipo] = $this->guardar($tipo, $lista);
         }

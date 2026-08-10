@@ -13,8 +13,9 @@ uses(RefreshDatabase::class);
 // --- GeneradorCuf ---------------------------------------------------------
 
 test('el digito verificador de modulo 11 es determinista', function () {
-    // Para '1234' (derecha a izq): 4*2 + 3*3 + 2*4 + 1*5 = 30; 30%11=8; 11-8=3.
-    expect((new GeneradorCuf)->digitoVerificador('1234'))->toBe(3);
+    // Para '1234' (derecha a izq): 4*2 + 3*3 + 2*4 + 1*5 = 30; 30 % 11 = 8.
+    // El digito es el resto, no 11 menos el resto (ver CufModulo11Test).
+    expect((new GeneradorCuf)->digitoVerificador('1234'))->toBe(8);
 });
 
 test('el CUF termina con el codigo de control del CUFD', function () {

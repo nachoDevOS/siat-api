@@ -1,8 +1,14 @@
 <?php
 
+use App\Jobs\EnviarFacturaAlSiat;
 use App\Models\Empresa;
+use App\Models\Factura;
 use App\Models\LogSiat;
+use App\Models\PuntoVenta;
+use App\Models\Sucursal;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 
 uses(RefreshDatabase::class);
 
@@ -50,4 +56,56 @@ test('la purga rechaza una retencion invalida', function () {
 
     // Nada se borro: mejor fallar que vaciar la auditoria por un cero.
     expect(LogSiat::count())->toBe(1);
+});
+
+// ---- Reintento de pendientes ------------------------------------------------
+
+/**
+ * Factura recien emitida que todavia no llego al SIN.
+ */
+function facturaPendienteDe(int $minutos): Factura
+{
+    $empresa = Empresa::factory()->enProduccion()->create();
+    $sucursal = Sucursal::factory()->for($empresa)->create();
+    $puntoVenta = PuntoVenta::factory()->for($sucursal)->create();
+
+    return Factura::factory()->create([
+        'empresa_id' => $empresa->id,
+        'punto_venta_id' => $puntoVenta->id,
+        'estado' => Factura::ESTADO_PENDIENTE,
+        'created_at' => now()->subMinutes($minutos),
+    ]);
+}
+
+/**
+ * Corre el cierre de la tarea programada tal cual la define routes/console.php.
+ */
+function correrReintentoDePendientes(): void
+{
+    collect(app(Schedule::class)->events())
+        ->firstOrFail(fn ($evento) => $evento->description === 'reintentar-pendientes')
+        ->run(app());
+}
+
+test('el reintento de pendientes ignora las facturas con un job todavia en vuelo', function () {
+    Queue::fake();
+
+    // El job de envio agota sus tres intentos en ~7,5 min antes de derivar a
+    // contingencia: despachar de nuevo una factura mas nueva la mandaria dos
+    // veces al SIN.
+    facturaPendienteDe(2);
+
+    correrReintentoDePendientes();
+
+    Queue::assertNotPushed(EnviarFacturaAlSiat::class);
+});
+
+test('el reintento de pendientes si toma las facturas realmente atascadas', function () {
+    Queue::fake();
+
+    facturaPendienteDe(30);
+
+    correrReintentoDePendientes();
+
+    Queue::assertPushed(EnviarFacturaAlSiat::class, 1);
 });

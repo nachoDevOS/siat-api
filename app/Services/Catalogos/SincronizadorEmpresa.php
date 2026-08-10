@@ -6,8 +6,7 @@ use App\Models\ActividadEconomica;
 use App\Models\Empresa;
 use App\Models\LeyendaFactura;
 use App\Models\ProductoServicio;
-use App\Services\Siat\ServicioSincronizacion;
-use App\Services\Siat\SiatClient;
+use App\Services\Siat\FabricaServicios;
 
 /**
  * Sincroniza los catalogos POR EMPRESA: actividades economicas, productos
@@ -18,39 +17,36 @@ use App\Services\Siat\SiatClient;
  */
 class SincronizadorEmpresa
 {
-    public function __construct(
-        private readonly Empresa $empresa,
-        private readonly ServicioSincronizacion $servicio,
-    ) {}
-
-    public static function paraEmpresa(Empresa $empresa): self
-    {
-        return new self($empresa, new ServicioSincronizacion($empresa, new SiatClient($empresa)));
-    }
+    /**
+     * La fabrica se resuelve del contenedor en vez de construir el servicio a
+     * mano: es lo que permite sustituir la capa SOAP en las pruebas.
+     */
+    public function __construct(private readonly FabricaServicios $fabrica) {}
 
     /**
      * Sincroniza los tres catalogos por empresa. Devuelve el conteo por tipo.
      *
      * @return array{actividades: int, productos: int, leyendas: int}
      */
-    public function sincronizarTodo(string $cuis): array
+    public function sincronizarTodo(Empresa $empresa, string $cuis): array
     {
         return [
-            'actividades' => $this->sincronizarActividades($cuis),
-            'productos' => $this->sincronizarProductos($cuis),
-            'leyendas' => $this->sincronizarLeyendas($cuis),
+            'actividades' => $this->sincronizarActividades($empresa, $cuis),
+            'productos' => $this->sincronizarProductos($empresa, $cuis),
+            'leyendas' => $this->sincronizarLeyendas($empresa, $cuis),
         ];
     }
 
-    private function sincronizarActividades(string $cuis): int
+    public function sincronizarActividades(Empresa $empresa, string $cuis): int
     {
-        $lista = $this->extraerLista($this->servicio->listaActividades($cuis), 'listaActividades');
+        $respuesta = $this->fabrica->sincronizacion($empresa)->listaActividades($cuis);
+        $lista = $this->extraerLista($respuesta, ['listaActividades']);
         $total = 0;
 
         foreach ($lista as $item) {
             ActividadEconomica::updateOrCreate(
                 [
-                    'empresa_id' => $this->empresa->id,
+                    'empresa_id' => $empresa->id,
                     'codigo_actividad' => (string) data_get($item, 'codigoCaeb'),
                 ],
                 [
@@ -64,15 +60,16 @@ class SincronizadorEmpresa
         return $total;
     }
 
-    private function sincronizarProductos(string $cuis): int
+    public function sincronizarProductos(Empresa $empresa, string $cuis): int
     {
-        $lista = $this->extraerLista($this->servicio->listaProductosServicios($cuis), 'listaProductos');
+        $respuesta = $this->fabrica->sincronizacion($empresa)->listaProductosServicios($cuis);
+        $lista = $this->extraerLista($respuesta, ['listaCodigos', 'listaProductos']);
         $total = 0;
 
         foreach ($lista as $item) {
             ProductoServicio::updateOrCreate(
                 [
-                    'empresa_id' => $this->empresa->id,
+                    'empresa_id' => $empresa->id,
                     'codigo_actividad' => (string) data_get($item, 'codigoActividad'),
                     'codigo_producto' => (string) data_get($item, 'codigoProducto'),
                 ],
@@ -84,17 +81,18 @@ class SincronizadorEmpresa
         return $total;
     }
 
-    private function sincronizarLeyendas(string $cuis): int
+    public function sincronizarLeyendas(Empresa $empresa, string $cuis): int
     {
-        $lista = $this->extraerLista($this->servicio->listaLeyendas($cuis), 'listaLeyendas');
+        $respuesta = $this->fabrica->sincronizacion($empresa)->listaLeyendas($cuis);
+        $lista = $this->extraerLista($respuesta, ['listaLeyendas']);
 
         // Las leyendas se reemplazan enteras: son pocas y no tienen clave estable.
-        LeyendaFactura::where('empresa_id', $this->empresa->id)->delete();
+        LeyendaFactura::where('empresa_id', $empresa->id)->delete();
         $total = 0;
 
         foreach ($lista as $item) {
             LeyendaFactura::create([
-                'empresa_id' => $this->empresa->id,
+                'empresa_id' => $empresa->id,
                 'codigo_actividad' => (string) data_get($item, 'codigoActividad'),
                 'descripcion_leyenda' => (string) data_get($item, 'descripcionLeyenda'),
             ]);
@@ -105,17 +103,53 @@ class SincronizadorEmpresa
     }
 
     /**
-     * Normaliza la respuesta SOAP a un arreglo iterable, tolerando el caso de
-     * un solo elemento (que SOAP entrega como objeto).
+     * Normaliza la respuesta SOAP a un arreglo iterable.
      *
+     * VERIFICADO CONTRA EL WSDL (2026-08-10): el nodo raiz cambia en CADA
+     * operacion, y el de la lista tampoco es uniforme:
+     *
+     *     sincronizarActividades            -> RespuestaListaActividades.listaActividades
+     *     sincronizarListaProductosServicios-> RespuestaListaProductos.listaCodigos
+     *     sincronizarListaLeyendasFactura   -> RespuestaListaParametricasLeyendas.listaLeyendas
+     *
+     * Antes se buscaba siempre bajo 'RespuestaListaParametricas', que es el de
+     * las parametricas globales: ninguna de las tres coincidia y los tres
+     * catalogos se sincronizaban con CERO registros sin dar error.
+     *
+     * En vez de codificar los tres nombres, se descarta el envoltorio (siempre
+     * es una sola propiedad) y se busca la lista adentro. Asi un renombre del
+     * nodo raiz no vuelve a romper esto en silencio.
+     *
+     * @param  list<string>  $claves  nombres posibles del nodo de la lista.
      * @return array<int, mixed>
      */
-    private function extraerLista(mixed $respuesta, string $clave): array
+    private function extraerLista(mixed $respuesta, array $claves): array
     {
-        $lista = data_get($respuesta, "RespuestaListaParametricas.{$clave}")
-            ?? data_get($respuesta, $clave)
-            ?? [];
+        $cuerpo = $respuesta;
 
+        // El envoltorio 'RespuestaListaX' es siempre una sola propiedad: se baja
+        // un nivel sin depender de como se llame.
+        $propiedades = is_object($respuesta) ? get_object_vars($respuesta) : (array) $respuesta;
+
+        if (count($propiedades) === 1) {
+            $cuerpo = reset($propiedades);
+        }
+
+        $lista = null;
+
+        foreach ($claves as $clave) {
+            $lista = data_get($cuerpo, $clave) ?? data_get($respuesta, $clave);
+
+            if ($lista !== null) {
+                break;
+            }
+        }
+
+        if ($lista === null) {
+            return [];
+        }
+
+        // Un solo elemento llega como objeto, no como arreglo.
         if (is_object($lista)) {
             $lista = [$lista];
         }

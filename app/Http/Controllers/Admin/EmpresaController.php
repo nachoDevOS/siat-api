@@ -3,7 +3,11 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Catalogo;
 use App\Models\Empresa;
+use App\Models\Factura;
+use App\Services\Panel\EstadosVisuales;
+use App\Services\Panel\RequisitosEtapa;
 use App\Services\Webhooks\DestinoWebhook;
 use Closure;
 use Illuminate\Http\RedirectResponse;
@@ -32,11 +36,33 @@ class EmpresaController extends Controller
         Empresa::ESTADO_OBSERVADO,
     ];
 
-    public function index(): View
+    /**
+     * Listado con filtro por estado y buscador por NIT o nombre. Con varios
+     * clientes en distintas etapas, la lista cruda deja de servir.
+     */
+    public function index(Request $request): View
     {
-        $empresas = Empresa::latest()->paginate(20);
+        $estado = (string) $request->query('estado', '');
+        $busqueda = trim((string) $request->query('q', ''));
 
-        return view('admin.empresas.index', compact('empresas'));
+        $empresas = Empresa::query()
+            ->when($estado !== '', fn ($q) => $q->where('estado', $estado))
+            ->when($busqueda !== '', fn ($q) => $q->where(function ($sub) use ($busqueda) {
+                $sub->where('nombre_comercial', 'like', "%{$busqueda}%")
+                    ->orWhere('razon_social', 'like', "%{$busqueda}%")
+                    ->orWhere('nit', 'like', "%{$busqueda}%");
+            }))
+            ->latest()
+            ->paginate(20)
+            // withQueryString para que el filtro sobreviva al paginado.
+            ->withQueryString();
+
+        return view('admin.empresas.index', [
+            'empresas' => $empresas,
+            'estado' => $estado,
+            'busqueda' => $busqueda,
+            'estadosDisponibles' => EstadosVisuales::estadosEmpresa(),
+        ]);
     }
 
     public function create(): View
@@ -61,11 +87,48 @@ class EmpresaController extends Controller
             ->with('estado', 'Empresa creada. Copie la API key: solo se muestra ahora.');
     }
 
-    public function show(Empresa $empresa): View
+    /**
+     * Ficha del cliente: todo lo que necesita para poder facturar, en una sola
+     * pantalla, con el checklist de lo que le falta para la siguiente etapa.
+     */
+    public function show(Empresa $empresa, RequisitosEtapa $requisitos): View
     {
         $empresa->load('sucursales.puntosVenta', 'certificados');
 
-        return view('admin.empresas.show', compact('empresa'));
+        return view('admin.empresas.show', [
+            'empresa' => $empresa,
+            'certificado' => $empresa->certificados->firstWhere('activo', true),
+            'semaforoCertificado' => $requisitos->semaforoCertificado($empresa),
+            'requisitos' => $requisitos->para($empresa),
+            'progresoPiloto' => $requisitos->progresoPiloto($empresa),
+            // Codigos reales del SIN para el desplegable de tipo de punto de
+            // venta, en vez de un numero a mano. Vacio hasta sincronizar.
+            'tiposPuntoVenta' => Catalogo::where('tipo', 'tipos_punto_venta')
+                ->orderBy('codigo_clasificador')
+                ->get(),
+        ]);
+    }
+
+    /**
+     * Avanza (o corrige) la etapa del cliente ante el SIN.
+     *
+     * El cambio es manual a proposito: quien aprueba el piloto o habilita
+     * produccion es el SIN, no este sistema. Aca solo se refleja lo que ya
+     * paso afuera.
+     */
+    public function cambiarEstado(Request $request, Empresa $empresa): RedirectResponse
+    {
+        $datos = $request->validate([
+            'estado' => ['required', Rule::in(self::ESTADOS)],
+        ]);
+
+        $empresa->update(['estado' => $datos['estado']]);
+
+        $etiqueta = EstadosVisuales::empresa($datos['estado'])['etiqueta'];
+
+        return redirect()
+            ->route('admin.empresas.show', $empresa)
+            ->with('estado', "Cliente marcado como {$etiqueta}.");
     }
 
     public function edit(Empresa $empresa): View
@@ -75,16 +138,37 @@ class EmpresaController extends Controller
 
     public function update(Request $request, Empresa $empresa): RedirectResponse
     {
+        $datos = $this->validar($request, $empresa);
+
+        // El formulario nunca devuelve el token al navegador, asi que un campo
+        // vacio significa "no lo toques", no "borralo".
+        if (blank($datos['token_delegado'] ?? null)) {
+            unset($datos['token_delegado']);
+        }
+
         // El propio modelo invalida el cache por api_key_hash al guardarse.
-        $empresa->update($this->validar($request, $empresa));
+        $empresa->update($datos);
 
         return redirect()
             ->route('admin.empresas.show', $empresa)
             ->with('estado', 'Empresa actualizada.');
     }
 
+    /**
+     * Borrar una empresa cascadea a sus facturas, que son documentos fiscales
+     * con obligacion de conservacion: una vez emitida la primera, el cliente ya
+     * no se elimina. Para dejarlo de atender esta el estado OBSERVADO.
+     */
     public function destroy(Empresa $empresa): RedirectResponse
     {
+        $facturas = Factura::where('empresa_id', $empresa->id)->count();
+
+        if ($facturas > 0) {
+            return redirect()
+                ->route('admin.empresas.show', $empresa)
+                ->with('error', "No se puede eliminar: el cliente tiene {$facturas} factura(s) emitida(s). Cambialo a OBSERVADO para dejar de atenderlo.");
+        }
+
         $empresa->delete();
 
         return redirect()->route('admin.empresas.index')->with('estado', 'Empresa eliminada.');

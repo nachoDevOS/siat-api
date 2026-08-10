@@ -1,6 +1,7 @@
 <?php
 
 use App\Jobs\EnviarFacturaAlSiat;
+use App\Models\Certificado;
 use App\Models\Cufd;
 use App\Models\Empresa;
 use App\Models\Factura;
@@ -28,6 +29,8 @@ function empresaLista(): array
     $sucursal = Sucursal::factory()->for($empresa)->create(['codigo_sucursal' => 0]);
     $pv = PuntoVenta::factory()->for($sucursal)->create(['codigo_punto_venta' => 0]);
     Cufd::factory()->for($pv)->create();
+    // La modalidad electronica no admite un documento sin firmar.
+    Certificado::factory()->for($empresa)->firmable()->create();
 
     return [$empresa, $clave];
 }

@@ -41,6 +41,9 @@ class EmitirFacturaRequest extends FormRequest
             'gift_card' => ['nullable', 'numeric', 'min:0'],
             'anticipo' => ['nullable', 'numeric', 'min:0'],
             'usuario' => ['nullable', 'string', 'max:100'],
+            // Opcional: si no viene, se toma del catalogo de leyendas del NIT
+            // segun la actividad economica del primer item.
+            'leyenda' => ['nullable', 'string', 'max:500'],
 
             'items' => ['required', 'array', 'min:1'],
             'items.*.codigo_producto_sin' => ['required', 'integer'],

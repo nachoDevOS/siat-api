@@ -147,9 +147,17 @@ class FacturaController extends Controller
 
         // Se registra la anulacion y se marca la factura de inmediato; la
         // transmision al SIAT la hace AnularFacturaEnSiat en segundo plano.
+        // Se guarda el estado previo: si el SIN rechaza la anulacion, el job la
+        // devuelve ahi en vez de dejarla ANULADA de este lado y vigente del otro.
         FacturaAnulada::updateOrCreate(
             ['factura_id' => $factura->id],
-            ['motivo' => $request->integer('motivo'), 'anulada_en' => now()],
+            [
+                'motivo' => $request->integer('motivo'),
+                'anulada_en' => now(),
+                'estado' => FacturaAnulada::ESTADO_PENDIENTE,
+                'estado_anterior' => $factura->estado,
+                'motivo_rechazo' => null,
+            ],
         );
 
         $factura->update(['estado' => Factura::ESTADO_ANULADA]);

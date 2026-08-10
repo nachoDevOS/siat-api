@@ -12,12 +12,29 @@ use DOMDocument;
  * La estructura sigue el esquema "facturaElectronicaCompraVenta" del SIN:
  * una cabecera con los datos generales y un detalle por cada item.
  *
- * OJO: los nombres de etiquetas y el orden EXACTO deben validarse contra el
- * XSD vigente que publica el SIN (rule 7). Si el XSD cambia, se ajusta solo
- * este archivo; el resto del sistema no depende de la forma del XML.
+ * PENDIENTE DE VERIFICAR CONTRA EL XSD VIGENTE: los nombres de etiqueta y el
+ * orden EXACTO en que van salen de la documentacion del SIN, no del esquema
+ * real, y el SIN rechaza un documento con los elementos fuera de orden. Los
+ * tipos declarados en el WSDL se pueden listar con:
+ *
+ *     php artisan siat:inspeccionar-wsdl {empresa} --servicio=compra_venta --tipos
+ *
+ * Si el XSD difiere, se ajusta solo este archivo: el resto del sistema no
+ * depende de la forma del XML.
  */
 class ConstructorXml
 {
+    /**
+     * Documento de la modalidad ELECTRONICA EN LINEA. La modalidad
+     * computarizada usa 'facturaComputarizadaCompraVenta'; el resto del
+     * documento es igual salvo que la electronica va firmada.
+     */
+    private const RAIZ = 'facturaElectronicaCompraVenta';
+
+    private const NS_XSI = 'http://www.w3.org/2001/XMLSchema-instance';
+
+    private const NS_XMLNS = 'http://www.w3.org/2000/xmlns/';
+
     /**
      * Devuelve el XML sin firmar de la factura. La firma se agrega despues
      * con FirmadorXml sobre este documento.
@@ -29,21 +46,27 @@ class ConstructorXml
         $doc = new DOMDocument('1.0', 'UTF-8');
         $doc->formatOutput = false;
 
-        // Nodo raiz del documento fiscal.
-        $raiz = $doc->createElement('facturaElectronicaCompraVenta');
+        // Nodo raiz del documento fiscal, con la referencia al XSD que el SIN
+        // usa para validarlo. Verificado contra un sistema en produccion: sin
+        // estos dos atributos el documento no valida del otro lado.
+        $raiz = $doc->createElement(self::RAIZ);
+        // La declaracion del prefijo va una sola vez en la raiz; si se usara
+        // setAttribute suelto, DOM la repetiria en cada hijo con xsi:nil.
+        $raiz->setAttributeNS(self::NS_XMLNS, 'xmlns:xsi', self::NS_XSI);
+        $raiz->setAttributeNS(self::NS_XSI, 'xsi:noNamespaceSchemaLocation', self::RAIZ.'.xsd');
         $doc->appendChild($raiz);
 
-        $raiz->appendChild($this->cabecera($doc, $factura));
+        $this->cabecera($doc, $raiz, $factura);
 
         // Un nodo <detalle> por cada item de la factura.
         foreach ($factura->items as $item) {
-            $raiz->appendChild($this->detalle($doc, $item));
+            $this->detalle($doc, $raiz, $item);
         }
 
         return $doc->saveXML();
     }
 
-    private function cabecera(DOMDocument $doc, Factura $factura): \DOMElement
+    private function cabecera(DOMDocument $doc, \DOMElement $raiz, Factura $factura): void
     {
         $empresa = $factura->empresa;
         $sucursal = $factura->puntoVenta->sucursal;
@@ -82,13 +105,16 @@ class ConstructorXml
             'codigoDocumentoSector' => $factura->codigo_documento_sector,
         ];
 
-        return $this->nodoDesdeArray($doc, 'cabecera', $campos);
+        $this->nodoDesdeArray($doc, $raiz, 'cabecera', $campos);
     }
 
-    private function detalle(DOMDocument $doc, FacturaItem $item): \DOMElement
+    private function detalle(DOMDocument $doc, \DOMElement $raiz, FacturaItem $item): void
     {
         $campos = [
-            'actividadEconomica' => null, // se completa desde la actividad del NIT
+            // La resuelve ResolutorActividad al emitir y queda guardada en el
+            // item: aca solo se lee, para que el XML sea siempre el mismo por
+            // mas que el SIN reasigne el producto a otra actividad despues.
+            'actividadEconomica' => $item->codigo_actividad,
             'codigoProductoSin' => $item->codigo_producto_sin,
             'codigoProducto' => $item->codigo_interno,
             'descripcion' => $item->descripcion,
@@ -101,32 +127,40 @@ class ConstructorXml
             'numeroImei' => $item->numero_imei,
         ];
 
-        return $this->nodoDesdeArray($doc, 'detalle', $campos);
+        $this->nodoDesdeArray($doc, $raiz, 'detalle', $campos);
     }
 
     /**
      * Crea un nodo con hijos a partir de un arreglo campo => valor.
-     * Los valores null se omiten (el XSD del SIN trata los opcionales asi).
+     * Un campo vacio NO se omite: se escribe el elemento con xsi:nil="true".
+     *
+     * Antes se saltaban los nulos, y eso rompe la validacion: el XSD del SIN
+     * declara una secuencia de elementos, asi que faltar uno corre a todos los
+     * demas de lugar. Verificado contra un sistema en produccion.
      *
      * @param  array<string, mixed>  $campos
      */
-    private function nodoDesdeArray(DOMDocument $doc, string $nombre, array $campos): \DOMElement
+    private function nodoDesdeArray(DOMDocument $doc, \DOMElement $padre, string $nombre, array $campos): void
     {
-        $nodo = $doc->createElement($nombre);
+        // El nodo se engancha al arbol ANTES de llenarlo para que los hijos con
+        // xsi:nil hereden la declaracion del prefijo de la raiz en vez de
+        // repetirla cada uno.
+        $nodo = $padre->appendChild($doc->createElement($nombre));
 
         foreach ($campos as $etiqueta => $valor) {
+            $hijo = $nodo->appendChild($doc->createElement($etiqueta));
+
+            // El cero es un valor, no un vacio: montoGiftCard = 0 debe viajar.
             if ($valor === null || $valor === '') {
+                $hijo->setAttributeNS(self::NS_XSI, 'xsi:nil', 'true');
+
                 continue;
             }
 
             // createElement no escapa el contenido; usamos un nodo de texto
             // para que caracteres como & o < queden bien codificados.
-            $hijo = $doc->createElement($etiqueta);
             $hijo->appendChild($doc->createTextNode((string) $valor));
-            $nodo->appendChild($hijo);
         }
-
-        return $nodo;
     }
 
     /**

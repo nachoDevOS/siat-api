@@ -73,6 +73,60 @@
         .pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; background: #e2e8f0; color: #334155; }
         .ok { color: var(--ok); font-weight: 600; } .no { color: var(--no); font-weight: 600; }
 
+        /* ---- Paleta unica de estados (ver App\Services\Panel\EstadosVisuales) ----
+           Un color significa lo mismo en TODO el panel:
+           verde listo · azul en curso · violeta hito · ambar atencion · rojo bloqueante */
+        .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+                 border: 1px solid transparent; white-space: nowrap; }
+        .badge-gris    { background: #f1f5f9; color: #475569; border-color: #e2e8f0; }
+        .badge-azul    { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+        .badge-violeta { background: #f5f3ff; color: #6d28d9; border-color: #ddd6fe; }
+        .badge-verde   { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+        .badge-ambar   { background: #fffbeb; color: #b45309; border-color: #fde68a; }
+        .badge-rojo    { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+
+        /* ---- Semaforo de vigencia ---- */
+        .semaforo { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #334155; }
+        .semaforo .txt { color: var(--suave); }
+        .punto { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+        .punto-verde { background: #059669; } .punto-ambar { background: #d97706; }
+        .punto-rojo  { background: #dc2626; } .punto-gris  { background: #94a3b8; }
+        .punto-azul  { background: #2563eb; } .punto-violeta { background: #7c3aed; }
+
+        /* ---- Stepper del ciclo de vida ---- */
+        .stepper { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .stepper .paso { display: flex; align-items: center; gap: 7px; }
+        .stepper .marca { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+                          font-size: 12px; font-weight: 700; background: #e2e8f0; color: #64748b; flex-shrink: 0; }
+        .stepper .rotulo { font-size: 12px; color: var(--suave); white-space: nowrap; }
+        .stepper .paso-hecho   .marca { background: #059669; color: #fff; }
+        .stepper .paso-actual  .marca { background: var(--primario); color: #fff; box-shadow: 0 0 0 3px rgba(37,99,235,.18); }
+        .stepper .paso-actual  .rotulo { color: var(--texto); font-weight: 600; }
+        .stepper .paso-alerta  .marca { background: #dc2626; color: #fff; box-shadow: 0 0 0 3px rgba(220,38,38,.18); }
+        .stepper .paso-alerta  .rotulo { color: #b91c1c; font-weight: 600; }
+        .stepper .linea { flex: 1; min-width: 16px; height: 2px; background: #e2e8f0; }
+        .stepper .linea-hecha { background: #059669; }
+        .stepper-compacto .marca { width: 18px; height: 18px; font-size: 10px; }
+        .stepper-compacto .linea { min-width: 10px; }
+
+        /* ---- Checklist de requisitos ---- */
+        .chk { list-style: none; margin: 0; padding: 0; }
+        .chk li { display: flex; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--borde); }
+        .chk li:last-child { border-bottom: 0; }
+        .chk .caja { width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; flex-shrink: 0;
+                     font-size: 11px; font-weight: 700; margin-top: 2px; }
+        .chk .si { background: #d1fae5; color: #047857; } .chk .nope { background: #fee2e2; color: #b91c1c; }
+        .chk .titulo { font-size: 14px; }
+        .chk .detalle { font-size: 12px; color: var(--suave); margin-top: 2px; }
+
+        /* ---- Barra de progreso generica ---- */
+        .progreso { height: 8px; background: #eef2f7; border-radius: 999px; overflow: hidden; }
+        .progreso span { display: block; height: 100%; background: linear-gradient(90deg,#3b82f6,#059669); }
+
+        /* ---- Filtros de listado ---- */
+        .filtros { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+        .filtros .campo { margin: 0; } .filtros input, .filtros select { min-width: 190px; }
+
         /* ---- Toggle de sidebar en movil (checkbox puro CSS) ---- */
         #menu { display: none; }
         @media (max-width: 860px) {
@@ -105,6 +159,9 @@
             <nav>
                 <a href="{{ route('admin.api') }}" class="{{ request()->routeIs('admin.api') ? 'activo' : '' }}">
                     <span class="ic">⚡</span> Administrar API
+                </a>
+                <a href="{{ route('admin.configuracion') }}" class="{{ request()->routeIs('admin.configuracion') ? 'activo' : '' }}">
+                    <span class="ic">⚙</span> Configuracion
                 </a>
             </nav>
 

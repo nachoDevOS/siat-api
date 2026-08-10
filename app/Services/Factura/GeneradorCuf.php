@@ -7,21 +7,25 @@ namespace App\Services\Factura;
  * SIAT. Por eso una factura emitida sin internet ya es legalmente valida.
  *
  * Pasos (ver seccion 9.2 del documento maestro):
- *   1. Concatenar 9 campos numericos con ancho fijo -> 54 digitos.
- *   2. Calcular un digito verificador con modulo 11.
- *   3. Convertir el numero (54 digitos + verificador) a base 16.
+ *   1. Concatenar 9 campos numericos con ancho fijo -> 53 digitos.
+ *   2. Calcular un digito verificador con modulo 11 y pegarlo al final.
+ *   3. Convertir esos 54 digitos a base 16.
  *   4. Concatenar el codigo de control del CUFD.
  *
- * IMPORTANTE: el detalle exacto del modulo 11 (multiplicadores y manejo del
- * resto) debe confirmarse contra el manual tecnico vigente del SIN antes de
- * produccion. La estructura y el orden de campos siguen el documento oficial;
- * si el SIN ajusta el algoritmo se cambia SOLO el metodo digitoVerificador().
+ * Los tres primeros pasos estan VERIFICADOS contra un sistema en produccion
+ * facturando ante el SIN (proyecto 'ventas', modalidad computarizada): el
+ * algoritmo del CUF es el mismo en ambas modalidades, lo que cambia es el
+ * documento que despues se firma y se envia.
  */
 class GeneradorCuf
 {
     /**
      * Anchos fijos de cada campo, en el orden exacto de concatenacion.
-     * La suma da 54 digitos.
+     * La suma da 53 digitos; con el verificador, 54.
+     *
+     * VERIFICADO contra un sistema en produccion: 'tipo_factura' ocupa UN solo
+     * digito (antes aca eran dos, y la cadena salia con un cero de mas, lo que
+     * cambia el verificador y el hexadecimal, o sea todo el CUF).
      */
     private const ANCHOS = [
         'nit' => 13,
@@ -29,7 +33,7 @@ class GeneradorCuf
         'sucursal' => 4,
         'modalidad' => 1,
         'tipo_emision' => 1,
-        'tipo_factura' => 2,
+        'tipo_factura' => 1,
         'tipo_documento_sector' => 2,
         'numero_factura' => 10,
         'punto_venta' => 4,
@@ -87,12 +91,12 @@ class GeneradorCuf
     /**
      * Digito verificador por modulo 11.
      *
-     * Recorre la cadena de derecha a izquierda multiplicando por pesos que
-     * ciclan de 2 a 9. El digito es 11 menos el resto; si da 10 u 11 se usa 0,
-     * que es la convencion mas comun en las implementaciones publicas del SIAT.
+     * VERIFICADO contra un sistema en produccion facturando ante el SIN.
      *
-     * OJO: confirmar pesos (2..9 vs 2..7) y manejo del 10/11 contra el manual
-     * del SIN. Es el unico punto sensible del algoritmo.
+     * Recorre la cadena de derecha a izquierda multiplicando por pesos que
+     * ciclan de 2 a 9, y el digito es el RESTO de dividir la suma entre 11
+     * —no 11 menos el resto, que es la variante de otros paises y la que este
+     * archivo usaba antes—. El resto 10 se escribe 1 y el 11 se escribe 0.
      */
     public function digitoVerificador(string $numero): int
     {
@@ -105,13 +109,13 @@ class GeneradorCuf
             $peso = $peso === 9 ? 2 : $peso + 1;
         }
 
-        $digito = 11 - ($suma % 11);
+        $digito = $suma % 11;
 
-        if ($digito >= 10) {
-            return 0;
-        }
-
-        return $digito;
+        return match ($digito) {
+            10 => 1,
+            11 => 0,
+            default => $digito,
+        };
     }
 
     /**

@@ -7,8 +7,10 @@ use App\Models\Factura;
 use App\Services\Contingencia\GestorContingencia;
 use App\Services\Factura\GeneradorPdf;
 use App\Services\Siat\FabricaServicios;
+use App\Services\Siat\RespuestaSiat;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Envia una factura ya emitida al SIAT en segundo plano (paso 12 del flujo).
@@ -41,16 +43,32 @@ class EnviarFacturaAlSiat implements ShouldQueue
         }
 
         $cufd = $factura->cufd?->codigo ?? optional($factura->puntoVenta->cufdVigente())->codigo;
+        // El SIN pide tambien el CUIS en la recepcion de la factura.
+        $cuis = optional($factura->puntoVenta->cuisVigente())->codigo;
 
         try {
-            $respuesta = $fabrica->facturacion($factura->empresa)
-                ->recepcionarFactura($factura, (string) $cufd);
+            $respuesta = RespuestaSiat::desde(
+                $fabrica->facturacion($factura->empresa)
+                    ->recepcionarFactura($factura, (string) $cufd, (string) $cuis),
+            );
 
-            // El codigo de recepcion confirma que el SIN acepto el envio.
+            // El SIN no usa SoapFault para rechazar un documento: responde 200
+            // con transaccion=false. Un rechazo es del documento (hash, firma,
+            // XML fuera de orden), asi que reintentarlo o derivarlo a
+            // contingencia no lo arregla: se observa y se avisa al cliente.
+            if (! $respuesta->aceptada) {
+                $this->observar($factura, $respuesta);
+
+                return;
+            }
+
+            // El SIN acuso recibo de ESTA factura: pasa a RECIBIDA. ENVIADA
+            // queda para las que viajan dentro de un paquete de contingencia,
+            // donde el acuse es del paquete y no de cada factura.
             $factura->update([
-                'estado' => Factura::ESTADO_ENVIADA,
+                'estado' => Factura::ESTADO_RECIBIDA,
                 'enviada_en' => now(),
-                'codigo_recepcion' => (string) data_get($respuesta, 'RespuestaServicioFacturacion.codigoRecepcion'),
+                'codigo_recepcion' => $respuesta->codigoRecepcion,
             ]);
 
             // Se consulta el estado final (validada/observada) por separado.
@@ -69,5 +87,25 @@ class EnviarFacturaAlSiat implements ShouldQueue
             // sigue siendo valida, solo queda pendiente de transmitir.
             $contingencia->derivar($factura);
         }
+    }
+
+    /**
+     * Deja constancia del rechazo del SIN y avisa al cliente. No se reintenta:
+     * el mismo documento va a ser rechazado igual hasta que se corrija.
+     */
+    private function observar(Factura $factura, RespuestaSiat $respuesta): void
+    {
+        $factura->update([
+            'estado' => Factura::ESTADO_OBSERVADA,
+            'codigo_estado_siat' => $respuesta->codigoEstado,
+        ]);
+
+        Log::warning('El SIN rechazo la recepcion de la factura.', [
+            'factura_id' => $factura->id,
+            'cuf' => $factura->cuf,
+            'motivo' => $respuesta->motivo(),
+        ]);
+
+        NotificarWebhook::dispatch($factura->id, 'factura.observada');
     }
 }

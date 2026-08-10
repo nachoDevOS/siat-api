@@ -17,7 +17,7 @@ class SiatSincronizarGlobales extends Command
      * Los catalogos globales son iguales para todos, asi que basta una
      * ejecucion con las credenciales de cualquier empresa activa (seccion 8.4).
      */
-    public function handle(): int
+    public function handle(SincronizadorGlobal $sincronizador): int
     {
         // Se elige una empresa que tenga un CUIS vigente para autenticar.
         $empresa = Empresa::where('estado', Empresa::ESTADO_PRODUCCION)->first()
@@ -42,7 +42,7 @@ class SiatSincronizarGlobales extends Command
             return self::SUCCESS;
         }
 
-        $resumen = SincronizadorGlobal::paraEmpresa($empresa)->sincronizarTodo($cuis->codigo);
+        $resumen = $sincronizador->sincronizarTodo($empresa, $cuis->codigo);
 
         foreach ($resumen as $tipo => $total) {
             $this->line("{$tipo}: {$total}");

@@ -121,11 +121,20 @@ class SiatClient
     }
 
     /**
+     * Cabecera HTTP exacta con la que el SIAT espera el token delegado.
+     *
+     * VERIFICADA contra un sistema en produccion facturando ante el SIN. No es
+     * "Authorization: Bearer" ni "Authorization: Token": el SIN usa su propia
+     * cabecera 'apikey' con el prefijo literal 'TokenApi'. Con cualquier otra,
+     * todas las operaciones fallan por autenticacion.
+     */
+    private const CABECERA_TOKEN = 'apikey: TokenApi ';
+
+    /**
      * Opciones del SoapClient comunes a todos los servicios.
      *
-     * El token va en la cabecera "Authorization: Token {token}" mediante un
-     * stream_context, porque el SIAT lo exige en el transporte HTTP, no en
-     * el sobre SOAP.
+     * El token va en una cabecera HTTP mediante un stream_context, porque el
+     * SIAT lo exige en el transporte y no en el sobre SOAP.
      *
      * @return array<string, mixed>
      */
@@ -133,7 +142,7 @@ class SiatClient
     {
         $contexto = stream_context_create([
             'http' => [
-                'header' => "Authorization: Token {$this->empresa->token_delegado}",
+                'header' => self::CABECERA_TOKEN.$this->empresa->token_delegado,
             ],
         ]);
 
@@ -144,6 +153,8 @@ class SiatClient
             'connection_timeout' => config('siat.connection_timeout'),
             'cache_wsdl' => config('siat.wsdl_cache'),
             'stream_context' => $contexto,
+            // El SIN acepta y devuelve gzip: los XML de factura son grandes.
+            'compression' => SOAP_COMPRESSION_ACCEPT | SOAP_COMPRESSION_GZIP | SOAP_COMPRESSION_DEFLATE,
             // El timeout de LECTURA no se configura aca: ext-soap lo ignora.
             // Lo aplica llamar() sobre el ini default_socket_timeout.
         ];

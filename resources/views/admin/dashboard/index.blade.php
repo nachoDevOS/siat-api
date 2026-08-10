@@ -95,7 +95,7 @@
                             <td>{{ $factura->numero_factura }}</td>
                             <td>{{ $factura->empresa?->nombre_comercial ?? '—' }}</td>
                             <td>{{ number_format((float) $factura->monto_total, 2) }}</td>
-                            <td><span class="pill">{{ $factura->estado }}</span></td>
+                            <td><x-estado-factura :estado="$factura->estado" /></td>
                             <td>{{ optional($factura->fecha_emision)->format('d/m H:i') }}</td>
                         </tr>
                     @empty

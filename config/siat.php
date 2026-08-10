@@ -16,6 +16,26 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Identidad del proveedor
+    |--------------------------------------------------------------------------
+    | Datos de la solicitud de autorizacion (formulario R-1359) con la que el
+    | SIN habilito ESTE sistema. Son del proveedor, no de sus clientes: se
+    | cargan una vez al desplegar y no los cambia un operador, por eso viven
+    | en el .env y no en una tabla.
+    |
+    | El alta de un cliente los usa como valor por defecto, pero cada empresa
+    | guarda el suyo: si el SIN emite un codigo de sistema distinto por cada
+    | contribuyente asociado, se pisa desde el panel y aca no se toca nada.
+    */
+    'proveedor' => [
+        'nit' => env('SIAT_PROVEEDOR_NIT'),
+        'razon_social' => env('SIAT_PROVEEDOR_RAZON_SOCIAL'),
+        'codigo_sistema' => env('SIAT_PROVEEDOR_CODIGO_SISTEMA'),
+        'nombre_sistema' => env('SIAT_PROVEEDOR_NOMBRE_SISTEMA', 'SolucionDigital-api'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | URLs base por ambiente
     |--------------------------------------------------------------------------
     | El WSDL de cada servicio se arma como: {base}/{Servicio}?wsdl
@@ -23,9 +43,10 @@ return [
     | directamente con $config[$empresa->codigo_ambiente].
     */
     'urls' => [
-        // 1 = Produccion
+        // 1 = Produccion. PENDIENTE DE VERIFICAR: la solicitud de autorizacion
+        // solo lista las rutas del ambiente de pruebas.
         1 => env('SIAT_URL_PRODUCCION', 'https://siatrest.impuestos.gob.bo/v2'),
-        // 2 = Piloto
+        // 2 = Piloto. VERIFICADA contra la solicitud de autorizacion del SIN.
         2 => env('SIAT_URL_PILOTO', 'https://pilotosiatservicios.impuestos.gob.bo/v2'),
     ],
 
@@ -36,13 +57,15 @@ return [
     | Nombres tal como aparecen en la ruta del WSDL. Se centralizan aqui para
     | que ningun servicio arme la URL "a mano". Si el SIN renombra un servicio,
     | se cambia en un solo lugar.
+    |
+    | VERIFICADOS contra la solicitud de autorizacion del SIN (formulario
+    | R-1359), que lista las cuatro rutas exactas del ambiente de pruebas.
     */
     'servicios' => [
         'sincronizacion' => 'FacturacionSincronizacion',
         'codigos' => 'FacturacionCodigos',
         'operaciones' => 'FacturacionOperaciones',
         'compra_venta' => 'ServicioFacturacionCompraVenta',
-        'electronica' => 'ServicioFacturacionElectronica',
     ],
 
     /*
@@ -65,6 +88,9 @@ return [
         'casa_matriz' => 0,
         // Documento sector 1 = Factura de compra-venta (unico alcance por ahora).
         'documento_sector' => 1,
+        // tipoFacturaDocumento: 1 = factura con derecho a credito fiscal.
+        // Viaja en recepcionFactura y tambien entra al calculo del CUF.
+        'tipo_factura_documento' => 1,
     ],
 
     /*

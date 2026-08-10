@@ -54,7 +54,9 @@ return new class extends Migration
 
             $table->timestamps();
 
-            $table->unique(['empresa_id', 'codigo_actividad', 'codigo_producto']);
+            // Nombre explicito: el que genera Laravel por convencion pasa los
+            // 64 caracteres que admite MySQL y la migracion no corre.
+            $table->unique(['empresa_id', 'codigo_actividad', 'codigo_producto'], 'productos_servicios_unico');
         });
 
         // Leyendas de factura, que dependen de la actividad economica.

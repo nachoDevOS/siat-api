@@ -1,7 +1,11 @@
 <?php
 
+use App\Exceptions\SiatException;
+use App\Models\Cuis;
 use App\Models\PuntoVenta;
 use App\Models\User;
+use App\Services\Siat\FabricaServicios;
+use App\Services\Siat\ServicioCodigos;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
@@ -41,4 +45,65 @@ test('solicitar CUFD al SIAT sin CUIS no rompe el panel', function () {
     $this->post(route('admin.codigos.cufd', $pv))
         ->assertRedirect()
         ->assertSessionHas('estado');
+});
+
+/**
+ * Sustituye la fabrica por un doble. El controlador construia el SiatClient a
+ * mano y este camino quedaba sin cobertura (deuda #7 del analisis).
+ */
+function fabricaDeCodigos(ServicioCodigos $servicio): void
+{
+    test()->mock(FabricaServicios::class, function ($mock) use ($servicio) {
+        $mock->shouldReceive('codigos')->andReturn($servicio);
+    });
+}
+
+test('solicitar CUIS al SIAT guarda el codigo devuelto', function () {
+    $pv = PuntoVenta::factory()->create();
+
+    $servicio = Mockery::mock(ServicioCodigos::class);
+    $servicio->shouldReceive('solicitarCuis')->andReturn((object) [
+        'RespuestaCuis' => (object) ['codigo' => 'CUIS-DEL-SIN'],
+    ]);
+    fabricaDeCodigos($servicio);
+
+    $this->post(route('admin.codigos.cuis', $pv))->assertRedirect();
+
+    expect($pv->cuisVigente()->codigo)->toBe('CUIS-DEL-SIN');
+});
+
+test('solicitar CUFD al SIAT guarda codigo y codigo_control', function () {
+    $pv = PuntoVenta::factory()->create();
+    Cuis::factory()->for($pv)->create();
+
+    $servicio = Mockery::mock(ServicioCodigos::class);
+    $servicio->shouldReceive('solicitarCufd')->andReturn((object) [
+        'RespuestaCufd' => (object) [
+            'codigo' => 'CUFD-DEL-SIN',
+            'codigoControl' => 'CTRL-99',
+            'direccion' => 'Av. Siempre Viva 742',
+        ],
+    ]);
+    fabricaDeCodigos($servicio);
+
+    $this->post(route('admin.codigos.cufd', $pv))->assertRedirect();
+
+    // El codigo_control es la pieza que despues entra al calculo del CUF.
+    $vigente = $pv->cufdVigente();
+    expect($vigente->codigo)->toBe('CUFD-DEL-SIN')
+        ->and($vigente->codigo_control)->toBe('CTRL-99');
+});
+
+test('un error del SIAT al solicitar codigos se muestra como aviso', function () {
+    $pv = PuntoVenta::factory()->create();
+
+    $servicio = Mockery::mock(ServicioCodigos::class);
+    $servicio->shouldReceive('solicitarCuis')->andThrow(new SiatException('WSDL inalcanzable'));
+    fabricaDeCodigos($servicio);
+
+    $this->post(route('admin.codigos.cuis', $pv))
+        ->assertRedirect()
+        ->assertSessionHas('estado', 'Error del SIAT: WSDL inalcanzable');
+
+    expect($pv->cuisVigente())->toBeNull();
 });

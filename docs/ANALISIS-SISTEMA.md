@@ -3,8 +3,20 @@
 > Estado verificado el 2026-08-09 corriendo las migraciones reales (28 tablas, FKs e
 > índices comprobados) y la suite completa de tests. No es una lectura a ojo de los
 > archivos.
+>
+> **Revisión del 2026-08-09 (tarde).** Se cerró la deuda técnica de los puntos 5, 6, 7 y
+> 9; el punto 4 se descartó por decisión de producto (ver §8); se reescribió el panel; y
+> se dejaron preparados —sin terminar— los tres bloqueantes que dependen de material del
+> SIN. Los cambios están marcados con **[2026-08-09]** a lo largo del documento.
+>
+> Se descubrió además que **las migraciones no corrían contra MySQL**: el índice único de
+> `productos_servicios` generaba un nombre de 70 caracteres y MySQL admite 64. La
+> verificación original se había hecho sobre sqlite. Corregido con nombre explícito.
 
 ---
+
+> **Alta de un cliente:** el procedimiento completo, con los requisitos y de quién es cada
+> uno, está en [ALTA-DE-CLIENTE.md](ALTA-DE-CLIENTE.md).
 
 ## 1. Qué es
 
@@ -22,8 +34,8 @@ CUIS/CUFD/CAFC, catálogos del SIN, contingencia y pruebas del piloto.
 | Frontend | Blade con CSS inline (sin Vite, sin build step) |
 | Dependencias de dominio | `barryvdh/laravel-dompdf`, `simplesoftwareio/simple-qrcode` |
 | Extensiones PHP requeridas | `soap`, `openssl`, `bcmath`, `gd`, `dom`, `zlib` |
-| Tamaño | 83 archivos / 5.394 líneas en `app/`, 13 vistas Blade |
-| Tests | **73 verdes**, 172 aserciones, 16 archivos |
+| Tamaño | 86 archivos en `app/`, 13 vistas Blade + 5 componentes |
+| Tests | **173 verdes** + 1 aparte del grupo `mysql`, 27 archivos |
 
 ---
 
@@ -46,6 +58,19 @@ base, sin Redis.
 `phpunit.xml` sigue apuntando a sqlite `:memory:` **a propósito**, para que la suite
 corra en ~3 segundos. Consecuencia a tener presente: los `lockForUpdate` recién
 bloquean de verdad contra MySQL, en sqlite son un no-op.
+
+**[2026-08-09] Eso ya está cubierto.** `tests/Feature/CorrelativoConcurrenciaTest.php`
+corre **contra MySQL de verdad**, sobre una base aparte (`siat_api_test`), y lanza cuatro
+procesos PHP reales emitiendo en paralelo por el mismo punto de venta. Está en el grupo
+`mysql`, excluido de la corrida normal en `phpunit.xml`:
+
+```bash
+sudo systemctl start mysql
+php artisan test --group=mysql
+```
+
+Se verificó que el test detecta la regresión: quitando el `lockForUpdate`, las cuatro
+cajas sacan solo dos números distintos.
 
 ### Puesta en marcha
 
@@ -177,7 +202,7 @@ paquete_id      → paquetes.id        set null
 
 **Índices**
 ```
-INDEX  (cuf)                              la API consulta la factura por su CUF
+UNIQUE (cuf)                              [2026-08-09] era INDEX; ahora la base impide un CUF duplicado
 UNIQUE (empresa_id, referencia_externa)   idempotencia de negocio
 ```
 
@@ -278,6 +303,20 @@ cuando el SIN cambie el manual sin tocar la aplicación:
 `ejecuciones_prueba.empresa_id` es nullable porque la fase 1 se corre con el NIT del
 proveedor, sin empresa cliente.
 
+**[2026-08-09] Los 17 pasos están cableados.** Antes solo tres (`verificarComunicacion`,
+`fechaHora`, `cuis`) hacían algo y el resto fallaba con "aún no implementado". Ahora:
+
+- **1 a 10** — estructurales, se ejecutan enteros. Los pasos de CUIS y CUFD **guardan** el
+  código devuelto, porque los pasos siguientes lo necesitan vigente en la base.
+- **11 a 16** — emiten documentos reales (factura, anulación, evento, contingencia) por el
+  mismo camino que la API. Los datos que llevan (qué venta, qué motivo, qué código de
+  evento) los define la especificación que el SIN genera por contribuyente: se leen de
+  `casos_prueba.payload_ejemplo` y **no se inventan**. Si falta, el paso falla diciendo
+  exactamente qué cargar, y se carga desde el panel.
+- **17** — comprueba que los 16 anteriores estén en `EXITOSO`. **No cambia el estado de la
+  empresa**: quien aprueba el piloto es el SIN, el panel solo ofrece el botón para
+  reflejarlo. Antes el sistema se auto-aprobaba.
+
 ---
 
 ### Integridad referencial
@@ -354,8 +393,11 @@ emisión y la transmisión están desacopladas.
   hijas solo arman su payload; no vuelven a tocar transporte ni auditoría.
 - `ServicioCodigos` · `ServicioSincronizacion` · `ServicioOperaciones` ·
   `ServicioFacturacion`
-- `FabricaServicios` — los jobs la resuelven del contenedor en vez de hacer `new`, que es
-  lo que hace testeable toda la capa.
+- `FabricaServicios` — se resuelve del contenedor en vez de hacer `new`, que es lo que
+  hace testeable toda la capa. **[2026-08-09]** Ya no queda un solo `new SiatClient` ni
+  `new ServicioX` fuera de esta carpeta: sincronizadores, `EjecutorPruebas`,
+  `Admin/CodigoController` y los comandos pasan todos por la fábrica, que además expone
+  `cliente()` para las herramientas de diagnóstico.
 
 Si el SIN cambia algo del transporte, se toca un solo archivo.
 
@@ -375,13 +417,24 @@ Si el SIN cambia algo del transporte, se toca un solo archivo.
 ## 4. Máquina de estados de la factura
 
 ```
-PENDIENTE ──► ENVIADA ──► RECIBIDA ──► VALIDADA ──► ANULADA
-    │                                      ▲
-    │                                      │
-    └──► CONTINGENCIA ──(paquete enviado)──┘
-                │
-                └──► OBSERVADA   (el SIN la rechazó)
+PENDIENTE ──► RECIBIDA ──► VALIDADA ──► ANULADA
+    │            │                          │
+    │            └──► OBSERVADA             │ (si el SIN rechaza la
+    │                    ▲                  │  anulación, vuelve al
+    └──► CONTINGENCIA    │                  ▼  estado anterior)
+             │           │            estado_anterior
+             └─► ENVIADA ┘
+              (paquete enviado)
 ```
+
+**[2026-08-10]** `RECIBIDA` dejó de ser un estado muerto: nunca se asignaba en
+ningún lado. Ahora la distinción es real y significa algo distinto en cada camino:
+
+| Estado | Cuándo |
+|---|---|
+| `RECIBIDA` | el SIN acusó recibo de **esa** factura (`recepcionFactura` devolvió su código de recepción) |
+| `ENVIADA` | la factura viajó dentro de un **paquete** de contingencia: el acuse es del paquete, no de cada factura |
+| `OBSERVADA` | el SIN la rechazó, sea al recibirla o al verificarla |
 
 Una factura en `CONTINGENCIA` **ya es válida y se puede imprimir**; solo le falta
 transmitirse dentro de un paquete. Por eso la API responde **202 Accepted** y no un error.
@@ -483,14 +536,42 @@ Se notifica a `empresas.webhook_url` en cada cambio de estado
 | Ruta | Qué hace |
 |---|---|
 | `/admin` | dashboard: métricas, facturas por estado, tasa de éxito SOAP |
-| `/admin/empresas` | ABM de clientes; genera la API key una sola vez |
-| `/admin/empresas/{id}` | ficha: certificados, sucursales, puntos de venta |
+| `/admin/empresas` | listado de clientes con filtro por estado y buscador por NIT/nombre |
+| `/admin/empresas/{id}` | ficha completa: etapa, checklist, certificado, estructura, códigos |
+| `/admin/empresas/{id}/estado` | refleja el avance de etapa que ya ocurrió ante el SIN |
 | `/admin/puntos-venta/{id}/{cuis,cufd,cafc}` | solicitar al SIAT o cargar manual |
 | `/admin/empresas/{id}/pruebas` | panel del piloto, los 17 pasos |
 | `/admin/monitor` | explorador de `logs_siat` |
 | `/admin/api` | consola: endpoints y acceso por empresa |
+| `/admin/configuracion` | **[2026-08-09]** identidad del proveedor, ambientes y transporte. **Solo lectura** |
 
 Autenticación por sesión con throttle (5 intentos / 60 s por email + IP).
+
+### [2026-08-09] Rediseño del panel
+
+Dos clases concentran todo lo que el panel sabe sobre estados, y las vistas no deciden
+nada por su cuenta:
+
+| Clase | Responsabilidad |
+|---|---|
+| `App\Services\Panel\EstadosVisuales` | Paleta única: verde listo · azul en curso · violeta hito · ámbar atención · rojo bloqueante · gris no empezó. Un color significa lo mismo en todas las pantallas. `CONTINGENCIA` es ámbar y no rojo: esa factura ya es válida. |
+| `App\Services\Panel\RequisitosEtapa` | Qué le falta a cada cliente para pasar a la etapa siguiente, y el progreso del piloto. Alimenta listado, stepper, ficha, checklist y panel del piloto. |
+
+Cinco componentes Blade en `resources/views/components/`: `badge`, `estado-empresa`,
+`estado-factura`, `semaforo`, `stepper`. Cada patrón repetido existe una sola vez.
+
+**Ficha del cliente**, todo en una pantalla: callout con el siguiente paso concreto,
+stepper del ciclo de vida, checklist automático de requisitos con el botón de avance
+deshabilitado hasta completarlo, semáforos de certificado (avisa 30 días antes), token, y
+CUIS / CUFD / CAFC por punto de venta (el CUFD avisa con 2 h, igual que el cron).
+
+**Alta guiada** sin asistente aparte: la ficha habilita cada acción cuando corresponde.
+Sin CUIS, los botones de CUFD y CAFC quedan deshabilitados explicando por qué; sin token
+y certificado no se entra al piloto.
+
+**Panel del piloto**: los 17 pasos con estado individual, botón por paso y "todos en
+orden", respuesta cruda de cada uno, progreso X/17, editor del `payload_ejemplo` por paso,
+y al completar los 17 se **ofrece** marcar `PILOTO_APROBADO`.
 
 ---
 
@@ -510,11 +591,16 @@ Autenticación por sesión con throttle (5 intentos / 60 s por email + IP).
 
 **Lo que falta**
 
-- **Sin roles ni policies en el panel**: cualquier usuario autenticado ve y edita todas
-  las empresas. Aceptable si solo entra el staff del proveedor; no lo es si algún día
-  entra un cliente.
 - El filtro anti-SSRF no cubre DNS rebinding (que la IP cambie entre la comprobación y la
   conexión real). Para eso habría que fijar la IP en el cliente HTTP.
+
+**Decisión de producto [2026-08-09]: el sistema no va a tener roles ni permisos.**
+
+Al panel entra un único administrador con usuario y contraseña (`admin@admin.com` /
+`password` por defecto, a cambiar en producción). Los clientes no entran al panel: se
+conectan solo por la API REST con su `X-Api-Key`, y ese aislamiento ya está resuelto y
+probado. La ausencia de policies deja de ser deuda y pasa a ser una decisión: no hay un
+segundo tipo de usuario al que limitar.
 
 ---
 
@@ -540,50 +626,207 @@ Los comentarios explican el *porqué*, no el *qué*.
 Los tres primeros son el mismo bloqueo de fondo: **no hay acceso al WSDL/XSD real del
 SIN**. Cada uno es un cambio de un archivo el día que se tenga.
 
-1. **XAdES-BES incompleto** — `app/Services/Factura/FirmadorXml.php:145`. La firma
-   XML-DSig base funciona y es verificable localmente, pero falta el bloque
+**[2026-08-09, revisión 2] Dos de los tres se cerraron** contrastando contra el proyecto
+`ventas`, un sistema que factura en producción ante el SIN (modalidad computarizada,
+sistema propio), y contra la solicitud de autorización R-1359 del SIN.
+
+Ese contraste destapó **cinco defectos que no daban error en local**: la factura se emitía
+igual y el SIN la habría rechazado. Ver §11.
+
+Queda abierto solo el primero.
+
+1. **XAdES-BES incompleto** — `app/Services/Factura/FirmadorXml.php`. La firma XML-DSig
+   base funciona y es verificable localmente, pero falta el bloque
    `<Object><QualifyingProperties>` con `SignedProperties` (SigningTime +
    SigningCertificate) y su segunda `Reference`. El SIN rechaza toda factura sin esto.
-2. **Módulo 11 del CUF sin verificar** — `app/Services/Factura/GeneradorCuf.php:94`.
-   Hay que confirmar los pesos (2..9 vs 2..7) y el manejo del resto 10/11 contra el
-   manual del SIN. Un CUF mal calculado significa factura rechazada.
-3. **Nombres de operaciones y campos SOAP sin validar** contra el WSDL vigente, y la
-   estructura del XML contra el XSD. Afecta a `ConstructorXml`, `ServicioFacturacion`,
-   `ServicioCodigos` y `ArmadorPaquete`.
+   **Preparado:** el método `construirQualifyingProperties()` está escrito y aislado, pero
+   **no está enchufado**, y lleva anotadas las cinco decisiones que no se pueden deducir
+   (versión del namespace XAdES, SHA-1 vs SHA-256 del certificado, orden de los RDN del
+   emisor, si hace falta `SignedDataObjectProperties`, patrón de los `Id`). Un bloque con
+   la estructura equivocada hace rechazar *todas* las facturas: peor que la firma actual.
+2. ~~**Módulo 11 del CUF sin verificar**~~ — **CERRADO.** Era la variante equivocada. Ver §11.
+3. ~~**Nombres de operaciones y campos SOAP sin validar**~~ — **CERRADO en lo esencial.** Los
+   nombres de operación y de campo coinciden con el sistema en producción; las cuatro
+   rutas de WSDL coinciden con la solicitud de autorización. Sigue sin contrastarse el
+   orden exacto del XSD para la modalidad **electrónica** (la referencia es computarizada)
+   y la respuesta de las paramétricas. Para eso está el comando, que solo reporta:
 
-Falta también un token de piloto real y un `.p12` real para probar el flujo de punta a punta.
+   ```bash
+   php artisan siat:inspeccionar-wsdl {empresa} --servicio=compra_venta --tipos
+   ```
 
-### Deuda técnica, por prioridad
+Falta todavía un `.p12` real para probar la firma de punta a punta.
 
-4. Sin autorización por rol en el panel.
-5. `EmisorFactura` resuelve el punto de venta sin filtrar `activo`.
-6. `facturas.cuf` no tiene índice único: nada impide un CUF duplicado.
-7. Los servicios de Catálogos y Pruebas, y `Admin/CodigoController`, todavía instancian
-   SOAP a mano en vez de usar `FabricaServicios` — quedan sin cobertura de tests.
-8. Los códigos de estado del SIN en `VerificarEstadoFactura` (`901`, `902`, `908`) están
-   marcados como pendientes de verificar.
-9. `EnviarPaqueteContingencia` declara `backoff` pero atrapa la excepción y hace
-   `release(300)` fijo — la misma contradicción que ya se corrigió en
-   `EnviarFacturaAlSiat`, aunque acá es menos grave.
+### Dónde vive cada dato
+
+La configuración está partida en dos según quién la cambia y cada cuánto:
+
+| | Dónde | Por qué |
+|---|---|---|
+| **Del proveedor** — NIT, razón social, código de sistema, URLs por ambiente, timeouts | `.env` → `config('siat.proveedor')` | Se cargan una vez al desplegar y valen para todos los clientes. Un dedazo dejaría sin facturar a todos a la vez, así que el panel los muestra pero no los edita |
+| **De cada cliente** — NIT, token delegado, certificado, ambiente, modalidad, código de sistema | Columnas de `empresas` | Cambian por contribuyente y los edita el operador desde la ficha |
+
+El código de sistema aparece en las dos filas a propósito: el alta de un cliente lo
+precarga con el del proveedor, pero cada empresa guarda el suyo. Si el SIN emite uno
+propio por cada contribuyente asociado, se pisa desde el panel y la configuración global
+no se toca. Mientras eso no esté confirmado, el sistema funciona de las dos maneras.
+
+### Datos del proveedor (solicitud R-1359, 09/08/2026)
+
+| | |
+|---|---|
+| NIT | 7633685015 |
+| Razón social | MOLINA GUZMAN IGNACIO |
+| Código de sistema | 22848EC6F66C9401C16F7 |
+| Sistema | SolucionDigital-api · **tipo PROVEEDOR** |
+| Modalidad | Electrónica en línea (código 1) |
+| Ambientes | 1 = Producción · 2 = Pruebas |
+
+Funcionalidades registradas ante el SIN: creación de punto de venta, descuento global,
+descuento en detalle, pago con gift card, emisión fuera de línea, códigos especiales,
+manuales de contingencia, registro de compras, y todos los catálogos de unidad de medida,
+formas de pago, tipos de moneda y documentos de identidad.
+
+### Deuda técnica
+
+| # | Estado |
+|---|---|
+| 4. Sin autorización por rol en el panel | **Descartado [2026-08-09]** — decisión de producto: un solo administrador, sin roles (ver §8) |
+| 5. `EmisorFactura` no filtraba el punto de venta por `activo` | **Cerrado** — filtra, con test |
+| 6. `facturas.cuf` sin índice único | **Cerrado** — migración nueva con `UNIQUE`, con test |
+| 7. Catálogos, Pruebas y `CodigoController` instanciaban SOAP a mano | **Cerrado** — todo por `FabricaServicios`, con los tests que faltaban |
+| 8. Códigos `901` / `902` / `908` en `VerificarEstadoFactura` | **Nombrado, sin resolver** — pasaron a constantes con su duda documentada; el comportamiento es idéntico hasta confirmarlos contra el manual |
+| 9. `EnviarPaqueteContingencia` con `release(300)` fijo | **Cerrado** — respeta su `backoff`; agotados los intentos el paquete queda `PENDIENTE` y la falla va a `failed_jobs` |
+
+Nuevo, encontrado al escribir el test de concurrencia: **las migraciones no corrían contra
+MySQL** (índice de 70 caracteres en `productos_servicios`). Cerrado.
 
 ---
 
-## 10. Cobertura de tests — 73 verdes
+## 10. Cobertura de tests — 144 verdes
 
 | Archivo | Qué cubre |
 |---|---|
 | `SiatFase1Test` | modelos, cifrado del token, vigencia de CUFD, URLs del WSDL |
 | `AuthTest` | login, logout, protección del panel |
 | `AdminPanelTest` | render de las vistas, alta de empresa, validaciones |
-| `CodigosPanelTest` | carga manual de CUIS/CUFD/CAFC |
+| `CodigosPanelTest` | carga manual y solicitud al SIAT de CUIS/CUFD/CAFC |
 | `ApiFacturaTest` | emisión, idempotencia, 401/403/422, endpoint de estado |
 | `ApiAnulacionTest` | anulación, estados no anulables, aislamiento entre empresas |
 | `ContingenciaTest` | evento único por racha, congelado del paquete, armado |
-| `JobsSiatTest` | reintentos vs contingencia, códigos del SIN en el paquete |
+| `JobsSiatTest` | reintentos vs contingencia, códigos del SIN, backoff del paquete |
 | `WebhookTest` | filtro SSRF (6 casos), firma HMAC |
 | `SeguridadApiTest` | rate limit, invalidación de caché, rotación de key, throttle |
 | `MantenimientoTest` | purga de logs |
 | `FacturaServiciosTest` | CUF, totales, validador, firma XML |
+| **`IntegridadEmisionTest`** | CUF duplicado rechazado por la base, punto de venta dado de baja |
+| **`CatalogosSincronizacionTest`** | sincronizadores global y por empresa, respuesta de un solo elemento, resincronización sin duplicar |
+| **`EjecutorPruebasTest`** | los 17 pasos del piloto: códigos que se guardan, emisión, anulación, contingencia, y que el paso 17 no cambia el estado solo |
+| **`PanelClientesTest`** | filtro y buscador, checklist de requisitos, avance de etapa, progreso del piloto, semáforos, carga de payload |
+| **`CufModulo11Test`** | dígito verificador con casos calculados a mano, ciclo de pesos y forma del CUF |
+| **`ContratoSiatTest`** | los detalles del contrato con el SIN que ningún test de negocio detecta: `xsi:nil`, orden de la cabecera, hash del gzip, CUIS en la recepción, y qué significa cada código de estado |
+| **`CorrelativoConcurrenciaTest`** | grupo `mysql`: 4 emisiones concurrentes reales sobre el mismo punto de venta |
 
-**Hueco de cobertura:** los sincronizadores de catálogos y el ejecutor de pruebas, por la
-razón de la deuda #7.
+**El hueco de cobertura de la deuda #7 quedó cerrado.**
+
+Lo único que sigue sin poder probarse de verdad es la **firma XAdES-BES**: el sistema de
+referencia es computarizado y esa modalidad no firma. Hace falta un XML firmado de
+ejemplo del SIN y un `.p12` real.
+
+---
+
+## 11. [2026-08-09] Contraste contra un sistema en producción
+
+Se contrastó la capa SIAT contra el proyecto `ventas` (sistema propio, modalidad
+computarizada, facturando en producción ante el SIN) y contra la solicitud de
+autorización R-1359. El algoritmo del CUF, los nombres de operación, los campos de
+cada solicitud y el formato del XML son comunes a ambas modalidades; lo que cambia es
+que la electrónica va firmada y usa otro documento raíz.
+
+**Cinco defectos encontrados. Ninguno daba error en local:** la factura se emitía, se
+guardaba y se encolaba igual, y el rechazo habría llegado del SIN.
+
+| # | Qué estaba mal | Consecuencia | Archivo |
+|---|---|---|---|
+| 1 | Token en `Authorization: Token {token}` | El SIN usa su propia cabecera `apikey: TokenApi {token}`. **Ninguna** operación SOAP habría autenticado | `SiatClient` |
+| 2 | Dígito verificador `11 - (suma % 11)` | Es la variante de otros países. El SIN usa el **resto**: `suma % 11`, con 10 → 1 y 11 → 0. Todos los CUF salían mal | `GeneradorCuf` |
+| 3 | `tipoFactura` ocupaba 2 dígitos | La cadena del CUF son **53** dígitos, no 54. Un cero de más corre todo y cambia verificador y hexadecimal | `GeneradorCuf` |
+| 4 | `hashArchivo` calculado sobre el XML plano | El SIN compara el hash del **gzip**. Rechazo por integridad | `ServicioFacturacion` |
+| 5 | Los campos vacíos se omitían del XML | El XSD declara una secuencia: faltar un elemento corre a los demás. Deben ir presentes con `xsi:nil="true"` | `ConstructorXml` |
+
+**Y un error de interpretación con consecuencia para el cliente:** el código `902` se
+daba por *validada*. Es **PENDIENTE**. Se le confirmaba al cliente —y se le disparaba el
+webhook `factura.validada`— por un documento que el SIN todavía no había aceptado. Ahora
+`902` reintenta sin tocar el estado; validan `908` y `690`, y cualquier otro código deja
+la factura `OBSERVADA`.
+
+Se agregó además lo que faltaba en la solicitud: el `cuis` viaja también en
+`recepcionFactura`, junto con `tipoFacturaDocumento`, y el `SoapClient` negocia gzip.
+
+Todo esto quedó fijado en `tests/Feature/ContratoSiatTest.php`, que vive aparte
+justamente porque son detalles que ningún test de negocio detecta.
+
+**Lo que el contraste NO resuelve:** el sistema de referencia es *computarizado*, y esa
+modalidad no lleva firma digital. La firma XAdES-BES sigue siendo el único bloqueante
+real, y sigue necesitando un XML firmado de ejemplo del SIN.
+
+---
+
+## 12. [2026-08-10] Segunda revisión: el camino feliz que nunca se conectó
+
+La revisión anterior cerró los defectos del **contrato** con el SIN (cabecera del
+token, módulo 11, hash del gzip, `xsi:nil`, códigos de estado). Esta encontró algo
+distinto: tres piezas del camino normal de una factura que estaban escritas pero
+**no cableadas**. Ninguna daba error en local, y las tres terminaban en rechazo del
+SIN o en una factura que no llegaba nunca.
+
+### Bloqueantes cerrados
+
+| # | Qué pasaba | Por qué no se notaba | Archivos |
+|---|---|---|---|
+| 1 | **La contingencia era de ida y no de vuelta.** `GestorContingencia::recuperar()` y `EnviarPaqueteContingencia` solo se invocaban desde el paso 16 del piloto. En operación normal nada cerraba el evento ni armaba el paquete | La factura quedaba `CONTINGENCIA`, que es un estado válido: se podía imprimir y consultar. Solo el SIN no la veía, para siempre | `SiatRecuperarContingencia` (nuevo), `routes/console.php` |
+| 2 | **El rechazo del SIN se leía como aceptación.** El SIN no usa `SoapFault` para rechazar un documento: responde 200 con `transaccion=false` y el motivo en `mensajesList`. Solo se leía `codigoRecepcion` | La factura se marcaba enviada con el código de recepción vacío y el motivo se descartaba | `RespuestaSiat` (nuevo), `EnviarFacturaAlSiat`, `AnularFacturaEnSiat`, `EnviarPaqueteContingencia` |
+| 3 | **`actividadEconomica` y `leyenda` viajaban siempre vacíos.** El XSD los exige; las tablas `productos_servicios` y `leyendas_factura` se sincronizaban y no las usaba nadie. `leyenda` ni siquiera tenía regla en el FormRequest, así que la clave nunca llegaba | Con el arreglo de `xsi:nil` iban presentes pero nulos: el XML era válido en forma y el SIN lo habría rechazado por contenido | `ResolutorActividad` (nuevo), `EmisorFactura`, `ConstructorXml`, `EmitirFacturaRequest` |
+
+La actividad se deduce del producto homologado y **se guarda en el ítem**, no se
+resuelve al armar el XML: la factura es un documento congelado, y si el SIN
+reasigna mañana ese producto a otra actividad, lo ya emitido no puede cambiar. Un
+producto ausente del catálogo corta la emisión con 422 — pero solo si la empresa
+ya sincronizó, porque con el catálogo vacío bloquear dejaría el sistema inusable.
+
+### Otros defectos cerrados
+
+| Qué | Ahora |
+|---|---|
+| Se emitía **sin firmar** si la empresa no tenía certificado activo, y la API respondía 201 | Corta con `FacturaInvalidaException`: la modalidad electrónica no admite un documento sin firma |
+| El cron de 5 min re-despachaba facturas `PENDIENTE` con un job todavía en vuelo | Solo toma las que llevan >10 min (el job agota sus 3 intentos en ~7,5). Igual el de verificación, con 20 min |
+| La anulación se marcaba en local y **nunca revertía** si el SIN la rechazaba: quedaba `ANULADA` acá y vigente allá | Se guarda `estado_anterior`; un rechazo devuelve la factura ahí y registra el motivo. `facturas_anuladas` lleva `estado` (PENDIENTE/CONFIRMADA/RECHAZADA) |
+| `release()` fijo contradiciendo el `backoff` declarado en `AnularFacturaEnSiat` y `VerificarEstadoFactura` (la deuda #9 se había cerrado solo en el job del paquete) | Los tres respetan su backoff |
+| `facturas` sin índice por `estado`: los dos crons escaneaban la tabla entera cada 5 y 15 min | Índice `(estado, id)` |
+| El `token_delegado` descifrado se imprimía en el HTML del formulario | Campo `password` que nunca se rellena; vacío significa "no lo toques" |
+| Borrar una empresa cascadeaba a sus facturas, que son documentos fiscales | Se rechaza si tiene facturas emitidas; para dejar de atenderla está `OBSERVADO` |
+| `.env.example` no listaba `SIAT_WEBHOOK_SECRET` ni las URLs, timeouts, rate limit y retención. Sin secreto los webhooks salen **sin firmar y sin avisar** | Todas documentadas |
+| `tipo_factura` a mano en el cálculo del CUF existiendo la constante en config | Sale de `config('siat.codigos.tipo_factura_documento')` |
+
+### Cobertura nueva — 173 verdes
+
+| Archivo | Qué fija |
+|---|---|
+| `RechazoSiatTest` | `transaccion=false` es rechazo aunque haya código de recepción; una factura rechazada queda `OBSERVADA` y **no** va a contingencia; la anulación rechazada revierte; el paquete rechazado no libera sus facturas |
+| `ActividadLeyendaTest` | actividad y leyenda salen del catálogo del NIT y llegan al XML con valor; la leyenda del cliente gana; producto no homologado → 422; sin certificado no se emite; la factura emitida queda firmada |
+| `RecuperacionContingenciaTest` | el evento se cierra y el paquete se despacha solo cuando el SIAT responde **y** el SIN acepta el registro del evento |
+| `SeguridadPanelTest` | el token no vuelve al navegador ni se borra al guardar vacío; no se elimina un cliente con facturas |
+| `MantenimientoTest` (ampliado) | el cron no re-despacha una factura con job en vuelo |
+| `CertificadoFactory::firmable()` | `.p12` autofirmado real, cacheado por corrida: la emisión ahora exige un certificado que se pueda abrir de verdad |
+
+### Lo que sigue abierto
+
+**La firma XAdES-BES sigue siendo el único bloqueante real**, y por la misma razón
+de siempre: hace falta un XML firmado de ejemplo del SIN para confirmar las cinco
+decisiones anotadas en `FirmadorXml::construirQualifyingProperties()`. Sigue sin
+enchufarse a propósito.
+
+Tampoco se contrastó todavía el orden exacto del XSD de la modalidad **electrónica**
+(la referencia disponible es computarizada) ni la forma real de `mensajesList`, que
+`RespuestaSiat` tolera en sus dos variantes (objeto suelto y arreglo) justamente
+porque no está confirmada.

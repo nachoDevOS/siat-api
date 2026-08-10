@@ -14,6 +14,16 @@ use App\Models\Empresa;
  */
 class FabricaServicios
 {
+    /**
+     * Cliente SOAP crudo. Solo lo necesitan las herramientas de diagnostico
+     * que miran el transporte (WSDL, operaciones expuestas); para operar
+     * siempre se usa uno de los servicios de abajo.
+     */
+    public function cliente(Empresa $empresa): SiatClient
+    {
+        return new SiatClient($empresa);
+    }
+
     public function facturacion(Empresa $empresa): ServicioFacturacion
     {
         return new ServicioFacturacion($empresa, new SiatClient($empresa));

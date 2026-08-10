@@ -65,7 +65,18 @@ return [
     |
     */
 
-    'timezone' => 'UTC',
+    /*
+     * Hora de Bolivia (UTC-4), NO UTC.
+     *
+     * El SIN compara 'fechaEnvio' contra su propio reloj con una tolerancia de
+     * 5 minutos: corriendo en UTC toda peticion llegaba 4 horas adelantada y el
+     * SIN la rechazaba con el codigo 935 ("EL PARAMETRO FECHA DE ENVIO ES
+     * INVALIDO").
+     *
+     * Y lo mas silencioso: la fecha de emision entra al calculo del CUF, asi
+     * que en UTC TODOS los CUF salian mal sin que nada fallara en local.
+     */
+    'timezone' => env('APP_TIMEZONE', 'America/La_Paz'),
 
     /*
     |--------------------------------------------------------------------------

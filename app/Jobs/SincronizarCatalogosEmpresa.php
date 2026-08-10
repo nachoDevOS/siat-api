@@ -18,7 +18,7 @@ class SincronizarCatalogosEmpresa implements ShouldQueue
 
     public function __construct(public readonly int $empresaId) {}
 
-    public function handle(): void
+    public function handle(SincronizadorEmpresa $sincronizador): void
     {
         $empresa = Empresa::find($this->empresaId);
 
@@ -38,6 +38,6 @@ class SincronizarCatalogosEmpresa implements ShouldQueue
             return;
         }
 
-        SincronizadorEmpresa::paraEmpresa($empresa)->sincronizarTodo($cuis->codigo);
+        $sincronizador->sincronizarTodo($empresa, $cuis->codigo);
     }
 }

@@ -25,6 +25,13 @@ class FirmadorXml
     private const NS_DSIG = 'http://www.w3.org/2000/09/xmldsig#';
 
     /**
+     * Namespace del perfil XAdES. PENDIENTE DE VERIFICAR: hay dos versiones en
+     * uso (1.3.2 y 1.4.1) y el SIN no documenta cual exige. Se confirma con el
+     * XML de ejemplo oficial.
+     */
+    private const NS_XADES = 'http://uri.etsi.org/01903/v1.3.2#';
+
+    /**
      * Firma el XML y devuelve el documento firmado como string.
      *
      * @throws SiatException si el .p12 no se puede abrir con su passphrase.
@@ -142,11 +149,110 @@ class FirmadorXml
         $keyInfo->appendChild($x509Data);
         $signature->appendChild($keyInfo);
 
-        // TODO XADES: agregar aca el <Object><QualifyingProperties> con
-        // SignedProperties (SigningTime + SigningCertificate) que exige el
-        // perfil XAdES-BES del SIN, y una segunda Reference al SignedProperties.
-        // Verificar contra el ejemplo firmado oficial antes de produccion.
+        // TODO XADES: enchufar aca construirQualifyingProperties() y agregar en
+        // construirSignedInfo() la segunda Reference que apunta al
+        // SignedProperties (URI="#{id}-signedprops", Type="...#SignedProperties").
+        //
+        // NO se enchufa todavia a proposito: la forma exacta del bloque debe
+        // contrastarse contra un XML firmado de ejemplo oficial del SIN. Un
+        // bloque con la estructura equivocada hace rechazar TODAS las facturas,
+        // que es peor que la firma XML-DSig base que hoy se genera.
 
         return $signature;
+    }
+
+    /**
+     * ESQUELETO SIN VERIFICAR — no se usa todavia.
+     *
+     * Arma el bloque <Object><QualifyingProperties> del perfil XAdES-BES:
+     * la fecha de firma y la huella del certificado firmante, atados al
+     * <Signature> por su Id.
+     *
+     * Todo lo dudoso esta concentrado en este unico metodo. Lo que falta
+     * confirmar contra el ejemplo oficial del SIN antes de usarlo:
+     *
+     *   - Version del namespace XAdES (1.3.2 vs 1.4.1).
+     *   - Si el SIN espera tambien <SignedDataObjectProperties>.
+     *   - Si el DigestMethod del certificado es SHA-256 o SHA-1.
+     *   - El formato exacto de <X509IssuerName> (orden de los RDN).
+     *   - Si el Id del Signature y del SignedProperties siguen algun patron fijo.
+     *
+     * @param  string  $certX509  certificado en base64, sin cabeceras PEM.
+     * @param  string  $idFirma  Id del elemento <Signature> al que se ata.
+     */
+    private function construirQualifyingProperties(
+        DOMDocument $doc,
+        string $certX509,
+        string $idFirma,
+    ): \DOMElement {
+        $object = $doc->createElementNS(self::NS_DSIG, 'Object');
+
+        $qualifying = $doc->createElementNS(self::NS_XADES, 'xades:QualifyingProperties');
+        $qualifying->setAttribute('Target', "#{$idFirma}");
+
+        $signedProperties = $doc->createElementNS(self::NS_XADES, 'xades:SignedProperties');
+        $signedProperties->setAttribute('Id', "{$idFirma}-signedprops");
+
+        $signatureProperties = $doc->createElementNS(self::NS_XADES, 'xades:SignedSignatureProperties');
+
+        // Momento de la firma, en formato ISO 8601.
+        $signingTime = $doc->createElementNS(self::NS_XADES, 'xades:SigningTime');
+        $signingTime->appendChild($doc->createTextNode(now()->toAtomString()));
+        $signatureProperties->appendChild($signingTime);
+
+        // Huella del certificado firmante + su emisor y numero de serie.
+        $binarioCert = base64_decode($certX509, true) ?: '';
+        $datosCert = openssl_x509_parse("-----BEGIN CERTIFICATE-----\n"
+            .chunk_split($certX509, 64, "\n")
+            ."-----END CERTIFICATE-----\n") ?: [];
+
+        $signingCertificate = $doc->createElementNS(self::NS_XADES, 'xades:SigningCertificate');
+        $cert = $doc->createElementNS(self::NS_XADES, 'xades:Cert');
+
+        $certDigest = $doc->createElementNS(self::NS_XADES, 'xades:CertDigest');
+        $digestMethod = $doc->createElementNS(self::NS_DSIG, 'DigestMethod');
+        $digestMethod->setAttribute('Algorithm', 'http://www.w3.org/2001/04/xmlenc#sha256');
+        $certDigest->appendChild($digestMethod);
+
+        $digestValue = $doc->createElementNS(self::NS_DSIG, 'DigestValue');
+        $digestValue->appendChild($doc->createTextNode(base64_encode(hash('sha256', $binarioCert, true))));
+        $certDigest->appendChild($digestValue);
+        $cert->appendChild($certDigest);
+
+        $issuerSerial = $doc->createElementNS(self::NS_XADES, 'xades:IssuerSerial');
+        $issuerName = $doc->createElementNS(self::NS_DSIG, 'X509IssuerName');
+        $issuerName->appendChild($doc->createTextNode($this->nombreEmisor($datosCert)));
+        $issuerSerial->appendChild($issuerName);
+
+        $serialNumber = $doc->createElementNS(self::NS_DSIG, 'X509SerialNumber');
+        $serialNumber->appendChild($doc->createTextNode((string) ($datosCert['serialNumber'] ?? '')));
+        $issuerSerial->appendChild($serialNumber);
+        $cert->appendChild($issuerSerial);
+
+        $signingCertificate->appendChild($cert);
+        $signatureProperties->appendChild($signingCertificate);
+
+        $signedProperties->appendChild($signatureProperties);
+        $qualifying->appendChild($signedProperties);
+        $object->appendChild($qualifying);
+
+        return $object;
+    }
+
+    /**
+     * Reconstruye el nombre distinguido del emisor (CN=..., O=..., C=...).
+     * El orden de los componentes es justamente uno de los puntos a confirmar.
+     *
+     * @param  array<string, mixed>  $datosCert  salida de openssl_x509_parse.
+     */
+    private function nombreEmisor(array $datosCert): string
+    {
+        $partes = [];
+
+        foreach ((array) ($datosCert['issuer'] ?? []) as $clave => $valor) {
+            $partes[] = $clave.'='.(is_array($valor) ? implode(',', $valor) : $valor);
+        }
+
+        return implode(', ', $partes);
     }
 }

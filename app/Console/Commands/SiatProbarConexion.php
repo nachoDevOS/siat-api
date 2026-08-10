@@ -4,7 +4,7 @@ namespace App\Console\Commands;
 
 use App\Exceptions\SiatException;
 use App\Models\Empresa;
-use App\Services\Siat\SiatClient;
+use App\Services\Siat\FabricaServicios;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
@@ -18,7 +18,7 @@ class SiatProbarConexion extends Command
      * el sistema puede resolver y descargar el WSDL del SIAT. No emite nada;
      * solo valida el transporte (URL correcta, token presente, SIAT arriba).
      */
-    public function handle(): int
+    public function handle(FabricaServicios $fabrica): int
     {
         $id = (int) $this->argument('empresa');
 
@@ -41,7 +41,7 @@ class SiatProbarConexion extends Command
             return self::FAILURE;
         }
 
-        $cliente = new SiatClient($empresa);
+        $cliente = $fabrica->cliente($empresa);
 
         // Probamos contra el servicio de codigos porque es el que expone
         // verificarComunicacion, la operacion mas liviana del SIN.

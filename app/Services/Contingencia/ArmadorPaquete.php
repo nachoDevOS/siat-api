@@ -10,8 +10,11 @@ use App\Models\Paquete;
  * las facturas del evento en un solo documento para enviarlo con
  * recepcionPaqueteFactura.
  *
- * OJO: el formato exacto del envoltorio del paquete (raiz y etiquetas) debe
- * confirmarse contra el XSD de paquete vigente del SIN (rule 7).
+ * PENDIENTE DE VERIFICAR CONTRA EL XSD VIGENTE: el envoltorio del paquete (nodo
+ * raiz y etiquetas) esta tomado de la documentacion, no del esquema real. Los
+ * tipos declarados en el WSDL se pueden listar con:
+ *
+ *     php artisan siat:inspeccionar-wsdl {empresa} --servicio=compra_venta --tipos
  */
 class ArmadorPaquete
 {
