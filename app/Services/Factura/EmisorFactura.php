@@ -204,7 +204,7 @@ class EmisorFactura
         // Se puede llegar aca por POST /api/v1/puntos-venta, que crea el
         // registro local pero no lo da de alta en el SIN: eso lo hace el paso 10
         // del piloto y es irreversible, por eso no se dispara solo.
-        if (! $puntoVenta->estaRegistradoEnSiat()) {
+        if (! $puntoVenta->existeEnElSiat()) {
             throw new FacturaInvalidaException([
                 "El punto de venta {$puntoVenta->codigo_punto_venta} de la sucursal ".
                 "{$venta['sucursal']} todavia no esta registrado en el SIAT: no se puede emitir contra el.",

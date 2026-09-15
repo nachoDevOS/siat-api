@@ -26,18 +26,18 @@ class SincronizarCatalogosEmpresa implements ShouldQueue
             return;
         }
 
-        // Cualquier punto de venta activo de la empresa sirve para tomar el CUIS.
-        $cuis = PuntoVenta::query()
+        // Cualquier punto de venta de la empresa con CUIS vigente sirve, pero
+        // hay que pasar el PUNTO DE VENTA entero: el SIN valida que el CUIS
+        // corresponda a la sucursal y al codigo que viajan en la peticion.
+        $puntoVenta = PuntoVenta::with('sucursal.empresa')
             ->whereHas('sucursal', fn ($q) => $q->where('empresa_id', $empresa->id))
             ->get()
-            ->map(fn (PuntoVenta $pv) => $pv->cuisVigente())
-            ->filter()
-            ->first();
+            ->first(fn (PuntoVenta $pv) => $pv->cuisVigente() !== null);
 
-        if ($cuis === null) {
+        if ($puntoVenta === null) {
             return;
         }
 
-        $sincronizador->sincronizarTodo($empresa, $cuis->codigo);
+        $sincronizador->sincronizarTodo($puntoVenta);
     }
 }

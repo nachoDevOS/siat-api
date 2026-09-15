@@ -27,8 +27,9 @@ class PuntoVentaResource extends JsonResource
             // Sin esto el cliente no tenia como saber por que su punto de venta
             // recien creado no puede facturar: el alta local no lo registra en
             // el SIN, y sin registro el CUF sale con un codigo que el SIN
-            // desconoce.
-            'registrado_en_siat' => $this->estaRegistradoEnSiat(),
+            // desconoce. El punto de venta 0 es la excepcion: el SIN lo da por
+            // existente sin registrarlo.
+            'registrado_en_siat' => $this->existeEnElSiat(),
             'tiene_cufd_vigente' => $this->cufdVigente() !== null,
         ];
     }

@@ -32,6 +32,15 @@ class Cufd extends Model
         return $this->belongsTo(PuntoVenta::class);
     }
 
+    /**
+     * CUIS con el que se pidio este CUFD. Null en los guardados antes de que se
+     * empezara a registrar el vinculo.
+     */
+    public function cuis(): BelongsTo
+    {
+        return $this->belongsTo(Cuis::class);
+    }
+
     public function estaVigente(): bool
     {
         return $this->fecha_vigencia->isFuture();

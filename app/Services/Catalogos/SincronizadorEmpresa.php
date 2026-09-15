@@ -2,11 +2,14 @@
 
 namespace App\Services\Catalogos;
 
+use App\Exceptions\SiatException;
 use App\Models\ActividadEconomica;
 use App\Models\Empresa;
 use App\Models\LeyendaFactura;
 use App\Models\ProductoServicio;
+use App\Models\PuntoVenta;
 use App\Services\Siat\FabricaServicios;
+use App\Services\Siat\RespuestaSiat;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -30,18 +33,57 @@ class SincronizadorEmpresa
      *
      * @return array{actividades: int, productos: int, leyendas: int}
      */
-    public function sincronizarTodo(Empresa $empresa, string $cuis): array
+    public function sincronizarTodo(PuntoVenta $puntoVenta): array
     {
         return [
-            'actividades' => $this->sincronizarActividades($empresa, $cuis),
-            'productos' => $this->sincronizarProductos($empresa, $cuis),
-            'leyendas' => $this->sincronizarLeyendas($empresa, $cuis),
+            'actividades' => $this->sincronizarActividades($puntoVenta),
+            'productos' => $this->sincronizarProductos($puntoVenta),
+            'leyendas' => $this->sincronizarLeyendas($puntoVenta),
         ];
     }
 
-    public function sincronizarActividades(Empresa $empresa, string $cuis): int
+    /**
+     * Pide un catalogo del NIT con los tres datos tomados del MISMO punto de
+     * venta: CUIS, sucursal y codigo.
+     *
+     * El SIN valida que el CUIS corresponda a esa sucursal y a ese punto de
+     * venta. Antes se pasaba el CUIS suelto y la sucursal y el punto de venta
+     * caian en su valor por defecto —0— asi que toda peticion viajaba con un
+     * punto de venta que podia no existir: el SIN respondia 200 con
+     * transaccion=false y "EL PUNTO DE VENTA ES INEXISTENTE O INVALIDO", y el
+     * catalogo se "sincronizaba" con cero registros sin avisar.
+     *
+     * @throws SiatException si no hay CUIS vigente o si el SIN rechaza.
+     */
+    private function pedirCatalogo(PuntoVenta $puntoVenta, string $metodo): mixed
     {
-        $respuesta = $this->fabrica->sincronizacion($empresa)->listaActividades($cuis);
+        $cuis = $puntoVenta->cuisVigente();
+
+        if ($cuis === null) {
+            throw new SiatException(
+                "El punto de venta {$puntoVenta->codigo_punto_venta} no tiene CUIS vigente: no se pueden pedir catalogos.",
+            );
+        }
+
+        $respuesta = $this->fabrica->sincronizacion($puntoVenta->sucursal->empresa)->{$metodo}(
+            $cuis->codigo,
+            (int) $puntoVenta->sucursal->codigo_sucursal,
+            (int) $puntoVenta->codigo_punto_venta,
+        );
+
+        $rechazo = RespuestaSiat::rechazoDeCatalogo($respuesta);
+
+        if ($rechazo !== null) {
+            throw new SiatException("El SIN rechazo '{$metodo}': {$rechazo}");
+        }
+
+        return $respuesta;
+    }
+
+    public function sincronizarActividades(PuntoVenta $puntoVenta): int
+    {
+        $empresa = $puntoVenta->sucursal->empresa;
+        $respuesta = $this->pedirCatalogo($puntoVenta, 'listaActividades');
         $lista = $this->extraerLista($respuesta, ['listaActividades']);
         $total = 0;
 
@@ -62,9 +104,10 @@ class SincronizadorEmpresa
         return $total;
     }
 
-    public function sincronizarProductos(Empresa $empresa, string $cuis): int
+    public function sincronizarProductos(PuntoVenta $puntoVenta): int
     {
-        $respuesta = $this->fabrica->sincronizacion($empresa)->listaProductosServicios($cuis);
+        $empresa = $puntoVenta->sucursal->empresa;
+        $respuesta = $this->pedirCatalogo($puntoVenta, 'listaProductosServicios');
         $lista = $this->extraerLista($respuesta, ['listaCodigos', 'listaProductos']);
         $total = 0;
 
@@ -83,9 +126,10 @@ class SincronizadorEmpresa
         return $total;
     }
 
-    public function sincronizarLeyendas(Empresa $empresa, string $cuis): int
+    public function sincronizarLeyendas(PuntoVenta $puntoVenta): int
     {
-        $respuesta = $this->fabrica->sincronizacion($empresa)->listaLeyendas($cuis);
+        $empresa = $puntoVenta->sucursal->empresa;
+        $respuesta = $this->pedirCatalogo($puntoVenta, 'listaLeyendas');
         $lista = $this->extraerLista($respuesta, ['listaLeyendas']);
 
         // Una lista vacia no se toma como "el SIN ya no tiene leyendas": se toma

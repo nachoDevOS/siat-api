@@ -120,14 +120,16 @@ class EjecutorPruebas
             'cufd' => $this->solicitarCufd($empresa),
 
             // --- Pasos 6 a 9: catalogos --------------------------------------
+            // Se pasa el punto de venta y no el CUIS suelto: el SIN valida que
+            // el CUIS corresponda a la sucursal y al codigo de la peticion.
             'sincronizarGlobales' => $this->catalogosGlobales
-                ->sincronizarTodo($empresa, $this->cuisVigente($empresa)),
+                ->sincronizarTodo($this->primerPuntoVenta($empresa)),
             'listaActividades' => ['actividades' => $this->catalogosEmpresa
-                ->sincronizarActividades($empresa, $this->cuisVigente($empresa))],
+                ->sincronizarActividades($this->primerPuntoVenta($empresa))],
             'listaProductos' => ['productos' => $this->catalogosEmpresa
-                ->sincronizarProductos($empresa, $this->cuisVigente($empresa))],
+                ->sincronizarProductos($this->primerPuntoVenta($empresa))],
             'listaLeyendas' => ['leyendas' => $this->catalogosEmpresa
-                ->sincronizarLeyendas($empresa, $this->cuisVigente($empresa))],
+                ->sincronizarLeyendas($this->primerPuntoVenta($empresa))],
 
             // --- Paso 10: estructura ------------------------------------------
             'registroPuntoVenta' => $this->registrarPuntoVenta($empresa),

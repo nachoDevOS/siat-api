@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Exceptions\SiatException;
 use App\Models\Empresa;
 use App\Models\PuntoVenta;
 use App\Services\Catalogos\SincronizadorGlobal;
@@ -29,20 +30,28 @@ class SiatSincronizarGlobales extends Command
             return self::SUCCESS;
         }
 
-        $cuis = PuntoVenta::query()
+        // Se busca el PUNTO DE VENTA, no el CUIS suelto: el SIN valida que el
+        // CUIS corresponda a la sucursal y al punto de venta de la peticion, y
+        // antes se mandaba el CUIS de uno con "punto de venta 0" de otro.
+        $puntoVenta = PuntoVenta::with('sucursal.empresa')
             ->whereHas('sucursal', fn ($q) => $q->where('empresa_id', $empresa->id))
             ->get()
-            ->map(fn (PuntoVenta $pv) => $pv->cuisVigente())
-            ->filter()
-            ->first();
+            ->first(fn (PuntoVenta $pv) => $pv->cuisVigente() !== null);
 
-        if ($cuis === null) {
-            $this->warn("La empresa {$empresa->nombre_comercial} no tiene CUIS vigente.");
+        if ($puntoVenta === null) {
+            $this->warn("La empresa {$empresa->nombre_comercial} no tiene ningun punto de venta con CUIS vigente.");
 
-            return self::SUCCESS;
+            return self::FAILURE;
         }
 
-        $resumen = $sincronizador->sincronizarTodo($empresa, $cuis->codigo);
+        try {
+            $resumen = $sincronizador->sincronizarTodo($puntoVenta);
+        } catch (SiatException $e) {
+            // Un rechazo del SIN ya no pasa por "sincronizado: 0 registros".
+            $this->error("No se pudieron sincronizar los catalogos: {$e->getMessage()}");
+
+            return self::FAILURE;
+        }
 
         foreach ($resumen as $tipo => $total) {
             $this->line("{$tipo}: {$total}");

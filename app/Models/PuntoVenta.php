@@ -33,20 +33,57 @@ class PuntoVenta extends Model
     }
 
     /**
-     * Si el SIN ya le asigno codigo a este punto de venta.
+     * Codigo del punto de venta IMPLICITO de toda sucursal.
+     *
+     * El SIN lo da por existente sin que nadie lo registre: es el que queda
+     * cuando la sucursal se crea en la Oficina Virtual. No aparece en la
+     * respuesta de consultaPuntoVenta —que solo lista los registrados por API—
+     * pero tiene su propio CUIS y CUFD y se puede facturar con el.
+     *
+     * VERIFICADO contra un sistema en produccion facturando ante el SIN: su
+     * tablero muestra el PV 0 con CUIS vigente hasta 2027 y CUFD del dia, al
+     * lado de los registrados por API (1, 7, 8, 9, 10).
+     */
+    public const CODIGO_IMPLICITO = 0;
+
+    /**
+     * Si este sistema ya registro el punto de venta en el SIN por API.
      *
      * Registrarlo dos veces no es un reintento inocuo: el SIN crea uno NUEVO
      * cada vez y un punto de venta no se puede borrar, solo cerrar, y un punto
-     * de venta cerrado no se reabre.
+     * de venta cerrado no se reabre. Por eso el paso 10 del piloto mira esto
+     * antes de volver a llamar.
      */
     public function estaRegistradoEnSiat(): bool
     {
         return $this->registrado_en_siat !== null;
     }
 
+    /**
+     * Si el SIN conoce este punto de venta y por lo tanto se puede emitir.
+     *
+     * Es distinto de estaRegistradoEnSiat(): el punto de venta 0 existe del
+     * lado del SIN sin que este sistema lo haya registrado nunca. Mirar solo la
+     * marca de registro bloqueaba la emision con el PV 0, que es valido.
+     */
+    public function existeEnElSiat(): bool
+    {
+        return $this->estaRegistradoEnSiat()
+            || (int) $this->codigo_punto_venta === self::CODIGO_IMPLICITO;
+    }
+
     public function sucursal(): BelongsTo
     {
         return $this->belongsTo(Sucursal::class);
+    }
+
+    /**
+     * Facturas emitidas por este punto de venta. El correlativo es propio de
+     * cada uno, asi que el conteo es lo que permite contrastarlo.
+     */
+    public function facturas(): HasMany
+    {
+        return $this->hasMany(Factura::class);
     }
 
     public function cuis(): HasMany

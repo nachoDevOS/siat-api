@@ -54,25 +54,38 @@ Route::prefix('admin')->name('admin.')->middleware('auth')->group(function () {
         ->name('empresas.certificados.store');
     Route::post('empresas/{empresa}/sucursales', [SucursalController::class, 'store'])
         ->name('empresas.sucursales.store');
-
-    // Puntos de venta cuelgan de una sucursal.
-    Route::post('sucursales/{sucursal}/puntos-venta', [PuntoVentaController::class, 'store'])
-        ->name('sucursales.puntos-venta.store');
+    // Municipio, direccion y telefono van en cada factura: hay que poder
+    // corregirlos. El codigo de la sucursal no se edita (ver el controlador).
+    Route::put('sucursales/{sucursal}', [SucursalController::class, 'update'])
+        ->name('sucursales.update');
 
     // Consulta al SIAT que puntos de venta existen YA del otro lado. Registrar
     // uno es irreversible, asi que conviene mirar antes de crear otro.
     Route::post('sucursales/{sucursal}/puntos-venta/consultar', [PuntoVentaController::class, 'consultar'])
         ->name('sucursales.puntos-venta.consultar');
 
+    // Crea un punto de venta NUEVO en el SIAT. Irreversible: el SIN asigna el
+    // codigo y despues no se puede borrar, solo cerrar.
+    Route::post('sucursales/{sucursal}/puntos-venta/registrar', [PuntoVentaController::class, 'registrarEnSiat'])
+        ->name('sucursales.puntos-venta.registrar');
+
+    // Configura en local un punto de venta que ya existe en el SIAT, con su
+    // codigo real, y le pide CUIS y CUFD de una.
+    Route::post('sucursales/{sucursal}/puntos-venta/configurar', [PuntoVentaController::class, 'configurar'])
+        ->name('sucursales.puntos-venta.configurar');
+
     // Adopta un codigo que ya existe en el SIAT en vez de registrar uno nuevo.
     Route::post('puntos-venta/{puntoVenta}/adoptar-codigo', [PuntoVentaController::class, 'adoptarCodigo'])
         ->name('puntos-venta.adoptar-codigo');
 
-    // Codigos CUIS / CUFD de un punto de venta: solicitud al SIAT o carga manual.
+    // Historial completo de codigos de un punto de venta, en su propia pantalla:
+    // el SIN emite un CUFD por dia, asi que la lista crece sin techo.
+    Route::get('puntos-venta/{puntoVenta}/codigos', [CodigoController::class, 'historial'])
+        ->name('puntos-venta.codigos');
+
+    // Codigos CUIS / CUFD de un punto de venta: siempre se piden al SIAT.
     Route::post('puntos-venta/{puntoVenta}/cuis', [CodigoController::class, 'solicitarCuis'])->name('codigos.cuis');
     Route::post('puntos-venta/{puntoVenta}/cufd', [CodigoController::class, 'solicitarCufd'])->name('codigos.cufd');
-    Route::post('puntos-venta/{puntoVenta}/cuis-manual', [CodigoController::class, 'cuisManual'])->name('codigos.cuis.manual');
-    Route::post('puntos-venta/{puntoVenta}/cufd-manual', [CodigoController::class, 'cufdManual'])->name('codigos.cufd.manual');
 
     // Panel de pruebas piloto (fase 3).
     Route::get('empresas/{empresa}/pruebas', [PruebaPilotoController::class, 'show'])->name('pruebas.show');

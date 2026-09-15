@@ -57,6 +57,41 @@ class RespuestaSiat
     }
 
     /**
+     * Motivo por el que el SIN rechazo una respuesta de catalogo, o null si la
+     * acepto.
+     *
+     * Las sincronizaciones no pueden usar desde() porque el nodo raiz cambia en
+     * cada operacion (RespuestaListaActividades, RespuestaListaParametricas...).
+     * Pero todas traen 'transaccion' y, si es false, el motivo en mensajesList.
+     * Sin mirarlo, un rechazo se veia como un catalogo vacio: "sincronizado: 0".
+     */
+    public static function rechazoDeCatalogo(mixed $respuesta): ?string
+    {
+        // El envoltorio es siempre una sola propiedad: se baja un nivel sin
+        // depender de como se llame.
+        $propiedades = is_object($respuesta) ? get_object_vars($respuesta) : (array) $respuesta;
+        $cuerpo = count($propiedades) === 1 ? reset($propiedades) : $respuesta;
+
+        $transaccion = data_get($cuerpo, 'transaccion') ?? data_get($respuesta, 'transaccion');
+
+        // Sin el campo no se puede afirmar que haya fallado: se deja pasar.
+        if ($transaccion === null || filter_var($transaccion, FILTER_VALIDATE_BOOLEAN)) {
+            return null;
+        }
+
+        $mensajes = self::mensajes($cuerpo);
+
+        if ($mensajes === []) {
+            return 'El SIN rechazo la sincronizacion sin detallar el motivo.';
+        }
+
+        return implode(' | ', array_map(
+            fn (array $m): string => "[{$m['codigo']}] {$m['descripcion']}",
+            $mensajes,
+        ));
+    }
+
+    /**
      * Motivos del rechazo, en una linea, para el log y el mensaje de error.
      */
     public function motivo(): string

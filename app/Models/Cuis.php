@@ -6,6 +6,7 @@ use Database\Factories\CuisFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * CUIS: codigo de identificacion del punto de venta ante el SIN. Dura ~1 anio.
@@ -31,6 +32,15 @@ class Cuis extends Model
     public function puntoVenta(): BelongsTo
     {
         return $this->belongsTo(PuntoVenta::class);
+    }
+
+    /**
+     * CUFD emitidos con este CUIS. El SIN exige el CUIS vigente para dar un
+     * CUFD, asi que cada uno cuelga de exactamente uno.
+     */
+    public function cufds(): HasMany
+    {
+        return $this->hasMany(Cufd::class);
     }
 
     public function estaVigente(): bool

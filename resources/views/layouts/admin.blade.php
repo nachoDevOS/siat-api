@@ -46,7 +46,10 @@
                   display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 5; }
         .topbar h1 { font-size: 19px; margin: 0; }
         .topbar .abrir { display: none; background: none; border: 0; font-size: 22px; cursor: pointer; color: var(--texto); }
-        main { padding: 24px; max-width: 1200px; width: 100%; margin: 0 auto; }
+        /* Sin tope de ancho: el panel aprovecha toda la pantalla. La ficha de
+           cliente y las tablas de facturas son anchas y con el corte en 1200px
+           quedaba media pantalla vacia en monitores grandes. */
+        main { padding: 24px; width: 100%; }
 
         /* ---- Tarjetas y componentes heredados ---- */
         .tarjeta { background: var(--panel); border: 1px solid var(--borde); border-radius: 12px; padding: 18px;
@@ -70,6 +73,25 @@
         .clave { background: #fffbeb; border: 1px solid #fcd34d; color: #92400e; padding: 12px 14px; border-radius: 10px;
                  margin-bottom: 18px; font-family: monospace; word-break: break-all; }
         .error { color: #dc2626; font-size: 13px; }
+        /* Ficha de cliente a dos columnas: a la izquierda quien es (datos que
+           casi no cambian), a la derecha que hay que hacer con el. El lateral
+           queda fijo al hacer scroll porque la columna de acciones es larga. */
+        .ficha { display: grid; grid-template-columns: minmax(320px, 400px) minmax(0, 1fr); gap: 18px; align-items: start; }
+        .ficha > .lateral { position: sticky; top: 18px; }
+        .ficha .tarjeta { margin-top: 0; margin-bottom: 16px; }
+        /* En pantallas angostas las dos columnas se apilan y el lateral deja
+           de ser fijo, si no tapa el contenido. */
+        @media (max-width: 1040px) {
+            .ficha { grid-template-columns: 1fr; }
+            .ficha > .lateral { position: static; }
+        }
+        /* Codigos del SIN (CUIS, CUFD, codigo de control): son cadenas largas
+           que hay que poder leer y copiar tal cual. */
+        .codigos { margin: 10px 0; font-size: 13px; }
+        .codigos .fila { display: flex; gap: 10px; padding: 5px 0; align-items: baseline; }
+        .codigos .etq { color: var(--suave); min-width: 110px; flex-shrink: 0; }
+        .codigos .val { font-family: monospace; word-break: break-all; user-select: all; }
+        .codigos .vacio { color: var(--suave); font-style: italic; }
         .pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; background: #e2e8f0; color: #334155; }
         .ok { color: var(--ok); font-weight: 600; } .no { color: var(--no); font-weight: 600; }
 

@@ -4,127 +4,74 @@ namespace App\Http\Controllers\Admin;
 
 use App\Exceptions\SiatException;
 use App\Http\Controllers\Controller;
-use App\Models\Cufd;
-use App\Models\Cuis;
 use App\Models\PuntoVenta;
-use App\Services\Siat\FabricaServicios;
-use App\Services\Siat\ServicioCodigos;
+use App\Services\Siat\GestorCodigos;
 use Illuminate\Http\RedirectResponse;
-use Illuminate\Http\Request;
+use Illuminate\View\View;
 
 /**
  * Gestion de codigos CUIS / CUFD de un punto de venta desde el panel.
  *
- * Cada codigo se puede obtener de dos formas:
- *   - Solicitandolo al SIAT (uso real; necesita WSDL vigente y token valido).
- *   - Cargandolo a mano (para probar el sistema sin conexion al SIN).
+ * Los codigos SIEMPRE se le piden al SIAT. Habia tambien una carga manual, para
+ * poder probar sin conexion al SIN, y se quito: dejaba pegar cualquier cadena
+ * sin que nada la validara, y un codigo_control equivocado entra al calculo del
+ * CUF y hace rechazar TODAS las facturas del punto de venta. El riesgo no
+ * compensaba la comodidad de probar sin red.
  *
- * En ambos casos el codigo se guarda como historial: nunca se sobreescribe el
- * anterior, solo se agrega el nuevo vigente (ver seccion 6.2).
+ * El codigo se guarda como historial: nunca se sobreescribe el anterior, solo
+ * se agrega el nuevo vigente (ver seccion 6.2).
  */
 class CodigoController extends Controller
 {
     /**
-     * La fabrica se resuelve del contenedor en vez de construir el servicio a
-     * mano: es lo que permite probar estas acciones sin el SIAT al otro lado.
+     * El gestor se resuelve del contenedor en vez de armar el servicio a mano:
+     * es lo que permite probar estas acciones sin el SIAT al otro lado. Ademas
+     * concentra la validacion de la respuesta, que antes estaba duplicada aca.
      */
-    public function __construct(private readonly FabricaServicios $fabrica) {}
+    public function __construct(private readonly GestorCodigos $gestor) {}
+
+    /**
+     * Historial completo de CUIS y CUFD de un punto de venta.
+     *
+     * Vive en su propia pantalla y no dentro de la ficha del cliente porque el
+     * SIN emite un CUFD por dia como minimo: en un ano son mas de 350 filas por
+     * punto de venta, y ahi adentro no se podia ni mirar ni paginar.
+     */
+    public function historial(PuntoVenta $puntoVenta): View
+    {
+        $puntoVenta->load('sucursal.empresa');
+
+        return view('admin.puntos-venta.codigos', [
+            'puntoVenta' => $puntoVenta,
+            'empresa' => $puntoVenta->sucursal->empresa,
+            // Los que el sistema usa hoy: es contra estos que se compara todo
+            // lo demas para decir "en uso" o "reemplazado".
+            'cuisEnUso' => $puntoVenta->cuisVigente(),
+            'cufdEnUso' => $puntoVenta->cufdVigente(),
+            'listaCuis' => $puntoVenta->cuis()->withCount('cufds')->latest('id')->get(),
+            // El CUFD es el que crece: se pagina.
+            'listaCufd' => $puntoVenta->cufds()->with('cuis')->latest('id')->paginate(25),
+        ]);
+    }
 
     // --- Solicitud al SIAT --------------------------------------------------
 
     public function solicitarCuis(PuntoVenta $puntoVenta): RedirectResponse
     {
-        return $this->solicitar($puntoVenta, function (ServicioCodigos $servicio) use ($puntoVenta) {
-            $respuesta = $servicio->solicitarCuis($puntoVenta);
-
-            $codigo = (string) data_get($respuesta, 'RespuestaCuis.codigo');
-
-            // El SIN puede rechazar sin SoapFault: responde 200 y el codigo
-            // viene vacio. Guardarlo igual dejaba un CUIS '' marcado vigente
-            // un ano, y el siguiente pedido de CUFD lo tomaba como valido.
-            if (blank($codigo)) {
-                throw new SiatException('El SIAT no devolvio un codigo CUIS. No se guardo nada.');
-            }
-
-            Cuis::create([
-                'punto_venta_id' => $puntoVenta->id,
-                'codigo' => $codigo,
-                'fecha_vigencia' => now()->addYear(),
-            ]);
-        }, 'CUIS solicitado al SIAT.');
+        return $this->solicitar(
+            $puntoVenta,
+            fn (GestorCodigos $gestor) => $gestor->solicitarCuis($puntoVenta),
+            'CUIS solicitado al SIAT.',
+        );
     }
 
     public function solicitarCufd(PuntoVenta $puntoVenta): RedirectResponse
     {
-        return $this->solicitar($puntoVenta, function (ServicioCodigos $servicio) use ($puntoVenta) {
-            $cuis = $puntoVenta->cuisVigente();
-
-            if ($cuis === null) {
-                throw new SiatException('No hay CUIS vigente: solicite el CUIS antes que el CUFD.');
-            }
-
-            $respuesta = $servicio->solicitarCufd($puntoVenta, $cuis->codigo);
-
-            $codigo = (string) data_get($respuesta, 'RespuestaCufd.codigo');
-            $codigoControl = (string) data_get($respuesta, 'RespuestaCufd.codigoControl');
-
-            // El codigo_control entra al calculo del CUF. Uno vacio no da error
-            // en ningun lado: produce CUF invalidos para TODAS las facturas de
-            // este punto de venta hasta que alguien lo note. Y como cufdVigente()
-            // toma el ultimo por id, el CUFD vacio le gana al bueno anterior.
-            if (blank($codigo) || blank($codigoControl)) {
-                throw new SiatException(
-                    'El SIAT no devolvio codigo y codigo de control del CUFD. No se guardo nada.',
-                );
-            }
-
-            Cufd::create([
-                'punto_venta_id' => $puntoVenta->id,
-                'codigo' => $codigo,
-                'codigo_control' => $codigoControl,
-                'direccion' => (string) data_get($respuesta, 'RespuestaCufd.direccion'),
-                'fecha_vigencia' => now()->addDay(),
-            ]);
-        }, 'CUFD solicitado al SIAT.');
-    }
-
-    // --- Carga manual (para pruebas sin SOAP) -------------------------------
-
-    public function cuisManual(Request $request, PuntoVenta $puntoVenta): RedirectResponse
-    {
-        $datos = $request->validate([
-            'codigo' => ['required', 'string', 'max:100'],
-            'vigencia_dias' => ['nullable', 'integer', 'min:1'],
-        ]);
-
-        Cuis::create([
-            'punto_venta_id' => $puntoVenta->id,
-            'codigo' => $datos['codigo'],
-            'fecha_vigencia' => now()->addDays($datos['vigencia_dias'] ?? 365),
-        ]);
-
-        return $this->volver($puntoVenta, 'CUIS cargado manualmente.');
-    }
-
-    public function cufdManual(Request $request, PuntoVenta $puntoVenta): RedirectResponse
-    {
-        $datos = $request->validate([
-            'codigo' => ['required', 'string', 'max:255'],
-            // El codigo_control es la pieza que entra al calculo del CUF.
-            'codigo_control' => ['required', 'string', 'max:255'],
-            'direccion' => ['nullable', 'string', 'max:255'],
-            'vigencia_horas' => ['nullable', 'integer', 'min:1'],
-        ]);
-
-        Cufd::create([
-            'punto_venta_id' => $puntoVenta->id,
-            'codigo' => $datos['codigo'],
-            'codigo_control' => $datos['codigo_control'],
-            'direccion' => $datos['direccion'] ?? null,
-            'fecha_vigencia' => now()->addHours($datos['vigencia_horas'] ?? 24),
-        ]);
-
-        return $this->volver($puntoVenta, 'CUFD cargado manualmente. Ya se puede emitir.');
+        return $this->solicitar(
+            $puntoVenta,
+            fn (GestorCodigos $gestor) => $gestor->solicitarCufd($puntoVenta),
+            'CUFD solicitado al SIAT. Ya se puede emitir.',
+        );
     }
 
     /**
@@ -133,10 +80,8 @@ class CodigoController extends Controller
      */
     private function solicitar(PuntoVenta $puntoVenta, callable $accion, string $exito): RedirectResponse
     {
-        $empresa = $puntoVenta->sucursal->empresa;
-
         try {
-            $accion($this->fabrica->codigos($empresa));
+            $accion($this->gestor);
         } catch (SiatException $e) {
             return $this->volver($puntoVenta, 'Error del SIAT: '.$e->getMessage());
         }

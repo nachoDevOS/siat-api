@@ -2,9 +2,11 @@
 
 namespace App\Services\Catalogos;
 
+use App\Exceptions\SiatException;
 use App\Models\Catalogo;
-use App\Models\Empresa;
+use App\Models\PuntoVenta;
 use App\Services\Siat\FabricaServicios;
+use App\Services\Siat\RespuestaSiat;
 use Illuminate\Support\Facades\Cache;
 
 /**
@@ -42,26 +44,72 @@ class SincronizadorGlobal
     public function __construct(private readonly FabricaServicios $fabrica) {}
 
     /**
-     * Sincroniza todas las parametricas globales con las credenciales de una
-     * empresa activa. Devuelve cuantos registros se guardaron por tipo.
+     * Sincroniza todas las parametricas globales con las credenciales del
+     * contribuyente dueno de ese punto de venta.
+     *
+     * Recibe el PUNTO DE VENTA y no un CUIS suelto: el SIN valida que el CUIS
+     * corresponda a la sucursal y al punto de venta que viajan en la misma
+     * peticion. Antes se mandaba el CUIS por un lado y "punto de venta 0" por
+     * otro, y el SIN rechazaba todo con "EL PUNTO DE VENTA ES INEXISTENTE O
+     * INVALIDO". Tomando los tres datos del mismo punto de venta, no pueden
+     * volver a desalinearse.
      *
      * @return array<string, int>
+     *
+     * @throws SiatException si el punto de venta no tiene CUIS vigente o si el
+     *                       SIN rechaza la sincronizacion.
      */
-    public function sincronizarTodo(Empresa $empresa, string $cuis): array
+    public function sincronizarTodo(PuntoVenta $puntoVenta): array
     {
-        $servicio = $this->fabrica->sincronizacion($empresa);
+        $cuis = $puntoVenta->cuisVigente();
+
+        if ($cuis === null) {
+            throw new SiatException(
+                "El punto de venta {$puntoVenta->codigo_punto_venta} no tiene CUIS vigente: no se pueden pedir catalogos.",
+            );
+        }
+
+        $servicio = $this->fabrica->sincronizacion($puntoVenta->sucursal->empresa);
         $resumen = [];
 
         foreach (self::PARAMETRICAS as $tipo => $operacion) {
-            $respuesta = $servicio->parametrica($operacion, $cuis);
+            $respuesta = $servicio->parametrica(
+                $operacion,
+                $cuis->codigo,
+                (int) $puntoVenta->sucursal->codigo_sucursal,
+                (int) $puntoVenta->codigo_punto_venta,
+            );
+
+            // Un rechazo del SIN llega con HTTP 200 y lista vacia: sin mirarlo,
+            // se guardaba "0 registros" y parecia que el catalogo estaba al dia.
+            $rechazo = RespuestaSiat::rechazoDeCatalogo($respuesta);
+
+            if ($rechazo !== null) {
+                throw new SiatException("El SIN rechazo '{$operacion}': {$rechazo}");
+            }
+
             $lista = $this->extraerLista($respuesta);
             $resumen[$tipo] = $this->guardar($tipo, $lista);
         }
 
-        // Al terminar se invalida la cache para que la API sirva lo nuevo.
-        Cache::forget('siat.catalogos');
+        $this->olvidarCache();
 
         return $resumen;
+    }
+
+    /**
+     * Invalida lo que la API tenga cacheado de cada tipo de catalogo.
+     *
+     * Antes se borraba la clave 'siat.catalogos', que no la escribe nadie: la
+     * API cachea una clave por tipo ('siat.catalogos.unidades_medida', ...), asi
+     * que el olvido no acertaba ninguna y seguia sirviendo datos viejos por una
+     * hora despues de sincronizar.
+     */
+    private function olvidarCache(): void
+    {
+        foreach (array_keys(self::PARAMETRICAS) as $tipo) {
+            Cache::forget("siat.catalogos.{$tipo}");
+        }
     }
 
     /**

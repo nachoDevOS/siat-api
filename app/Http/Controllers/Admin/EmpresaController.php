@@ -7,6 +7,7 @@ use App\Models\Catalogo;
 use App\Models\Empresa;
 use App\Models\Factura;
 use App\Services\Panel\EstadosVisuales;
+use App\Services\Panel\PuntosVentaSiat;
 use App\Services\Panel\RequisitosEtapa;
 use App\Services\Webhooks\DestinoWebhook;
 use Closure;
@@ -91,9 +92,23 @@ class EmpresaController extends Controller
      * Ficha del cliente: todo lo que necesita para poder facturar, en una sola
      * pantalla, con el checklist de lo que le falta para la siguiente etapa.
      */
-    public function show(Empresa $empresa, RequisitosEtapa $requisitos): View
+    public function show(Empresa $empresa, RequisitosEtapa $requisitos, PuntosVentaSiat $puntosVentaSiat): View
     {
-        $empresa->load('sucursales.puntosVenta', 'certificados');
+        // withCount evita una consulta por tarjeta de punto de venta al pintar
+        // cuantas facturas lleva emitidas cada uno.
+        $empresa->load([
+            // La sucursal va primero: si se cargara despues, pisaria la relacion
+            // anidada que ya se habia resuelto y los puntos de venta quedarian
+            // sin su conteo.
+            'sucursales' => fn ($q) => $q->orderBy('codigo_sucursal'),
+            'sucursales.puntosVenta' => fn ($q) => $q->withCount('facturas')->orderBy('codigo_punto_venta'),
+            // El historial de codigos se pinta por punto de venta: sin esto
+            // serian dos consultas por cada uno al abrir el desplegable.
+            'sucursales.puntosVenta.cuis' => fn ($q) => $q->latest('id'),
+            'sucursales.puntosVenta.cuis.cufds' => fn ($q) => $q->latest('id'),
+            'sucursales.puntosVenta.cufds' => fn ($q) => $q->latest('id'),
+            'certificados',
+        ]);
 
         return view('admin.empresas.show', [
             'empresa' => $empresa,
@@ -106,6 +121,11 @@ class EmpresaController extends Controller
             'tiposPuntoVenta' => Catalogo::where('tipo', 'tipos_punto_venta')
                 ->orderBy('codigo_clasificador')
                 ->get(),
+            // Lo que el SIN tiene registrado en cada sucursal, indexado por su
+            // id. Es lo que manda: un punto de venta que solo existe en nuestra
+            // base no puede emitir. Va cacheado, no golpea al SIAT en cada carga.
+            'puntosVentaSiat' => $empresa->sucursales
+                ->mapWithKeys(fn ($sucursal) => [$sucursal->id => $puntosVentaSiat->deSucursal($sucursal)]),
         ]);
     }
 

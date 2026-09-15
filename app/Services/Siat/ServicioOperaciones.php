@@ -19,12 +19,34 @@ class ServicioOperaciones extends ServicioBase
      */
     public function registrarPuntoVenta(PuntoVenta $puntoVenta, string $cuis): mixed
     {
+        return $this->registrarPuntoVentaPara(
+            (int) $puntoVenta->sucursal->codigo_sucursal,
+            (string) $puntoVenta->nombre,
+            (int) $puntoVenta->tipo_punto_venta,
+            $cuis,
+        );
+    }
+
+    /**
+     * Registra un punto de venta a partir de valores sueltos, sin necesitar un
+     * registro local previo.
+     *
+     * Hace falta porque el CODIGO lo asigna el SIN en la respuesta: crear la
+     * fila local antes obligaba a inventarle un codigo y despues pisarlo. Aca se
+     * llama primero y se crea la fila con el codigo real.
+     */
+    public function registrarPuntoVentaPara(
+        int $codigoSucursal,
+        string $nombre,
+        int $codigoTipoPuntoVenta,
+        string $cuis,
+    ): mixed {
         $solicitud = $this->solicitudBase();
-        $solicitud['codigoSucursal'] = $puntoVenta->sucursal->codigo_sucursal;
+        $solicitud['codigoSucursal'] = $codigoSucursal;
         $solicitud['cuis'] = $cuis;
-        $solicitud['nombrePuntoVenta'] = $puntoVenta->nombre;
-        $solicitud['descripcion'] = $puntoVenta->nombre;
-        $solicitud['codigoTipoPuntoVenta'] = $puntoVenta->tipo_punto_venta;
+        $solicitud['nombrePuntoVenta'] = $nombre;
+        $solicitud['descripcion'] = $nombre;
+        $solicitud['codigoTipoPuntoVenta'] = $codigoTipoPuntoVenta;
 
         return $this->invocar('operaciones', 'registroPuntoVenta', [
             'SolicitudRegistroPuntoVenta' => $solicitud,

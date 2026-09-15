@@ -37,9 +37,29 @@ class ServicioCodigos extends ServicioBase
      */
     public function solicitarCuis(PuntoVenta $puntoVenta): mixed
     {
+        return $this->solicitarCuisPara(
+            (int) $puntoVenta->sucursal->codigo_sucursal,
+            (int) $puntoVenta->codigo_punto_venta,
+        );
+    }
+
+    /**
+     * Solicita un CUIS por codigos, sin necesidad de tener el punto de venta en
+     * nuestra base.
+     *
+     * Hace falta para arrancar: para consultar que puntos de venta tiene el
+     * contribuyente en el SIN se necesita un CUIS, y para tener un CUIS hacia
+     * falta un punto de venta local. Con el punto de venta 0 —el implicito de
+     * toda sucursal— se rompe ese circulo sin inventar registros locales.
+     *
+     * El WSDL declara 'codigoPuntoVenta' como OPCIONAL en SolicitudCuis, asi
+     * que el 0 es un valor legitimo y no un relleno.
+     */
+    public function solicitarCuisPara(int $codigoSucursal, int $codigoPuntoVenta = PuntoVenta::CODIGO_IMPLICITO): mixed
+    {
         $solicitud = $this->solicitudBase();
-        $solicitud['codigoSucursal'] = $puntoVenta->sucursal->codigo_sucursal;
-        $solicitud['codigoPuntoVenta'] = $puntoVenta->codigo_punto_venta;
+        $solicitud['codigoSucursal'] = $codigoSucursal;
+        $solicitud['codigoPuntoVenta'] = $codigoPuntoVenta;
 
         return $this->invocar('codigos', 'cuis', [
             'SolicitudCuis' => $solicitud,

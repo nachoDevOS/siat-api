@@ -15,6 +15,14 @@ namespace App\Services\Siat;
  * O sea: TODA operacion de este servicio —incluida sincronizarFechaHora— exige
  * sucursal y punto de venta. Sin ellos ext-soap ni siquiera envia: corta con
  * "object has no 'codigoSucursal' property".
+ *
+ * Los dos codigos son OBLIGATORIOS y no tienen valor por defecto a proposito.
+ * Antes eran 0, y como quien llamaba no los pasaba, toda sincronizacion viajaba
+ * con "punto de venta 0". Si el contribuyente no tiene un punto de venta 0
+ * —o su CUIS pertenece a otro— el SIN contesta 200 con transaccion=false y
+ * "EL PUNTO DE VENTA ES INEXISTENTE O INVALIDO": los catalogos se sincronizaban
+ * con cero registros y nadie se enteraba. Deben salir del MISMO punto de venta
+ * del que salio el CUIS.
  */
 class ServicioSincronizacion extends ServicioBase
 {
@@ -22,7 +30,7 @@ class ServicioSincronizacion extends ServicioBase
      * Fecha y hora oficial del SIN. Se usa para sellar la factura con la hora
      * del servidor tributario, no la del cliente.
      */
-    public function fechaHora(string $cuis, int $codigoSucursal = 0, int $codigoPuntoVenta = 0): mixed
+    public function fechaHora(string $cuis, int $codigoSucursal, int $codigoPuntoVenta): mixed
     {
         // Comparte la struct solicitudSincronizacion con las parametricas, asi
         // que exige cuis igual que ellas: no es una operacion "libre".
@@ -35,7 +43,7 @@ class ServicioSincronizacion extends ServicioBase
      * La operacion se llama 'sincronizarActividades', no
      * 'sincronizarListaActividades' como decia antes este archivo.
      */
-    public function listaActividades(string $cuis, int $codigoSucursal = 0, int $codigoPuntoVenta = 0): mixed
+    public function listaActividades(string $cuis, int $codigoSucursal, int $codigoPuntoVenta): mixed
     {
         return $this->invocarCatalogo('sincronizarActividades', $cuis, $codigoSucursal, $codigoPuntoVenta);
     }
@@ -43,7 +51,7 @@ class ServicioSincronizacion extends ServicioBase
     /**
      * Productos-servicios homologados segun las actividades del NIT.
      */
-    public function listaProductosServicios(string $cuis, int $codigoSucursal = 0, int $codigoPuntoVenta = 0): mixed
+    public function listaProductosServicios(string $cuis, int $codigoSucursal, int $codigoPuntoVenta): mixed
     {
         return $this->invocarCatalogo('sincronizarListaProductosServicios', $cuis, $codigoSucursal, $codigoPuntoVenta);
     }
@@ -51,7 +59,7 @@ class ServicioSincronizacion extends ServicioBase
     /**
      * Leyendas de factura por actividad economica.
      */
-    public function listaLeyendas(string $cuis, int $codigoSucursal = 0, int $codigoPuntoVenta = 0): mixed
+    public function listaLeyendas(string $cuis, int $codigoSucursal, int $codigoPuntoVenta): mixed
     {
         return $this->invocarCatalogo('sincronizarListaLeyendasFactura', $cuis, $codigoSucursal, $codigoPuntoVenta);
     }
@@ -59,7 +67,7 @@ class ServicioSincronizacion extends ServicioBase
     /**
      * Mensajes de servicio del SIN.
      */
-    public function listaMensajes(string $cuis, int $codigoSucursal = 0, int $codigoPuntoVenta = 0): mixed
+    public function listaMensajes(string $cuis, int $codigoSucursal, int $codigoPuntoVenta): mixed
     {
         return $this->invocarCatalogo('sincronizarListaMensajesServicios', $cuis, $codigoSucursal, $codigoPuntoVenta);
     }
@@ -68,7 +76,7 @@ class ServicioSincronizacion extends ServicioBase
      * Parametrica generica (unidades de medida, tipos de moneda, etc.).
      * El nombre de la operacion varia por parametrica; se recibe como argumento.
      */
-    public function parametrica(string $operacion, string $cuis, int $codigoSucursal = 0, int $codigoPuntoVenta = 0): mixed
+    public function parametrica(string $operacion, string $cuis, int $codigoSucursal, int $codigoPuntoVenta): mixed
     {
         return $this->invocarCatalogo($operacion, $cuis, $codigoSucursal, $codigoPuntoVenta);
     }
@@ -80,8 +88,8 @@ class ServicioSincronizacion extends ServicioBase
     private function invocarCatalogo(
         string $operacion,
         string $cuis,
-        int $codigoSucursal = 0,
-        int $codigoPuntoVenta = 0,
+        int $codigoSucursal,
+        int $codigoPuntoVenta,
     ): mixed {
         $solicitud = $this->solicitudBase();
         $solicitud['codigoSucursal'] = $codigoSucursal;
