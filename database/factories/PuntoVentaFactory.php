@@ -23,6 +23,18 @@ class PuntoVentaFactory extends Factory
             'tipo_punto_venta' => 1,
             'siguiente_factura' => 1,
             'activo' => true,
+            // Por defecto ya registrado en el SIAT: es la unica condicion en la
+            // que se puede emitir, asi que es el caso normal de los tests.
+            'registrado_en_siat' => now(),
         ];
+    }
+
+    /**
+     * Punto de venta creado en local pero todavia no dado de alta en el SIN.
+     * Es como queda tras POST /api/v1/puntos-venta.
+     */
+    public function sinRegistrarEnSiat(): static
+    {
+        return $this->state(fn (): array => ['registrado_en_siat' => null]);
     }
 }

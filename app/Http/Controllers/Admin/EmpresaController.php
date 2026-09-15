@@ -186,7 +186,11 @@ class EmpresaController extends Controller
             'codigo_sistema' => ['nullable', 'string', 'max:255'],
             'token_delegado' => ['nullable', 'string'],
             'codigo_ambiente' => ['required', 'integer', 'in:1,2'],
-            'codigo_modalidad' => ['required', 'integer', 'in:1,2'],
+            // Solo electronica en linea (1). La computarizada usa otro nodo
+            // raiz en el XML y no exige firma: aceptarla aca produciria un
+            // documento hibrido que el SIN rechaza sin decir por que. Ademas
+            // la autorizacion R-1359 del proveedor es de modalidad 1.
+            'codigo_modalidad' => ['required', 'integer', 'in:1'],
             'estado' => ['required', Rule::in(self::ESTADOS)],
             // Se valida el destino aca y no solo al notificar: asi el operador
             // ve el error al guardar en vez de descubrirlo por webhooks mudos.

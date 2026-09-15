@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Admin;
 
 use App\Exceptions\SiatException;
 use App\Http\Controllers\Controller;
-use App\Models\Cafc;
 use App\Models\Cufd;
 use App\Models\Cuis;
 use App\Models\PuntoVenta;
@@ -14,7 +13,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 
 /**
- * Gestion de codigos CUIS / CUFD / CAFC de un punto de venta desde el panel.
+ * Gestion de codigos CUIS / CUFD de un punto de venta desde el panel.
  *
  * Cada codigo se puede obtener de dos formas:
  *   - Solicitandolo al SIAT (uso real; necesita WSDL vigente y token valido).
@@ -38,9 +37,18 @@ class CodigoController extends Controller
         return $this->solicitar($puntoVenta, function (ServicioCodigos $servicio) use ($puntoVenta) {
             $respuesta = $servicio->solicitarCuis($puntoVenta);
 
+            $codigo = (string) data_get($respuesta, 'RespuestaCuis.codigo');
+
+            // El SIN puede rechazar sin SoapFault: responde 200 y el codigo
+            // viene vacio. Guardarlo igual dejaba un CUIS '' marcado vigente
+            // un ano, y el siguiente pedido de CUFD lo tomaba como valido.
+            if (blank($codigo)) {
+                throw new SiatException('El SIAT no devolvio un codigo CUIS. No se guardo nada.');
+            }
+
             Cuis::create([
                 'punto_venta_id' => $puntoVenta->id,
-                'codigo' => (string) data_get($respuesta, 'RespuestaCuis.codigo'),
+                'codigo' => $codigo,
                 'fecha_vigencia' => now()->addYear(),
             ]);
         }, 'CUIS solicitado al SIAT.');
@@ -57,34 +65,27 @@ class CodigoController extends Controller
 
             $respuesta = $servicio->solicitarCufd($puntoVenta, $cuis->codigo);
 
+            $codigo = (string) data_get($respuesta, 'RespuestaCufd.codigo');
+            $codigoControl = (string) data_get($respuesta, 'RespuestaCufd.codigoControl');
+
+            // El codigo_control entra al calculo del CUF. Uno vacio no da error
+            // en ningun lado: produce CUF invalidos para TODAS las facturas de
+            // este punto de venta hasta que alguien lo note. Y como cufdVigente()
+            // toma el ultimo por id, el CUFD vacio le gana al bueno anterior.
+            if (blank($codigo) || blank($codigoControl)) {
+                throw new SiatException(
+                    'El SIAT no devolvio codigo y codigo de control del CUFD. No se guardo nada.',
+                );
+            }
+
             Cufd::create([
                 'punto_venta_id' => $puntoVenta->id,
-                'codigo' => (string) data_get($respuesta, 'RespuestaCufd.codigo'),
-                'codigo_control' => (string) data_get($respuesta, 'RespuestaCufd.codigoControl'),
+                'codigo' => $codigo,
+                'codigo_control' => $codigoControl,
                 'direccion' => (string) data_get($respuesta, 'RespuestaCufd.direccion'),
                 'fecha_vigencia' => now()->addDay(),
             ]);
         }, 'CUFD solicitado al SIAT.');
-    }
-
-    public function solicitarCafc(PuntoVenta $puntoVenta): RedirectResponse
-    {
-        return $this->solicitar($puntoVenta, function (ServicioCodigos $servicio) use ($puntoVenta) {
-            $cuis = $puntoVenta->cuisVigente();
-
-            if ($cuis === null) {
-                throw new SiatException('No hay CUIS vigente: solicite el CUIS antes que el CAFC.');
-            }
-
-            $respuesta = $servicio->solicitarCafc($puntoVenta, $cuis->codigo);
-
-            Cafc::create([
-                'punto_venta_id' => $puntoVenta->id,
-                'codigo' => (string) data_get($respuesta, 'RespuestaCafc.codigo'),
-                'cantidad_facturas' => (int) data_get($respuesta, 'RespuestaCafc.cantidadFacturas', 0),
-                'fecha_vigencia' => now()->addMonths(2),
-            ]);
-        }, 'CAFC solicitado al SIAT.');
     }
 
     // --- Carga manual (para pruebas sin SOAP) -------------------------------
@@ -124,24 +125,6 @@ class CodigoController extends Controller
         ]);
 
         return $this->volver($puntoVenta, 'CUFD cargado manualmente. Ya se puede emitir.');
-    }
-
-    public function cafcManual(Request $request, PuntoVenta $puntoVenta): RedirectResponse
-    {
-        $datos = $request->validate([
-            'codigo' => ['required', 'string', 'max:255'],
-            'cantidad_facturas' => ['required', 'integer', 'min:1'],
-            'vigencia_dias' => ['nullable', 'integer', 'min:1'],
-        ]);
-
-        Cafc::create([
-            'punto_venta_id' => $puntoVenta->id,
-            'codigo' => $datos['codigo'],
-            'cantidad_facturas' => $datos['cantidad_facturas'],
-            'fecha_vigencia' => now()->addDays($datos['vigencia_dias'] ?? 30),
-        ]);
-
-        return $this->volver($puntoVenta, 'CAFC cargado manualmente.');
     }
 
     /**

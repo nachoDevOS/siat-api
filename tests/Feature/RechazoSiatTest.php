@@ -199,13 +199,43 @@ test('un paquete rechazado no se marca enviado ni libera sus facturas', function
         ],
     ]);
 
+    // PRIMER intento: es donde antes se veia el defecto. El throw del rechazo
+    // caia en el catch de la caida y el mismo lote se reenviaba tres veces.
     $job = (new EnviarPaqueteContingencia($paquete->id))->withFakeQueueInteractions();
-    $job->job->attempts = $job->tries;
+    $job->job->attempts = 1;
 
-    expect(fn () => $job->handle(app(ArmadorPaquete::class), app(FabricaServicios::class)))
-        ->toThrow(SiatException::class, 'EVENTO NO REGISTRADO');
+    $job->handle(app(ArmadorPaquete::class), app(FabricaServicios::class));
+
+    // Un rechazo no se reintenta: el contenido del paquete no se arregla solo.
+    $job->assertNotReleased();
+    $job->assertFailed();
 
     // Las facturas siguen siendo validas; solo falta volver a transmitirlas.
     expect($paquete->fresh()->estado)->toBe('PENDIENTE')
         ->and($factura->fresh()->estado)->toBe(Factura::ESTADO_CONTINGENCIA);
+});
+
+test('un paquete que el SIAT no contesta si se reintenta', function () {
+    // El contraste del test anterior: una caida del SIAT no es un rechazo del
+    // documento, y esa si merece los reintentos con backoff.
+    $factura = facturaTransmitible(Factura::ESTADO_CONTINGENCIA);
+
+    $paquete = Paquete::create([
+        'empresa_id' => $factura->empresa_id,
+        'punto_venta_id' => $factura->punto_venta_id,
+        'cantidad_facturas' => 1,
+        'estado' => 'PENDIENTE',
+    ]);
+    $factura->update(['paquete_id' => $paquete->id]);
+
+    $servicio = Mockery::mock(ServicioFacturacion::class);
+    $servicio->shouldReceive('recepcionarPaquete')->andThrow(new SiatException('sin respuesta'));
+    fabricaQueDevuelve($servicio);
+
+    $job = (new EnviarPaqueteContingencia($paquete->id))->withFakeQueueInteractions();
+    $job->job->attempts = 1;
+
+    $job->handle(app(ArmadorPaquete::class), app(FabricaServicios::class));
+
+    $job->assertReleased();
 });

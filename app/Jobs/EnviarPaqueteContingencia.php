@@ -36,6 +36,8 @@ class EnviarPaqueteContingencia implements ShouldQueue
 
         $xml = $armador->armar($paquete);
 
+        // El try cubre SOLO la llamada: lo que se reintenta es un SIAT que no
+        // responde, nada mas.
         try {
             // Codigos del SIN, no ids internos de nuestras tablas.
             $respuesta = RespuestaSiat::desde(
@@ -44,33 +46,9 @@ class EnviarPaqueteContingencia implements ShouldQueue
                     'codigoPuntoVenta' => $paquete->puntoVenta->codigo_punto_venta,
                 ], $xml),
             );
-
-            // Rechazo del SIN sin SoapFault: el paquete queda PENDIENTE y sus
-            // facturas en contingencia (siguen siendo validas). Se propaga para
-            // que la falla y su motivo queden en failed_jobs: reintentar el
-            // mismo paquete no lo va a arreglar, hay que corregirlo antes.
-            if (! $respuesta->aceptada) {
-                Log::warning('El SIN rechazo el paquete de contingencia.', [
-                    'paquete_id' => $paquete->id,
-                    'motivo' => $respuesta->motivo(),
-                ]);
-
-                throw new SiatException("El SIN rechazo el paquete: {$respuesta->motivo()}");
-            }
-
-            $paquete->update([
-                'estado' => 'ENVIADO',
-                'enviado_en' => now(),
-                'codigo_recepcion' => $respuesta->codigoRecepcion,
-            ]);
-
-            // Solo las facturas de ESTE paquete pasan de contingencia a enviadas.
-            Factura::where('paquete_id', $paquete->id)
-                ->where('estado', Factura::ESTADO_CONTINGENCIA)
-                ->update(['estado' => Factura::ESTADO_ENVIADA, 'enviada_en' => now()]);
         } catch (SiatException $e) {
-            // Mismo criterio que EnviarFacturaAlSiat: se respeta el backoff
-            // declarado del job en vez de un release fijo, que lo contradecia.
+            // El SIAT no respondio. Se respeta el backoff declarado del job en
+            // vez de un release fijo, que lo contradecia.
             if ($this->attempts() < $this->tries) {
                 $this->release($this->backoff[$this->attempts() - 1] ?? 900);
 
@@ -82,5 +60,36 @@ class EnviarPaqueteContingencia implements ShouldQueue
             // propaga para que quede en failed_jobs y se pueda reenviar.
             throw $e;
         }
+
+        // Rechazo del SIN sin SoapFault. Va FUERA del try a proposito: adentro,
+        // el throw caia en el catch de arriba y el mismo lote rechazado se
+        // reenviaba tres veces, justo lo contrario de lo que decia el comentario.
+        //
+        // Un rechazo es del contenido del paquete (hash, firma, XML fuera de
+        // orden): reintentarlo no lo arregla. fail() lo manda directo a
+        // failed_jobs con su motivo, sin reintentos.
+        if (! $respuesta->aceptada) {
+            Log::warning('El SIN rechazo el paquete de contingencia.', [
+                'paquete_id' => $paquete->id,
+                'motivo' => $respuesta->motivo(),
+            ]);
+
+            // El paquete queda PENDIENTE y sus facturas en contingencia: siguen
+            // siendo validas, solo falta corregir el paquete y reenviarlo.
+            $this->fail(new SiatException("El SIN rechazo el paquete: {$respuesta->motivo()}"));
+
+            return;
+        }
+
+        $paquete->update([
+            'estado' => 'ENVIADO',
+            'enviado_en' => now(),
+            'codigo_recepcion' => $respuesta->codigoRecepcion,
+        ]);
+
+        // Solo las facturas de ESTE paquete pasan de contingencia a enviadas.
+        Factura::where('paquete_id', $paquete->id)
+            ->where('estado', Factura::ESTADO_CONTINGENCIA)
+            ->update(['estado' => Factura::ESTADO_ENVIADA, 'enviada_en' => now()]);
     }
 }

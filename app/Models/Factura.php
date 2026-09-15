@@ -74,11 +74,6 @@ class Factura extends Model
         return $this->belongsTo(Cufd::class);
     }
 
-    public function cafc(): BelongsTo
-    {
-        return $this->belongsTo(Cafc::class);
-    }
-
     public function items(): HasMany
     {
         return $this->hasMany(FacturaItem::class);

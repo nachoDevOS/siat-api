@@ -99,7 +99,7 @@
             <tr><th>NIT</th><td>{{ $empresa->nit }}</td></tr>
             <tr><th>Codigo de sistema</th><td>{{ $empresa->codigo_sistema ?: '—' }}</td></tr>
             <tr><th>Ambiente</th><td>{{ $empresa->codigo_ambiente === 1 ? 'Produccion' : 'Piloto' }}</td></tr>
-            <tr><th>Modalidad</th><td>{{ $empresa->codigo_modalidad === 1 ? 'Electronica' : 'Computarizada' }}</td></tr>
+            <tr><th>Modalidad</th><td>Electronica en linea</td></tr>
             <tr>
                 <th>Token delegado</th>
                 <td>
@@ -153,13 +153,11 @@
                     @php
                         $cuis = $pv->cuisVigente();
                         $cufd = $pv->cufdVigente();
-                        $cafc = $pv->cafcs()->where('fecha_vigencia', '>', now())->latest('fecha_vigencia')->first();
 
                         // El CUFD dura 24 h: se avisa con 2 h de anticipacion,
                         // igual que el cron que los renueva.
                         $semCuis = RequisitosEtapa::vigencia($cuis?->fecha_vigencia, 24 * 15);
                         $semCufd = RequisitosEtapa::vigencia($cufd?->fecha_vigencia, 2);
-                        $semCafc = RequisitosEtapa::vigencia($cafc?->fecha_vigencia, 24 * 7);
                     @endphp
 
                     <div style="background:#f8fafc; border:1px solid var(--borde); border-radius:10px; padding:12px; margin:10px 0;">
@@ -182,15 +180,14 @@
                             </span>
                         </div>
 
-                        {{-- Semaforos de los tres codigos. Sin CUFD vigente no se emite. --}}
+                        {{-- Semaforos de los dos codigos. Sin CUFD vigente no se emite. --}}
                         <div style="display:flex; gap:18px; flex-wrap:wrap; margin:10px 0;">
                             <x-semaforo titulo="CUIS" :color="$semCuis['color']" :texto="$semCuis['texto']" />
                             <x-semaforo titulo="CUFD" :color="$semCufd['color']" :texto="$semCufd['texto']" />
-                            <x-semaforo titulo="CAFC" :color="$semCafc['color']" :texto="$semCafc['texto']" />
                         </div>
 
-                        {{-- Solicitud al SIAT. El CUFD y el CAFC exigen CUIS: el
-                             boton queda deshabilitado hasta tenerlo. --}}
+                        {{-- Solicitud al SIAT. El CUFD exige CUIS: el boton queda
+                             deshabilitado hasta tenerlo. --}}
                         <div style="display:flex; gap:6px; flex-wrap:wrap;">
                             <form method="POST" action="{{ route('admin.codigos.cuis', $pv) }}">@csrf
                                 <button class="btn gris" type="submit">Solicitar CUIS</button>
@@ -199,12 +196,6 @@
                                 <button class="btn gris" type="submit" @disabled($cuis === null)
                                         title="{{ $cuis === null ? 'Primero hace falta un CUIS vigente' : '' }}">
                                     Solicitar CUFD
-                                </button>
-                            </form>
-                            <form method="POST" action="{{ route('admin.codigos.cafc', $pv) }}">@csrf
-                                <button class="btn gris" type="submit" @disabled($cuis === null)
-                                        title="{{ $cuis === null ? 'Primero hace falta un CUIS vigente' : '' }}">
-                                    Solicitar CAFC
                                 </button>
                             </form>
                         </div>
@@ -222,12 +213,6 @@
                                 <div class="campo" style="margin:0;"><label>CUFD codigo</label><input name="codigo" required></div>
                                 <div class="campo" style="margin:0;"><label>codigo_control</label><input name="codigo_control" required></div>
                                 <button class="btn" type="submit">+ CUFD</button>
-                            </form>
-                            <form method="POST" action="{{ route('admin.codigos.cafc.manual', $pv) }}" style="display:flex; gap:6px; align-items:end; margin-top:8px;">
-                                @csrf
-                                <div class="campo" style="margin:0;"><label>CAFC codigo</label><input name="codigo" required></div>
-                                <div class="campo" style="margin:0;"><label>cant. facturas</label><input name="cantidad_facturas" type="number" value="1000" required></div>
-                                <button class="btn" type="submit">+ CAFC</button>
                             </form>
                         </details>
                     </div>

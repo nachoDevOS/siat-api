@@ -8,12 +8,13 @@ use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
 
 #[Signature('siat:revisar-codigos')]
-#[Description('Revisa vigencia de CUIS y disponibilidad de CAFC por punto de venta (diario)')]
+#[Description('Revisa la vigencia del CUIS de cada punto de venta (diario)')]
 class SiatRevisarCodigos extends Command
 {
     /**
      * Chequeo diario (seccion 8.6): alerta si un punto de venta esta por quedar
-     * sin CUIS vigente o sin CAFC de reserva para contingencia.
+     * sin CUIS vigente. Sin CUIS no se puede pedir el CUFD, y sin CUFD no se
+     * emite: es el codigo que hay que vigilar con anticipacion.
      */
     public function handle(): int
     {
@@ -25,16 +26,6 @@ class SiatRevisarCodigos extends Command
 
                 if ($punto->cuisVigente() === null) {
                     $this->warn("Sin CUIS vigente: {$etiqueta}");
-                    $alertas++;
-                }
-
-                // CAFC de reserva disponible (vigente y con folios).
-                $cafc = $punto->cafcs()->where('fecha_vigencia', '>', now())
-                    ->whereColumn('facturas_usadas', '<', 'cantidad_facturas')
-                    ->exists();
-
-                if (! $cafc) {
-                    $this->warn("Sin CAFC de reserva: {$etiqueta}");
                     $alertas++;
                 }
             }

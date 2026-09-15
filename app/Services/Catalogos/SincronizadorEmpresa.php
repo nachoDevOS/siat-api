@@ -7,6 +7,8 @@ use App\Models\Empresa;
 use App\Models\LeyendaFactura;
 use App\Models\ProductoServicio;
 use App\Services\Siat\FabricaServicios;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Sincroniza los catalogos POR EMPRESA: actividades economicas, productos
@@ -86,20 +88,38 @@ class SincronizadorEmpresa
         $respuesta = $this->fabrica->sincronizacion($empresa)->listaLeyendas($cuis);
         $lista = $this->extraerLista($respuesta, ['listaLeyendas']);
 
-        // Las leyendas se reemplazan enteras: son pocas y no tienen clave estable.
-        LeyendaFactura::where('empresa_id', $empresa->id)->delete();
-        $total = 0;
-
-        foreach ($lista as $item) {
-            LeyendaFactura::create([
+        // Una lista vacia no se toma como "el SIN ya no tiene leyendas": se toma
+        // como que la respuesta no se pudo leer. extraerLista() devuelve [] sin
+        // quejarse cuando el nodo cambia de nombre —ya paso con los tres
+        // catalogos— y borrar contra eso dejaba a la empresa sin leyendas. La
+        // leyenda es obligatoria en la cabecera: sin ella, el SIN rechaza TODA
+        // factura siguiente. Se conserva lo que habia y se avisa.
+        if ($lista === []) {
+            Log::warning('El SIN no devolvio leyendas: se conservan las que ya estaban.', [
                 'empresa_id' => $empresa->id,
-                'codigo_actividad' => (string) data_get($item, 'codigoActividad'),
-                'descripcion_leyenda' => (string) data_get($item, 'descripcionLeyenda'),
             ]);
-            $total++;
+
+            return 0;
         }
 
-        return $total;
+        // El reemplazo va en una transaccion: las leyendas no tienen clave
+        // estable, asi que hay que borrarlas para insertarlas, y sin
+        // transaccion una falla a mitad de camino dejaba el catalogo cortado.
+        return DB::transaction(function () use ($empresa, $lista): int {
+            LeyendaFactura::where('empresa_id', $empresa->id)->delete();
+            $total = 0;
+
+            foreach ($lista as $item) {
+                LeyendaFactura::create([
+                    'empresa_id' => $empresa->id,
+                    'codigo_actividad' => (string) data_get($item, 'codigoActividad'),
+                    'descripcion_leyenda' => (string) data_get($item, 'descripcionLeyenda'),
+                ]);
+                $total++;
+            }
+
+            return $total;
+        });
     }
 
     /**

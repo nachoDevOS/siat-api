@@ -59,11 +59,6 @@ class PuntoVenta extends Model
         return $this->hasMany(Cufd::class);
     }
 
-    public function cafcs(): HasMany
-    {
-        return $this->hasMany(Cafc::class);
-    }
-
     /**
      * CUFD vigente: el ULTIMO EMITIDO que todavia no vencio.
      *

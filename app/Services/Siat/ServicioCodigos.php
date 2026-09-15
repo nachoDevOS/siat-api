@@ -11,7 +11,9 @@ use App\Models\PuntoVenta;
  * expone son: verificarComunicacion, verificarNit, cuis, cuisMasivo, cufd,
  * cufdMasivo y notificaCertificadoRevocado.
  *
- * OJO: **no hay operacion 'cafc' en este servicio.** Ver solicitarCafc() abajo.
+ * OJO: el WSDL no expone 'cafc'. No es un olvido del SIN: el CAFC pertenece a
+ * la modalidad computarizada, que este sistema no factura. Se quito el metodo
+ * que lo pedia (solo podia fallar con "Function not found").
  *
  * Para volver a listar el contrato:
  *
@@ -56,28 +58,6 @@ class ServicioCodigos extends ServicioBase
 
         return $this->invocar('codigos', 'cufd', [
             'SolicitudCufd' => $solicitud,
-        ]);
-    }
-
-    /**
-     * Solicita un CAFC (reserva para contingencia). Necesita el CUIS vigente.
-     *
-     * ATENCION: el WSDL del piloto NO expone una operacion 'cafc' en este
-     * servicio (2026-08-10). Esta llamada falla con "Function not found".
-     * Queda tal cual hasta ubicar donde vive el CAFC en el contrato real —
-     * probablemente en FacturacionOperaciones, o no aplica a la modalidad
-     * electronica en linea. El CAFC solo hace falta para contingencia, asi que
-     * no bloquea la emision normal.
-     */
-    public function solicitarCafc(PuntoVenta $puntoVenta, string $cuis): mixed
-    {
-        $solicitud = $this->solicitudBase();
-        $solicitud['codigoSucursal'] = $puntoVenta->sucursal->codigo_sucursal;
-        $solicitud['codigoPuntoVenta'] = $puntoVenta->codigo_punto_venta;
-        $solicitud['cuis'] = $cuis;
-
-        return $this->invocar('codigos', 'cafc', [
-            'SolicitudCafc' => $solicitud,
         ]);
     }
 

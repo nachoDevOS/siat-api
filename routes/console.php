@@ -53,7 +53,7 @@ Schedule::command('siat:recuperar-contingencia')
 // Cada hora: renueva los CUFD proximos a vencer (capa preventiva).
 Schedule::command('siat:renovar-cufds')->hourly();
 
-// Diario 02:00: revisa vigencia de CUIS y disponibilidad de CAFC.
+// Diario 02:00: revisa la vigencia del CUIS de cada punto de venta.
 Schedule::command('siat:revisar-codigos')->dailyAt('02:00');
 
 // Diario 07:00: alerta certificados que vencen en menos de 30 dias.

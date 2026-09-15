@@ -55,6 +55,20 @@ class CertificadoFactory extends Factory
     }
 
     /**
+     * Bytes del .p12 de prueba y su passphrase, para los tests que necesitan
+     * subir un certificado real por el panel en vez de sembrarlo en la base.
+     */
+    public static function bytesP12Prueba(): string
+    {
+        return self::p12DePrueba();
+    }
+
+    public static function passphraseP12Prueba(): string
+    {
+        return self::PASSPHRASE_PRUEBA;
+    }
+
+    /**
      * Genera (una vez) un .p12 autofirmado valido.
      */
     private static function p12DePrueba(): string

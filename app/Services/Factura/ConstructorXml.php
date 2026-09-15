@@ -99,7 +99,10 @@ class ConstructorXml
             'montoGiftCard' => $this->monto($factura->gift_card),
             'descuentoAdicional' => $this->monto($factura->descuento_global),
             'codigoExcepcion' => null,
-            'cafc' => optional($factura->cafc)->codigo,
+            // Siempre nil: el CAFC es de la modalidad computarizada y este
+            // sistema solo emite electronica en linea. El elemento igual va,
+            // porque el XSD lo declara en la secuencia de la cabecera.
+            'cafc' => null,
             'leyenda' => $factura->leyenda,
             'usuario' => $factura->usuario,
             'codigoDocumentoSector' => $factura->codigo_documento_sector,

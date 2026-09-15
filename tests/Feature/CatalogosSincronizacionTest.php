@@ -128,3 +128,59 @@ test('resincronizar no duplica actividades ni leyendas', function () {
     expect(ActividadEconomica::where('empresa_id', $empresa->id)->count())->toBe(1);
     expect(LeyendaFactura::where('empresa_id', $empresa->id)->count())->toBe(1);
 });
+
+/*
+|--------------------------------------------------------------------------
+| Las leyendas no se pueden perder por una respuesta ilegible
+|--------------------------------------------------------------------------
+|
+| Se reemplazan enteras (borrar + insertar) porque no tienen clave estable.
+| Pero extraerLista() devuelve [] sin quejarse cuando el nodo de la respuesta
+| cambia de nombre —ya paso con los tres catalogos por empresa— y contra ese []
+| el borrado dejaba a la empresa SIN leyendas. La leyenda es obligatoria en la
+| cabecera: sin ella el SIN rechaza toda factura siguiente.
+|
+*/
+
+test('una respuesta sin leyendas conserva las que ya estaban', function () {
+    $empresa = Empresa::factory()->create();
+
+    LeyendaFactura::create([
+        'empresa_id' => $empresa->id,
+        'codigo_actividad' => '620000',
+        'descripcion_leyenda' => 'Ley N 453 - la que ya funcionaba',
+    ]);
+
+    $servicio = Mockery::mock(ServicioSincronizacion::class);
+    $servicio->shouldReceive('listaLeyendas')->andReturn(respuestaConLista('listaLeyendas', []));
+    fabricaDeSincronizacion($servicio);
+
+    $total = app(SincronizadorEmpresa::class)->sincronizarLeyendas($empresa, 'CUIS-1');
+
+    expect($total)->toBe(0)
+        ->and(LeyendaFactura::where('empresa_id', $empresa->id)->count())->toBe(1);
+});
+
+test('una respuesta con leyendas si reemplaza las anteriores', function () {
+    // El contraste: cuando el SIN si contesta, el reemplazo tiene que ocurrir.
+    $empresa = Empresa::factory()->create();
+
+    LeyendaFactura::create([
+        'empresa_id' => $empresa->id,
+        'codigo_actividad' => '620000',
+        'descripcion_leyenda' => 'La vieja',
+    ]);
+
+    $servicio = Mockery::mock(ServicioSincronizacion::class);
+    $servicio->shouldReceive('listaLeyendas')->andReturn(respuestaConLista('listaLeyendas', [
+        ['codigoActividad' => '620000', 'descripcionLeyenda' => 'La nueva'],
+    ]));
+    fabricaDeSincronizacion($servicio);
+
+    app(SincronizadorEmpresa::class)->sincronizarLeyendas($empresa, 'CUIS-1');
+
+    $leyendas = LeyendaFactura::where('empresa_id', $empresa->id)->get();
+
+    expect($leyendas)->toHaveCount(1)
+        ->and($leyendas->first()->descripcion_leyenda)->toBe('La nueva');
+});

@@ -24,11 +24,20 @@ class GestorContingencia
     {
         $evento = $this->eventoAbierto($factura->puntoVenta);
 
-        // La factura queda valida pero pendiente de transmision.
-        $factura->update([
-            'estado' => Factura::ESTADO_CONTINGENCIA,
-            'tipo_emision' => Factura::EMISION_CONTINGENCIA,
-        ]);
+        // Solo cambia el ESTADO. El tipo de emision se queda como esta, aunque
+        // la factura termine viajando en un paquete de contingencia.
+        //
+        // El motivo: tipo_emision es uno de los nueve campos que entran al CUF,
+        // y el CUF ya se calculo, ya se le devolvio al cliente y probablemente
+        // ya se imprimio. Cambiarlo aca dejaba una factura que declaraba
+        // 'codigoEmision = 2' con un CUF que codifica 1: el SIN revalida el CUF
+        // contra los campos y rechazaba el paquete entero.
+        //
+        // Y es fiel a lo que paso: esta factura SI se emitio en linea; lo que
+        // fallo fue transmitirla. Las que se emitan de aca en adelante, con el
+        // evento ya abierto, nacen con tipo_emision = 2 y un CUF que lo refleja
+        // (ver EmisorFactura).
+        $factura->update(['estado' => Factura::ESTADO_CONTINGENCIA]);
 
         return $evento;
     }
@@ -67,6 +76,20 @@ class GestorContingencia
 
             return $paquete;
         });
+    }
+
+    /**
+     * Si el punto de venta esta operando bajo un evento de contingencia abierto.
+     *
+     * La emision lo pregunta ANTES de calcular el CUF: mientras el evento este
+     * abierto, cada factura nueva nace fuera de linea y su CUF tiene que
+     * codificarlo. Preguntarlo despues no sirve, porque el CUF ya estaria hecho.
+     */
+    public function hayContingenciaAbierta(PuntoVenta $puntoVenta): bool
+    {
+        return EventoSignificativo::where('punto_venta_id', $puntoVenta->id)
+            ->where('estado', 'ABIERTO')
+            ->exists();
     }
 
     /**

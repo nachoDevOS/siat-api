@@ -82,7 +82,12 @@ test('agotados los reintentos la factura pasa a contingencia', function () {
     $job->handle(app(GeneradorPdf::class), app(GestorContingencia::class), app(FabricaServicios::class));
 
     expect($factura->fresh()->estado)->toBe(Factura::ESTADO_CONTINGENCIA);
-    expect($factura->fresh()->tipo_emision)->toBe(Factura::EMISION_CONTINGENCIA);
+
+    // El tipo de emision NO cambia: esta factura si se emitio en linea, lo que
+    // fallo fue transmitirla, y su CUF ya codifica el 1. Reescribirlo dejaba un
+    // CUF que contradice a la factura. Las que se emitan con el evento ya
+    // abierto nacen con 2 (ver EmisionContingenciaTest).
+    expect($factura->fresh()->tipo_emision)->toBe(Factura::EMISION_EN_LINEA);
     expect(EventoSignificativo::where('estado', 'ABIERTO')->count())->toBe(1);
 });
 

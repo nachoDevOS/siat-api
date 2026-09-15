@@ -49,12 +49,12 @@
         <option value="1" @selected(old('codigo_ambiente', $e?->codigo_ambiente) == 1)>Produccion</option>
     </select>
 </div>
+{{-- La modalidad no se elige: el sistema solo emite electronica en linea.
+     Va como hidden para que el formulario siga mandando el campo. --}}
 <div class="campo">
     <label>Modalidad</label>
-    <select name="codigo_modalidad">
-        <option value="1" @selected(old('codigo_modalidad', $e?->codigo_modalidad) == 1)>Electronica</option>
-        <option value="2" @selected(old('codigo_modalidad', $e?->codigo_modalidad) == 2)>Computarizada</option>
-    </select>
+    <input type="hidden" name="codigo_modalidad" value="1">
+    <input type="text" value="Electronica en linea" disabled>
 </div>
 <div class="campo">
     <label>Estado</label>

@@ -86,14 +86,35 @@ test('un monto en cero viaja con su valor y no como nulo', function () {
 test('la cabecera mantiene el orden exacto de campos del esquema', function () {
     $xml = app(ConstructorXml::class)->construir(facturaCompleta());
 
+    // La secuencia COMPLETA del XSD, no solo el principio: el SIN rechaza el
+    // documento si falta un elemento o si alguno esta fuera de lugar, y la
+    // cola de la cabecera es justo donde viven los que casi siempre van nulos.
     $orden = ['nitEmisor', 'razonSocialEmisor', 'municipio', 'telefono', 'numeroFactura',
-        'cuf', 'cufd', 'codigoSucursal', 'direccion', 'codigoPuntoVenta', 'fechaEmision'];
+        'cuf', 'cufd', 'codigoSucursal', 'direccion', 'codigoPuntoVenta', 'fechaEmision',
+        'nombreRazonSocial', 'codigoTipoDocumentoIdentidad', 'numeroDocumento', 'complemento',
+        'codigoCliente', 'codigoMetodoPago', 'numeroTarjeta', 'montoTotal', 'montoTotalSujetoIva',
+        'codigoMoneda', 'tipoCambio', 'montoTotalMoneda', 'montoGiftCard', 'descuentoAdicional',
+        'codigoExcepcion', 'cafc', 'leyenda', 'usuario', 'codigoDocumentoSector'];
 
     $posiciones = array_map(fn (string $campo): int => strpos($xml, "<{$campo}"), $orden);
+
+    // Ningun elemento puede faltar: strpos devuelve false y eso es el bug.
+    expect($posiciones)->each->toBeInt();
+
     $ordenadas = $posiciones;
     sort($ordenadas);
 
     expect($posiciones)->toBe($ordenadas);
+});
+
+test('el elemento cafc sigue en la cabecera aunque el CAFC no aplique', function () {
+    // El CAFC es de la modalidad computarizada y este sistema no la factura,
+    // asi que nunca lleva valor. Pero el elemento es parte de la secuencia del
+    // XSD: borrarlo corre de lugar a leyenda, usuario y codigoDocumentoSector,
+    // que es exactamente el defecto que cerro el arreglo de xsi:nil.
+    $xml = app(ConstructorXml::class)->construir(facturaCompleta());
+
+    expect($xml)->toContain('<cafc xsi:nil="true"/>');
 });
 
 // ---- Envio -----------------------------------------------------------------

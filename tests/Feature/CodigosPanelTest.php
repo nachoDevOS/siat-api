@@ -1,6 +1,8 @@
 <?php
 
 use App\Exceptions\SiatException;
+use App\Jobs\RenovarCufd;
+use App\Models\Cufd;
 use App\Models\Cuis;
 use App\Models\PuntoVenta;
 use App\Models\User;
@@ -28,14 +30,12 @@ test('la carga manual de CUFD deja el punto de venta listo para emitir', functio
         ->and($vigente->codigo_control)->toBe('A1B2C3');
 });
 
-test('la carga manual de CUIS y CAFC funciona', function () {
+test('la carga manual de CUIS funciona', function () {
     $pv = PuntoVenta::factory()->create();
 
     $this->post(route('admin.codigos.cuis.manual', $pv), ['codigo' => 'CUIS-1'])->assertRedirect();
-    $this->post(route('admin.codigos.cafc.manual', $pv), ['codigo' => 'CAFC-1', 'cantidad_facturas' => 500])->assertRedirect();
 
-    expect($pv->cuisVigente())->not->toBeNull()
-        ->and($pv->cafcs()->where('fecha_vigencia', '>', now())->exists())->toBeTrue();
+    expect($pv->cuisVigente())->not->toBeNull();
 });
 
 test('solicitar CUFD al SIAT sin CUIS no rompe el panel', function () {
@@ -106,4 +106,90 @@ test('un error del SIAT al solicitar codigos se muestra como aviso', function ()
         ->assertSessionHas('estado', 'Error del SIAT: WSDL inalcanzable');
 
     expect($pv->cuisVigente())->toBeNull();
+});
+
+/*
+|--------------------------------------------------------------------------
+| Una respuesta vacia del SIN no se guarda
+|--------------------------------------------------------------------------
+|
+| El SIN no usa SoapFault para rechazar: responde 200 con transaccion=false y
+| los codigos vacios. Guardarlos igual dejaba un CUFD con codigo_control ''
+| marcado vigente 24 h. Como cufdVigente() toma el ultimo por id, ese CUFD
+| vacio le ganaba al bueno anterior y envenenaba el CUF de toda factura del
+| punto de venta. El job que corre cada hora lo repetia cada hora.
+|
+*/
+
+test('un CUFD sin codigo de control no se guarda', function () {
+    $pv = PuntoVenta::factory()->create();
+    Cuis::factory()->for($pv)->create();
+
+    $servicio = Mockery::mock(ServicioCodigos::class);
+    $servicio->shouldReceive('solicitarCufd')->andReturn([
+        'RespuestaCufd' => ['codigo' => '', 'codigoControl' => '', 'direccion' => ''],
+    ]);
+
+    $fabrica = Mockery::mock(FabricaServicios::class);
+    $fabrica->shouldReceive('codigos')->andReturn($servicio);
+    app()->instance(FabricaServicios::class, $fabrica);
+
+    $this->post(route('admin.codigos.cufd', $pv))->assertRedirect();
+
+    // Nada guardado: el CUFD bueno de antes (si lo hubiera) sigue siendo el vigente.
+    expect($pv->cufds()->count())->toBe(0);
+});
+
+test('un CUFD vacio no le gana al que ya estaba vigente', function () {
+    $pv = PuntoVenta::factory()->create();
+    Cuis::factory()->for($pv)->create();
+
+    $bueno = Cufd::factory()->for($pv)->create(['codigo_control' => 'CONTROL-BUENO']);
+
+    $servicio = Mockery::mock(ServicioCodigos::class);
+    $servicio->shouldReceive('solicitarCufd')->andReturn([
+        'RespuestaCufd' => ['codigo' => '', 'codigoControl' => ''],
+    ]);
+
+    $fabrica = Mockery::mock(FabricaServicios::class);
+    $fabrica->shouldReceive('codigos')->andReturn($servicio);
+    app()->instance(FabricaServicios::class, $fabrica);
+
+    $this->post(route('admin.codigos.cufd', $pv))->assertRedirect();
+
+    expect($pv->cufdVigente()->id)->toBe($bueno->id)
+        ->and($pv->cufdVigente()->codigo_control)->toBe('CONTROL-BUENO');
+});
+
+test('un CUIS vacio no se guarda', function () {
+    $pv = PuntoVenta::factory()->create();
+
+    $servicio = Mockery::mock(ServicioCodigos::class);
+    $servicio->shouldReceive('solicitarCuis')->andReturn(['RespuestaCuis' => ['codigo' => '']]);
+
+    $fabrica = Mockery::mock(FabricaServicios::class);
+    $fabrica->shouldReceive('codigos')->andReturn($servicio);
+    app()->instance(FabricaServicios::class, $fabrica);
+
+    $this->post(route('admin.codigos.cuis', $pv))->assertRedirect();
+
+    expect($pv->cuis()->count())->toBe(0);
+});
+
+test('el job horario tampoco guarda un CUFD vacio', function () {
+    $pv = PuntoVenta::factory()->create();
+    Cuis::factory()->for($pv)->create();
+
+    $servicio = Mockery::mock(ServicioCodigos::class);
+    $servicio->shouldReceive('solicitarCufd')->andReturn([
+        'RespuestaCufd' => ['codigo' => '', 'codigoControl' => ''],
+    ]);
+
+    $fabrica = Mockery::mock(FabricaServicios::class);
+    $fabrica->shouldReceive('codigos')->andReturn($servicio);
+
+    expect(fn () => (new RenovarCufd($pv->id))->handle($fabrica))
+        ->toThrow(SiatException::class);
+
+    expect($pv->cufds()->count())->toBe(0);
 });

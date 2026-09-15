@@ -83,3 +83,20 @@ test('un cliente sin facturas si se puede eliminar', function () {
 
     expect(Empresa::find($empresa->id))->toBeNull();
 });
+
+test('el panel no acepta dar de alta una empresa en modalidad computarizada', function () {
+    // El sistema solo emite electronica en linea: la computarizada usa otro nodo
+    // raiz y no exige firma, asi que una empresa en modalidad 2 produciria
+    // facturas que el SIN rechaza sin explicar el motivo.
+    $respuesta = $this->post(route('admin.empresas.store'), [
+        'nombre_comercial' => 'Ferreteria Prueba',
+        'razon_social' => 'FERRETERIA PRUEBA SRL',
+        'nit' => '1234567890',
+        'codigo_ambiente' => 2,
+        'codigo_modalidad' => 2,
+        'estado' => Empresa::ESTADO_EN_REGISTRO,
+    ]);
+
+    $respuesta->assertSessionHasErrors('codigo_modalidad');
+    expect(Empresa::where('nit', '1234567890')->exists())->toBeFalse();
+});

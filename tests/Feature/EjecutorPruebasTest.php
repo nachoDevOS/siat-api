@@ -43,12 +43,25 @@ function fabricaDePruebas(
 
 /**
  * Empresa con sucursal y punto de venta, que es el minimo para casi todo paso.
+ *
+ * @param  bool  $registradoEnSiat  el paso 10 es justamente el que registra el
+ *                                  punto de venta, asi que ESE arranca sin
+ *                                  registrar. Los pasos que emiten necesitan lo
+ *                                  contrario: sin registro no se puede emitir,
+ *                                  porque el codigo entra al CUF.
  */
-function empresaConPuntoVenta(): Empresa
+function empresaConPuntoVenta(bool $registradoEnSiat = true): Empresa
 {
     $empresa = Empresa::factory()->create();
     $sucursal = Sucursal::factory()->for($empresa)->create(['codigo_sucursal' => 0]);
-    PuntoVenta::factory()->for($sucursal)->create(['codigo_punto_venta' => 0]);
+
+    $puntoVenta = PuntoVenta::factory()->for($sucursal);
+
+    if (! $registradoEnSiat) {
+        $puntoVenta = $puntoVenta->sinRegistrarEnSiat();
+    }
+
+    $puntoVenta->create(['codigo_punto_venta' => 0]);
     // Los pasos que emiten pasan por EmisorFactura, que exige poder firmar.
     Certificado::factory()->for($empresa)->firmable()->create();
 
@@ -222,7 +235,7 @@ test('el paso de actividades economicas las guarda para la empresa', function ()
 });
 
 test('el paso de registro de punto de venta guarda el codigo que asigna el SIN', function () {
-    $empresa = empresaConPuntoVenta();
+    $empresa = empresaConPuntoVenta(registradoEnSiat: false);
     Cuis::factory()->for(puntoVentaDe($empresa))->create();
     $caso = CasoPrueba::factory()->create(['tipo' => 'registroPuntoVenta', 'orden' => 10]);
 
@@ -248,7 +261,7 @@ test('el paso de registro de punto de venta guarda el codigo que asigna el SIN',
 });
 
 test('reintentar el paso 10 NO registra un punto de venta nuevo en el SIN', function () {
-    $empresa = empresaConPuntoVenta();
+    $empresa = empresaConPuntoVenta(registradoEnSiat: false);
     Cuis::factory()->for(puntoVentaDe($empresa))->create();
     $caso = CasoPrueba::factory()->create(['tipo' => 'registroPuntoVenta', 'orden' => 10]);
 
@@ -275,7 +288,7 @@ test('reintentar el paso 10 NO registra un punto de venta nuevo en el SIN', func
 });
 
 test('un rechazo del SIN en el registro no marca el punto de venta como registrado', function () {
-    $empresa = empresaConPuntoVenta();
+    $empresa = empresaConPuntoVenta(registradoEnSiat: false);
     Cuis::factory()->for(puntoVentaDe($empresa))->create();
     $caso = CasoPrueba::factory()->create(['tipo' => 'registroPuntoVenta', 'orden' => 10]);
 

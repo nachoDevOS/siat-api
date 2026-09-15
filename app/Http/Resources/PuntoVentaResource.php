@@ -24,6 +24,11 @@ class PuntoVentaResource extends JsonResource
             'nombre' => $this->nombre,
             'tipo_punto_venta' => $this->tipo_punto_venta,
             'activo' => $this->activo,
+            // Sin esto el cliente no tenia como saber por que su punto de venta
+            // recien creado no puede facturar: el alta local no lo registra en
+            // el SIN, y sin registro el CUF sale con un codigo que el SIN
+            // desconoce.
+            'registrado_en_siat' => $this->estaRegistradoEnSiat(),
             'tiene_cufd_vigente' => $this->cufdVigente() !== null,
         ];
     }

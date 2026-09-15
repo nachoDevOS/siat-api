@@ -21,7 +21,6 @@ class FacturaFactory extends Factory
             'empresa_id' => Empresa::factory(),
             'punto_venta_id' => PuntoVenta::factory(),
             'cufd_id' => null,
-            'cafc_id' => null,
             'cuf' => strtoupper(fake()->bothify('########????')),
             'numero_factura' => fake()->numberBetween(1, 9999),
             'fecha_emision' => now(),

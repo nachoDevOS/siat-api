@@ -68,13 +68,11 @@ Route::prefix('admin')->name('admin.')->middleware('auth')->group(function () {
     Route::post('puntos-venta/{puntoVenta}/adoptar-codigo', [PuntoVentaController::class, 'adoptarCodigo'])
         ->name('puntos-venta.adoptar-codigo');
 
-    // Codigos CUIS / CUFD / CAFC de un punto de venta: solicitud al SIAT o carga manual.
+    // Codigos CUIS / CUFD de un punto de venta: solicitud al SIAT o carga manual.
     Route::post('puntos-venta/{puntoVenta}/cuis', [CodigoController::class, 'solicitarCuis'])->name('codigos.cuis');
     Route::post('puntos-venta/{puntoVenta}/cufd', [CodigoController::class, 'solicitarCufd'])->name('codigos.cufd');
-    Route::post('puntos-venta/{puntoVenta}/cafc', [CodigoController::class, 'solicitarCafc'])->name('codigos.cafc');
     Route::post('puntos-venta/{puntoVenta}/cuis-manual', [CodigoController::class, 'cuisManual'])->name('codigos.cuis.manual');
     Route::post('puntos-venta/{puntoVenta}/cufd-manual', [CodigoController::class, 'cufdManual'])->name('codigos.cufd.manual');
-    Route::post('puntos-venta/{puntoVenta}/cafc-manual', [CodigoController::class, 'cafcManual'])->name('codigos.cafc.manual');
 
     // Panel de pruebas piloto (fase 3).
     Route::get('empresas/{empresa}/pruebas', [PruebaPilotoController::class, 'show'])->name('pruebas.show');

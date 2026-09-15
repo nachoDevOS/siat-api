@@ -9,6 +9,7 @@ use App\Models\Cufd;
 use App\Models\Empresa;
 use App\Models\Factura;
 use App\Models\PuntoVenta;
+use App\Services\Contingencia\GestorContingencia;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -29,6 +30,7 @@ class EmisorFactura
         private readonly ConstructorXml $constructorXml,
         private readonly FirmadorXml $firmadorXml,
         private readonly ResolutorActividad $resolutor,
+        private readonly GestorContingencia $contingencia,
     ) {}
 
     /**
@@ -119,12 +121,22 @@ class EmisorFactura
             $numero = $this->reservarNumero($puntoVenta);
             $fecha = now();
 
+            // Con un evento de contingencia abierto, esta factura se emite
+            // FUERA DE LINEA. Hay que saberlo antes de calcular el CUF: el tipo
+            // de emision es uno de sus nueve campos, asi que decidirlo despues
+            // deja un CUF que contradice a la factura y el SIN la rechaza.
+            $enContingencia = $this->contingencia->hayContingenciaAbierta($puntoVenta);
+
+            $tipoEmision = $enContingencia
+                ? Factura::EMISION_CONTINGENCIA
+                : Factura::EMISION_EN_LINEA;
+
             $cuf = $this->generadorCuf->generar([
                 'nit' => $empresa->nit,
                 'fecha' => $fecha->format('YmdHisv'),
                 'sucursal' => $puntoVenta->sucursal->codigo_sucursal,
                 'modalidad' => $empresa->codigo_modalidad,
-                'tipo_emision' => Factura::EMISION_EN_LINEA,
+                'tipo_emision' => $tipoEmision,
                 'tipo_factura' => config('siat.codigos.tipo_factura_documento'),
                 'tipo_documento_sector' => config('siat.codigos.documento_sector'),
                 'numero_factura' => $numero,
@@ -132,7 +144,7 @@ class EmisorFactura
             ], $cufd->codigo_control);
 
             $factura = $this->crearFactura(
-                $empresa, $puntoVenta, $cufd, $venta, $totales, $numero, $cuf, $fecha, $actividades,
+                $empresa, $puntoVenta, $cufd, $venta, $totales, $numero, $cuf, $fecha, $actividades, $tipoEmision,
             );
 
             // Arma y firma el XML con el certificado activo de la empresa. La
@@ -151,10 +163,15 @@ class EmisorFactura
 
             $factura->update(['xml_firmado' => $xml]);
 
-            // Del paso 12 en adelante es asincrono: el worker envia al SIAT.
-            // afterCommit para que el worker no busque una factura que todavia
-            // no existe (o que un rollback posterior deje sin existir).
-            EnviarFacturaAlSiat::dispatch($factura->id)->afterCommit();
+            // Bajo contingencia no se intenta el envio individual: el SIAT no
+            // esta respondiendo y estas facturas viajan juntas en el paquete que
+            // arma GestorContingencia::recuperar() cuando el servicio vuelve.
+            if (! $enContingencia) {
+                // Del paso 12 en adelante es asincrono: el worker envia al SIAT.
+                // afterCommit para que el worker no busque una factura que
+                // todavia no existe (o que un rollback posterior deje sin existir).
+                EnviarFacturaAlSiat::dispatch($factura->id)->afterCommit();
+            }
 
             return $factura;
         });
@@ -171,7 +188,7 @@ class EmisorFactura
      */
     private function resolverPuntoVenta(Empresa $empresa, array $venta): PuntoVenta
     {
-        return PuntoVenta::query()
+        $puntoVenta = PuntoVenta::query()
             ->whereHas('sucursal', function ($q) use ($empresa, $venta) {
                 $q->where('empresa_id', $empresa->id)
                     ->where('codigo_sucursal', $venta['sucursal'] ?? 0);
@@ -179,6 +196,22 @@ class EmisorFactura
             ->where('codigo_punto_venta', $venta['punto_venta'] ?? 0)
             ->where('activo', true)
             ->firstOrFail();
+
+        // Existir en nuestra base no alcanza: el codigo de punto de venta entra
+        // al CUF, asi que si el SIN no lo conoce, TODA factura emitida contra el
+        // sale con un CUF que el SIN no puede validar y las rechaza en bloque.
+        //
+        // Se puede llegar aca por POST /api/v1/puntos-venta, que crea el
+        // registro local pero no lo da de alta en el SIN: eso lo hace el paso 10
+        // del piloto y es irreversible, por eso no se dispara solo.
+        if (! $puntoVenta->estaRegistradoEnSiat()) {
+            throw new FacturaInvalidaException([
+                "El punto de venta {$puntoVenta->codigo_punto_venta} de la sucursal ".
+                "{$venta['sucursal']} todavia no esta registrado en el SIAT: no se puede emitir contra el.",
+            ]);
+        }
+
+        return $puntoVenta;
     }
 
     /**
@@ -233,6 +266,7 @@ class EmisorFactura
      * @param  array<string, mixed>  $venta
      * @param  array<string, mixed>  $totales
      * @param  list<string|null>  $actividades
+     * @param  int  $tipoEmision  1 = en linea, 2 = contingencia. Ya entro al CUF.
      */
     private function crearFactura(
         Empresa $empresa,
@@ -244,6 +278,7 @@ class EmisorFactura
         string $cuf,
         Carbon $fecha,
         array $actividades,
+        int $tipoEmision,
     ): Factura {
         $comprador = $venta['comprador'];
 
@@ -277,8 +312,12 @@ class EmisorFactura
                 ?? $this->resolutor->leyendaDeActividad($empresa, $actividades[0] ?? null),
             'usuario' => $venta['usuario'] ?? null,
             'codigo_documento_sector' => config('siat.codigos.documento_sector'),
-            'tipo_emision' => Factura::EMISION_EN_LINEA,
-            'estado' => Factura::ESTADO_PENDIENTE,
+            'tipo_emision' => $tipoEmision,
+            // Una factura emitida fuera de linea ya nace en contingencia: es
+            // valida e imprimible, solo le falta viajar dentro de un paquete.
+            'estado' => $tipoEmision === Factura::EMISION_CONTINGENCIA
+                ? Factura::ESTADO_CONTINGENCIA
+                : Factura::ESTADO_PENDIENTE,
             'referencia_externa' => $venta['referencia_externa'] ?? null,
         ]);
 
