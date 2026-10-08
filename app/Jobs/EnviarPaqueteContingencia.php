@@ -51,7 +51,7 @@ class EnviarPaqueteContingencia implements ShouldQueue
                     'codigoEmision' => Factura::EMISION_CONTINGENCIA,
                     'tipoFacturaDocumento' => config('siat.codigos.tipo_factura_documento'),
                     'cufd' => (string) $paquete->puntoVenta->cufdVigente()?->codigo,
-                    'cuis' => (string) $paquete->puntoVenta->cuisVigente()?->codigo,
+                    'cuis' => (string) $paquete->puntoVenta->cuisDe($paquete->puntoVenta->cufdVigente())?->codigo,
                     // El CAFC es de la modalidad computarizada: aca no aplica.
                     'cafc' => null,
                     'cantidadFacturas' => $paquete->cantidad_facturas,

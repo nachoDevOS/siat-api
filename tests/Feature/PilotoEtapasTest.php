@@ -1135,3 +1135,34 @@ test('la vista muestra los botones de limpiar', function () {
         ->assertSee('Limpiar todas')
         ->assertSee('name="etapa" value="1"', false);
 });
+
+// --- CUIS atado al CUFD ------------------------------------------------------
+
+test('la factura viaja con el CUIS que genero su CUFD, no con uno mas nuevo (913 del SIN)', function () {
+    Queue::fake();
+    $empresa = empresaListaParaFacturar();      // CUFD emitido con CUIS-PV1
+    $pv1 = PuntoVenta::where('codigo_punto_venta', 1)->sole();
+    Cuis::factory()->create(['punto_venta_id' => $pv1->id, 'codigo' => 'CUIS-MAS-NUEVO']);
+    $caso = CasoPrueba::where('etapa', 4)->where('orden', 1)->sole();
+
+    $facturacion = Mockery::mock(ServicioFacturacion::class);
+    $facturacion->shouldReceive('recepcionarFactura')->once()
+        ->with(Mockery::type(Factura::class), Mockery::any(), 'CUIS-PV1')
+        ->andReturn(recepcion('908'));
+    facturacionSimulada($facturacion);
+
+    $this->post(route('admin.pruebas.caso', [$empresa, $caso]));
+
+    expect(EjecucionPrueba::sole()->estado)->toBe(EjecucionPrueba::ESTADO_EXITOSO);
+});
+
+test('cuisDe cae al CUIS vigente si el CUFD no tiene vinculo guardado', function () {
+    $pv = PuntoVenta::factory()->create();
+    $viejo = Cuis::factory()->create(['punto_venta_id' => $pv->id]);
+    $nuevo = Cuis::factory()->create(['punto_venta_id' => $pv->id]);
+    $conVinculo = Cufd::factory()->create(['punto_venta_id' => $pv->id, 'cuis_id' => $viejo->id]);
+    $sinVinculo = Cufd::factory()->create(['punto_venta_id' => $pv->id, 'cuis_id' => null]);
+
+    expect($pv->cuisDe($conVinculo)->is($viejo))->toBeTrue()
+        ->and($pv->cuisDe($sinVinculo)->is($nuevo))->toBeTrue();
+});

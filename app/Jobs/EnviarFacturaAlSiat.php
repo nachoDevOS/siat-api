@@ -43,8 +43,9 @@ class EnviarFacturaAlSiat implements ShouldQueue
         }
 
         $cufd = $factura->cufd?->codigo ?? optional($factura->puntoVenta->cufdVigente())->codigo;
-        // El SIN pide tambien el CUIS en la recepcion de la factura.
-        $cuis = optional($factura->puntoVenta->cuisVigente())->codigo;
+        // El SIN pide tambien el CUIS en la recepcion, y tiene que ser el que
+        // genero ese CUFD: con uno mas nuevo responde 913 (PuntoVenta::cuisDe).
+        $cuis = $factura->puntoVenta->cuisDe($factura->cufd ?? $factura->puntoVenta->cufdVigente())?->codigo;
 
         try {
             $respuesta = RespuestaSiat::desde(

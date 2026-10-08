@@ -433,7 +433,7 @@ class EjecutorPruebas
 
         $respuesta = RespuestaSiat::desde(
             $this->fabrica->facturacion($empresa)
-                ->recepcionarFactura($factura, (string) $factura->cufd?->codigo, $cuis->codigo),
+                ->recepcionarFactura($factura, (string) $factura->cufd?->codigo, (string) $local->cuisDe($factura->cufd)?->codigo),
         );
 
         $validada = $respuesta->aceptada && $respuesta->codigoEstado === self::FACTURA_VALIDADA;
@@ -515,6 +515,9 @@ class EjecutorPruebas
             $delEvento = $actual;
             $actual = $this->codigos->solicitarCufd($local);
         }
+
+        // El CUIS va atado al CUFD vigente (ver PuntoVenta::cuisDe).
+        $cuis = $local->cuisDe($actual);
 
         [$inicio, $fin] = $this->rangoDeEvento($empresa, $codigoPuntoVenta);
 
@@ -682,8 +685,9 @@ class EjecutorPruebas
     {
         [$codigoSucursal, $codigoPuntoVenta] = $this->codigosDePrueba($caso);
         $local = $this->puntoVentaLocal($empresa, $codigoSucursal, $codigoPuntoVenta);
-        $cuis = $local?->cuisVigente();
         $cufd = $local?->cufdVigente();
+        // El CUIS con el que se emitio ese CUFD, no el mas nuevo.
+        $cuis = $local?->cuisDe($cufd);
 
         if ($cuis === null || $cufd === null) {
             throw new SiatException("El punto de venta {$codigoPuntoVenta} necesita CUIS y CUFD vigentes.");
@@ -740,8 +744,9 @@ class EjecutorPruebas
     {
         [$codigoSucursal, $codigoPuntoVenta] = $this->codigosDePrueba($caso);
         $local = $this->puntoVentaLocal($empresa, $codigoSucursal, $codigoPuntoVenta);
-        $cuis = $local?->cuisVigente();
         $cufd = $local?->cufdVigente();
+        // El CUIS con el que se emitio ese CUFD, no el mas nuevo.
+        $cuis = $local?->cuisDe($cufd);
 
         if ($cuis === null || $cufd === null) {
             throw new SiatException("El punto de venta {$codigoPuntoVenta} necesita CUIS y CUFD vigentes.");
@@ -805,8 +810,9 @@ class EjecutorPruebas
     {
         [$codigoSucursal, $codigoPuntoVenta] = $this->codigosDePrueba($caso);
         $local = $this->puntoVentaLocal($empresa, $codigoSucursal, $codigoPuntoVenta);
-        $cuis = $local?->cuisVigente();
         $cufd = $local?->cufdVigente();
+        // El CUIS con el que se emitio ese CUFD, no el mas nuevo.
+        $cuis = $local?->cuisDe($cufd);
 
         if ($cuis === null || $cufd === null) {
             throw new SiatException("El punto de venta {$codigoPuntoVenta} necesita CUIS y CUFD vigentes.");

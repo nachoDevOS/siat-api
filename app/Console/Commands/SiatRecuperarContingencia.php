@@ -142,6 +142,9 @@ class SiatRecuperarContingencia extends Command
                 $cufd = $this->codigos->solicitarCufd($puntoVenta);
             }
 
+            // El CUIS que genero ese CUFD (PuntoVenta::cuisDe).
+            $cuis = $puntoVenta->cuisDe($cufd) ?? $cuis;
+
             $respuesta = RespuestaSiat::desde(
                 $this->fabrica->operaciones($evento->empresa)->registrarEvento([
                     'codigoSucursal' => $puntoVenta->sucursal->codigo_sucursal,

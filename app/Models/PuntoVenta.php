@@ -118,6 +118,20 @@ class PuntoVenta extends Model
     }
 
     /**
+     * CUIS que tiene que viajar junto a un CUFD: el MISMO con el que el SIN lo
+     * emitio, no el mas nuevo del punto de venta.
+     *
+     * Comprobado en el piloto: despues de pedir un CUIS nuevo, una factura con
+     * el CUFD anterior y el CUIS nuevo volvio con "[913] CUIS INVALIDO, CUIS
+     * esperado <el anterior>". El SIN ata cada CUFD al CUIS que lo genero.
+     * Los CUFD guardados antes de registrar ese vinculo caen al vigente.
+     */
+    public function cuisDe(?Cufd $cufd): ?Cuis
+    {
+        return $cufd?->cuis ?? $this->cuisVigente();
+    }
+
+    /**
      * CUIS vigente por la misma logica que el CUFD.
      */
     public function cuisVigente(): ?Cuis

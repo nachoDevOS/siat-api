@@ -48,8 +48,10 @@ class AnularFacturaEnSiat implements ShouldQueue
 
         // El SIN pide el CUFD VIGENTE para anular, no el de la emision (que a
         // esta altura puede estar vencido).
-        $cufd = $factura->puntoVenta->cufdVigente()?->codigo ?? $factura->cufd?->codigo;
-        $cuis = $factura->puntoVenta->cuisVigente()?->codigo;
+        $cufdVigente = $factura->puntoVenta->cufdVigente() ?? $factura->cufd;
+        $cufd = $cufdVigente?->codigo;
+        // El CUIS que genero ese CUFD (PuntoVenta::cuisDe).
+        $cuis = $factura->puntoVenta->cuisDe($cufdVigente)?->codigo;
 
         try {
             $respuesta = RespuestaSiat::desde(

@@ -80,7 +80,9 @@ class VerificarEstadoFactura implements ShouldQueue
 
         try {
             $respuesta = $fabrica->facturacion($factura->empresa)
-                ->verificarEstado($factura, (string) $cufd, (string) $factura->puntoVenta->cuisVigente()?->codigo);
+                ->verificarEstado($factura, (string) $cufd, (string) $factura->puntoVenta->cuisDe(
+                    $factura->cufd ?? $factura->puntoVenta->cufdVigente(),
+                )?->codigo);
 
             $codigoEstado = (string) data_get($respuesta, 'RespuestaServicioFacturacion.codigoEstado');
             $descripcion = mb_strtoupper((string) data_get($respuesta, 'RespuestaServicioFacturacion.codigoDescripcion'));
