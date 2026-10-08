@@ -163,6 +163,21 @@
                                     <div class="error" style="font-size:12px; margin:6px 0 0; overflow-wrap:anywhere;">
                                         {{ data_get($ejecucion->respuesta, 'error') }}
                                     </div>
+
+                                    {{-- El SIN devolvio el CUIS vigente (980): no emite otro hasta
+                                         cerrar las operaciones del sistema en ese punto de venta.
+                                         Va junto al mensaje que lo explica, no entre las acciones
+                                         de uso diario: es un paso de destrabe, poco frecuente. --}}
+                                    @if ($caso->tipo === 'solicitudCuis' && str_contains((string) data_get($ejecucion->respuesta, 'error'), 'ya estaba vigente'))
+                                        <form method="POST" action="{{ route('admin.pruebas.cerrar-operaciones', [$empresa, $caso]) }}"
+                                              style="margin:6px 0 0;"
+                                              onsubmit="return confirm('Cierra las operaciones del sistema en este punto de venta ante el SIN (piloto). Despues hay que volver a ejecutar la prueba. ¿Continuar?');">
+                                            @csrf
+                                            <button class="btn contorno-rojo" type="submit" @disabled(! $puedeCorrer($caso))>
+                                                Cerrar operaciones en el PV {{ data_get($caso->payload_ejemplo, 'codigoPuntoVenta') }}
+                                            </button>
+                                        </form>
+                                    @endif
                                 @endif
                                 @if ($ejecucion)
                                     <details>
@@ -181,8 +196,8 @@
                             <td>
                                 <x-badge :color="$color" :texto="$ejecucion?->estado ?? 'PENDIENTE'" />
                             </td>
-                            <td>
-                                <form method="POST" action="{{ route('admin.pruebas.caso', [$empresa, $caso]) }}" style="margin:0;">
+                            <td class="acciones-prueba">
+                                <form method="POST" action="{{ route('admin.pruebas.caso', [$empresa, $caso]) }}">
                                     @csrf
                                     <button class="btn gris" type="submit" @disabled(! $puedeCorrer($caso))>
                                         {{ $ejecucion ? 'Repetir' : 'Ejecutar' }}
@@ -193,23 +208,12 @@
                                      completan por cola: no entran en un request. --}}
                                 @php $faltanCaso = max(0, $caso->pruebas_esperadas - $hechasCaso); @endphp
                                 @if ($caso->pruebas_esperadas > 1 && $faltanCaso > 0)
-                                    <form method="POST" action="{{ route('admin.pruebas.completar', [$empresa, $caso]) }}" style="margin:6px 0 0;">
+                                    <form method="POST" action="{{ route('admin.pruebas.completar', [$empresa, $caso]) }}">
                                         @csrf
                                         <button class="btn" type="submit" @disabled(! $puedeCorrer($caso))>Completar ({{ $faltanCaso }})</button>
                                     </form>
                                 @endif
 
-                                {{-- El SIN devolvio el CUIS vigente (980): no emite otro hasta
-                                     cerrar las operaciones del sistema en ese punto de venta. --}}
-                                @if ($caso->tipo === 'solicitudCuis' && $ejecucion?->estado === EjecucionPrueba::ESTADO_FALLIDO
-                                     && str_contains((string) data_get($ejecucion->respuesta, 'error'), 'ya estaba vigente'))
-                                    <form method="POST" action="{{ route('admin.pruebas.cerrar-operaciones', [$empresa, $caso]) }}"
-                                          style="margin:6px 0 0;"
-                                          onsubmit="return confirm('Cierra las operaciones del sistema en este punto de venta ante el SIN (piloto). Despues hay que volver a ejecutar la prueba. ¿Continuar?');">
-                                        @csrf
-                                        <button class="btn rojo" type="submit" @disabled(! $puedeCorrer($caso))>Cerrar operaciones</button>
-                                    </form>
-                                @endif
                             </td>
                         </tr>
                     @endforeach
@@ -234,6 +238,15 @@
 
     <style>
         details.etapa > summary::-webkit-details-marker { display: none; }
+        /* Acciones de cada prueba: mismo ancho y tamano, apiladas. */
+        td.acciones-prueba { width: 130px; }
+        td.acciones-prueba form { margin: 0 0 6px; }
+        td.acciones-prueba form:last-child { margin-bottom: 0; }
+        td.acciones-prueba .btn { width: 100%; padding: 6px 10px; font-size: 13px; text-align: center; }
+        /* Accion secundaria y peligrosa: se ve, pero no compite con las principales. */
+        .btn.contorno-rojo { background: #fff; color: #dc2626; border: 1px solid #fca5a5; padding: 4px 10px; font-size: 12px; }
+        .btn.contorno-rojo:hover { background: #fef2f2; }
+        .btn.contorno-rojo:disabled { background: #fff; color: #cbd5e1; border-color: #e2e8f0; }
         details.etapa[open] .flecha-etapa { transform: rotate(90deg); }
     </style>
     <script>

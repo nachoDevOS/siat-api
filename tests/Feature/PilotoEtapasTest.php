@@ -224,7 +224,7 @@ test('si el SIN devuelve el CUIS ya vigente (980) la prueba NO cuenta, pero el c
     expect(Cuis::sole()->codigo)->toBe('F533CEF5');
 
     $this->get(route('admin.pruebas.show', $empresa))
-        ->assertSee('Cerrar operaciones')
+        ->assertSee('Cerrar operaciones en el PV 0')
         ->assertSee('0/2');
 });
 
