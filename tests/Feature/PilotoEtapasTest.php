@@ -27,6 +27,7 @@ use App\Services\Siat\ServicioSincronizacion;
 use App\Services\Siat\SiatClient;
 use Database\Seeders\CasosPruebaSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 
 uses(RefreshDatabase::class);
@@ -1088,4 +1089,49 @@ test('sin anuladas confirmadas la reversion falla sin llamar al SIN', function (
 test('la vista muestra la etapa XI con su numero romano', function () {
     $this->get(route('admin.pruebas.show', empresaDeEtapaUno()))
         ->assertSee('Etapa XI — Reversion', false);
+});
+
+// --- Limpiar pruebas ---------------------------------------------------------
+
+test('limpiar una etapa borra solo sus ejecuciones y sus jobs en cola', function () {
+    config(['queue.default' => 'database']);
+    $empresa = empresaConCuisEnPv1();
+    $etapa2 = CasoPrueba::where('etapa', 2)->first();
+    $etapa1 = CasoPrueba::where('etapa', 1)->first();
+
+    foreach ([$etapa1, $etapa2] as $caso) {
+        EjecucionPrueba::create(['empresa_id' => $empresa->id, 'caso_id' => $caso->id,
+            'estado' => EjecucionPrueba::ESTADO_EXITOSO, 'ejecutado_en' => now()]);
+        EjecutarCasoPrueba::dispatch($empresa->id, $caso->id);
+    }
+
+    $this->delete(route('admin.pruebas.limpiar', $empresa), ['etapa' => 2])
+        ->assertSessionHas('estado', fn (string $m) => str_contains($m, '1 ejecucion(es) borradas y 1 job(s)'));
+
+    // La etapa I queda intacta, con su job.
+    expect(EjecucionPrueba::pluck('caso_id')->all())->toBe([$etapa1->id])
+        ->and(DB::table('jobs')->count())->toBe(1);
+});
+
+test('limpiar todas borra las ejecuciones de todas las etapas, no las facturas', function () {
+    $empresa = empresaListaParaFacturar();
+    $pv1 = PuntoVenta::where('codigo_punto_venta', 1)->sole();
+    Factura::factory()->create(['empresa_id' => $empresa->id, 'punto_venta_id' => $pv1->id]);
+
+    foreach (CasoPrueba::whereNotNull('etapa')->take(3)->get() as $caso) {
+        EjecucionPrueba::create(['empresa_id' => $empresa->id, 'caso_id' => $caso->id,
+            'estado' => EjecucionPrueba::ESTADO_EXITOSO, 'ejecutado_en' => now()]);
+    }
+
+    $this->delete(route('admin.pruebas.limpiar', $empresa))->assertRedirect();
+
+    expect(EjecucionPrueba::count())->toBe(0)
+        ->and(Factura::count())->toBe(1)
+        ->and(Cuis::count())->toBe(1);
+});
+
+test('la vista muestra los botones de limpiar', function () {
+    $this->get(route('admin.pruebas.show', empresaDeEtapaUno()))
+        ->assertSee('Limpiar todas')
+        ->assertSee('name="etapa" value="1"', false);
 });

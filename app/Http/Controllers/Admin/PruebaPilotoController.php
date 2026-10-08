@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Exceptions\SiatException;
 use App\Http\Controllers\Controller;
+use App\Jobs\EjecutarCasoPrueba;
 use App\Models\CasoPrueba;
 use App\Models\EjecucionPrueba;
 use App\Models\Empresa;
@@ -12,6 +13,7 @@ use App\Services\Pruebas\EjecutorPruebas;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
 /**
@@ -137,6 +139,47 @@ class PruebaPilotoController extends Controller
         return $this->volver($empresa, $resultado['cerrado']
             ? "Operaciones cerradas (CUIS {$resultado['cuis']}). Ahora ejecuta otra vez la prueba {$caso->orden}."
             : "El SIN no cerro las operaciones: {$resultado['motivo']}");
+    }
+
+    /**
+     * Borra el registro LOCAL de ejecuciones de una etapa (o de todas) y los
+     * jobs de esas pruebas que sigan en cola, para volver a contar desde cero.
+     *
+     * No deshace nada ante el SIN —lo que el portal ya conto, queda— ni borra
+     * facturas, CUIS o CUFD: son datos reales que otras etapas usan.
+     */
+    public function limpiar(Request $request, Empresa $empresa): RedirectResponse
+    {
+        $datos = $request->validate([
+            'etapa' => ['nullable', 'integer', Rule::in(array_keys(CasoPrueba::ETAPAS))],
+        ]);
+
+        $casos = CasoPrueba::where('fase', CasoPrueba::FASE_PILOTO)
+            ->when(isset($datos['etapa']), fn ($q) => $q->where('etapa', $datos['etapa']))
+            ->pluck('id');
+
+        $borradas = EjecucionPrueba::where('empresa_id', $empresa->id)->whereIn('caso_id', $casos)->delete();
+
+        // Sin esto, un lote a medias seguiria sumando ejecuciones despues de
+        // limpiar. Se deserializa el job en vez de buscar con LIKE en el
+        // payload: el escapado de comillas cambia entre MySQL y SQLite.
+        $jobs = DB::table('jobs')
+            ->where('payload', 'like', '%EjecutarCasoPrueba%')
+            ->get(['id', 'payload'])
+            ->filter(function ($job) use ($empresa, $casos): bool {
+                $comando = unserialize((string) data_get(json_decode($job->payload), 'data.command'));
+
+                return $comando instanceof EjecutarCasoPrueba
+                    && $comando->empresaId === $empresa->id
+                    && $casos->contains($comando->casoId);
+            })
+            ->pluck('id');
+
+        DB::table('jobs')->whereIn('id', $jobs)->delete();
+
+        $alcance = isset($datos['etapa']) ? "Etapa {$datos['etapa']}" : 'Todas las etapas';
+
+        return $this->volver($empresa, "{$alcance}: {$borradas} ejecucion(es) borradas y {$jobs->count()} job(s) quitados de la cola.");
     }
 
     /**

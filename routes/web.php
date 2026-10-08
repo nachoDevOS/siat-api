@@ -89,6 +89,9 @@ Route::prefix('admin')->name('admin.')->middleware('auth')->group(function () {
 
     // Panel de pruebas piloto (fase 3).
     Route::get('empresas/{empresa}/pruebas', [PruebaPilotoController::class, 'show'])->name('pruebas.show');
+    // Borra el conteo local de una etapa (o de todas) para volver a empezar.
+    Route::delete('empresas/{empresa}/pruebas/ejecuciones', [PruebaPilotoController::class, 'limpiar'])
+        ->name('pruebas.limpiar');
     // Una etapa entera del portal del SIN (I = Obtencion de CUIS, ...). Va
     // antes de {caso} para que 'etapas' no se tome como id de caso.
     Route::post('empresas/{empresa}/pruebas/etapas/{etapa}', [PruebaPilotoController::class, 'ejecutarEtapa'])

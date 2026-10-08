@@ -41,7 +41,15 @@
 
     {{-- ---- Avance general de las etapas del portal ---- --}}
     <div class="tarjeta" style="margin-top:16px;">
-        <h2 style="margin-bottom:8px;">Porcentaje general: {{ $hechasTotal }}/{{ $esperadasTotal }} ({{ $porcentajeTotal }}%)</h2>
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+            <h2 style="margin-bottom:8px;">Porcentaje general: {{ $hechasTotal }}/{{ $esperadasTotal }} ({{ $porcentajeTotal }}%)</h2>
+            <form method="POST" action="{{ route('admin.pruebas.limpiar', $empresa) }}" style="margin:0;"
+                  onsubmit="return confirm('Borra el conteo local de TODAS las etapas y los jobs en cola. Lo que ya registro el SIN no se deshace. ¿Continuar?');">
+                @csrf
+                @method('DELETE')
+                <button class="btn rojo" type="submit">Limpiar todas</button>
+            </form>
+        </div>
         <div class="progreso"><span style="width: {{ $porcentajeTotal }}%;"></span></div>
 
         <div style="display:flex; gap:18px; margin-top:14px; flex-wrap:wrap;">
@@ -105,6 +113,13 @@
                     <button class="btn" type="submit" @disabled(! $etapaCorrible || $hechas === $esperadas)>
                         {{ $hechas === $esperadas ? 'Etapa completa' : 'Ejecutar etapa' }}
                     </button>
+                </form>
+                <form method="POST" action="{{ route('admin.pruebas.limpiar', $empresa) }}" style="margin:0;"
+                      onsubmit="return confirm('Borra el conteo local de la etapa {{ $romanos[$numero] ?? $numero }} y sus jobs en cola. Lo que ya registro el SIN no se deshace. ¿Continuar?');">
+                    @csrf
+                    @method('DELETE')
+                    <input type="hidden" name="etapa" value="{{ $numero }}">
+                    <button class="btn gris" type="submit">Limpiar</button>
                 </form>
             </summary>
 
