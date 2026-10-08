@@ -169,6 +169,14 @@ class EmisorFactura
                 ]);
             }
 
+            // Un autofirmado sirve para el piloto y nada mas: una factura de
+            // produccion firmada con el no tiene validez legal.
+            if ($certificado->esDePrueba() && $empresa->codigo_ambiente === config('siat.codigos.ambiente.produccion')) {
+                throw new FacturaInvalidaException([
+                    'El certificado activo es un autofirmado de prueba: no se puede facturar en produccion con el. Carga el de la entidad certificadora.',
+                ]);
+            }
+
             $xml = $this->firmadorXml->firmar($xml, $certificado);
 
             $factura->update(['xml_firmado' => $xml]);

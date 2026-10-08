@@ -67,6 +67,22 @@
                 @endif
             </p>
 
+            @if ($certificado?->esDePrueba())
+                <p class="aviso" style="font-size:13px;">
+                    Autofirmado de prueba: sirve para el piloto, no para producción.
+                    Antes de pasar a producción, carga el de la entidad certificadora (ADSIB, Digicert).
+                </p>
+            @endif
+
+            {{-- Solo en pruebas: en produccion un autofirmado no tiene validez. --}}
+            @if ($empresa->codigo_ambiente === config('siat.codigos.ambiente.piloto'))
+                <form method="POST" action="{{ route('admin.empresas.certificados.prueba', $empresa) }}" style="margin:0 0 10px;"
+                      onsubmit="return confirm('Genera un certificado AUTOFIRMADO a nombre de la empresa y lo deja activo en lugar del actual. Solo sirve para el piloto. ¿Continuar?');">
+                    @csrf
+                    <button class="btn gris" type="submit">Generar certificado de prueba</button>
+                </form>
+            @endif
+
             <details @if (! $tieneCertificado) open @endif>
                 <summary style="cursor:pointer; font-size:13px;">
                     {{ $tieneCertificado ? 'Reemplazar certificado' : 'Cargar certificado' }}

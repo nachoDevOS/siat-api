@@ -16,6 +16,12 @@ class Certificado extends Model
     /** @use HasFactory<CertificadoFactory> */
     use HasFactory;
 
+    /**
+     * Emisor con el que se guardan los generados por el sistema para el piloto
+     * (GeneradorCertificadoPrueba). Es lo que permite reconocerlos despues.
+     */
+    public const EMISOR_AUTOFIRMADO = 'AUTOFIRMADO - solo pruebas';
+
     protected $table = 'certificados';
 
     protected $guarded = ['id'];
@@ -34,6 +40,14 @@ class Certificado extends Model
             'vence_el' => 'date',
             'activo' => 'boolean',
         ];
+    }
+
+    /**
+     * Si es un autofirmado de prueba: no sirve para facturar en produccion.
+     */
+    public function esDePrueba(): bool
+    {
+        return $this->emitido_por === self::EMISOR_AUTOFIRMADO;
     }
 
     public function empresa(): BelongsTo

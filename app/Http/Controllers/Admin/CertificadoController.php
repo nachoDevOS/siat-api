@@ -2,8 +2,10 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Exceptions\SiatException;
 use App\Http\Controllers\Controller;
 use App\Models\Empresa;
+use App\Services\Factura\GeneradorCertificadoPrueba;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -53,6 +55,22 @@ class CertificadoController extends Controller
         return redirect()
             ->route('admin.empresas.show', $empresa)
             ->with('estado', 'Certificado verificado, cargado y activado.');
+    }
+
+    /**
+     * Genera un certificado autofirmado para el piloto y lo deja activo.
+     */
+    public function generarPrueba(Empresa $empresa, GeneradorCertificadoPrueba $generador): RedirectResponse
+    {
+        try {
+            $certificado = $generador->generar($empresa);
+        } catch (SiatException $e) {
+            return redirect()->route('admin.empresas.show', $empresa)->with('error', $e->getMessage());
+        }
+
+        return redirect()
+            ->route('admin.empresas.show', $empresa)
+            ->with('estado', 'Certificado de prueba generado y activado (vence el '.$certificado->vence_el->format('d/m/Y').'). Solo sirve para el piloto.');
     }
 
     /**

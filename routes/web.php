@@ -52,6 +52,10 @@ Route::prefix('admin')->name('admin.')->middleware('auth')->group(function () {
     // Certificado, sucursales y pruebas cuelgan de una empresa.
     Route::post('empresas/{empresa}/certificados', [CertificadoController::class, 'store'])
         ->name('empresas.certificados.store');
+    // Autofirmado para correr el piloto sin el de una entidad certificadora.
+    // Solo en ambiente de pruebas.
+    Route::post('empresas/{empresa}/certificados/prueba', [CertificadoController::class, 'generarPrueba'])
+        ->name('empresas.certificados.prueba');
     Route::post('empresas/{empresa}/sucursales', [SucursalController::class, 'store'])
         ->name('empresas.sucursales.store');
     // Municipio, direccion y telefono van en cada factura: hay que poder
