@@ -83,6 +83,26 @@ class ServicioOperaciones extends ServicioBase
     }
 
     /**
+     * Cierra las operaciones del sistema en una sucursal / punto de venta.
+     *
+     * VERIFICADO CONTRA EL WSDL DEL PILOTO (2026-10-07): struct
+     * solicitudOperaciones { codigoAmbiente, codigoModalidad, codigoPuntoVenta,
+     * codigoSistema, codigoSucursal, cuis, nit }, respuesta en
+     * RespuestaCierreSistemas.
+     */
+    public function cerrarOperacionesSistema(int $codigoSucursal, int $codigoPuntoVenta, string $cuis): mixed
+    {
+        $solicitud = $this->solicitudBase();
+        $solicitud['codigoSucursal'] = $codigoSucursal;
+        $solicitud['codigoPuntoVenta'] = $codigoPuntoVenta;
+        $solicitud['cuis'] = $cuis;
+
+        return $this->invocar('operaciones', 'cierreOperacionesSistema', [
+            'SolicitudOperaciones' => $solicitud,
+        ]);
+    }
+
+    /**
      * Registra un evento significativo (para habilitar contingencia).
      *
      * @param  array<string, mixed>  $datosEvento

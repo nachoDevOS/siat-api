@@ -580,7 +580,7 @@
                 <div style="flex:1; min-width:220px;">
                     <div class="progreso"><span style="width: {{ $progresoPiloto['porcentaje'] }}%;"></span></div>
                     <div style="font-size:13px; color:var(--suave); margin-top:6px;">
-                        {{ $progresoPiloto['exitosos'] }}/{{ $progresoPiloto['total'] }} pasos superados
+                        {{ $progresoPiloto['exitosos'] }}/{{ $progresoPiloto['total'] }} pruebas correctas en las etapas del portal
                     </div>
                 </div>
                 <a class="btn" href="{{ route('admin.pruebas.show', $empresa) }}"

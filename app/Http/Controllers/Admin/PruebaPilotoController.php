@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Exceptions\SiatException;
 use App\Http\Controllers\Controller;
 use App\Models\CasoPrueba;
 use App\Models\EjecucionPrueba;
@@ -10,22 +11,35 @@ use App\Services\Panel\RequisitosEtapa;
 use App\Services\Pruebas\EjecutorPruebas;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
 
 /**
- * Panel de pruebas piloto (fase 3, por cliente). Muestra los 17 pasos con su
- * estado, permite correrlos de a uno o todos en orden, y deja ver la respuesta
- * cruda de cada uno.
+ * Panel de pruebas piloto (fase 3, por cliente). Muestra las etapas tal como
+ * las lista el portal del SIN (Seguimiento de Autorizacion de Sistemas), con
+ * sus pruebas, esperadas y correctas, y permite correr una prueba, completarla
+ * por cola o lanzar la etapa entera.
  *
- * Los botones solo se habilitan cuando estan los requisitos manuales del portal
- * del SIN (token y certificado), para no depurar errores de token que en
- * realidad son de tramite (seccion 12.1).
+ * El bloqueo es por lo que cada prueba usa de verdad: sin token no corre nada;
+ * sin certificado, solo se frenan las que firman (seccion 12.1).
  */
 class PruebaPilotoController extends Controller
 {
-    public function show(Empresa $empresa, RequisitosEtapa $requisitos): View
+    /**
+     * Llamadas que una etapa puede hacer dentro del request. Por encima, va a
+     * la cola: 10 llamadas de hasta 4 s ya rozan el timeout de PHP.
+     */
+    private const MAXIMO_SINCRONO = 10;
+
+    public function show(Empresa $empresa, RequisitosEtapa $requisitos, EjecutorPruebas $ejecutor): View
     {
-        $casos = CasoPrueba::where('fase', CasoPrueba::FASE_PILOTO)->orderBy('orden')->get();
+        // Pruebas agrupadas como las muestra el portal del SIN.
+        $etapas = CasoPrueba::where('fase', CasoPrueba::FASE_PILOTO)
+            ->whereNotNull('etapa')
+            ->orderBy('etapa')
+            ->orderBy('orden')
+            ->get()
+            ->groupBy('etapa');
 
         // Ultima ejecucion de cada caso para esta empresa.
         $ultimas = EjecucionPrueba::where('empresa_id', $empresa->id)
@@ -35,26 +49,14 @@ class PruebaPilotoController extends Controller
 
         return view('admin.pruebas.index', [
             'empresa' => $empresa,
-            'casos' => $casos,
+            'etapas' => $etapas,
+            'correctas' => $ejecutor->correctasPorCaso($empresa),
+            // Pruebas esperando un worker: si el numero no baja, no hay ninguno.
+            'enCola' => DB::table('jobs')->where('payload', 'like', '%EjecutarCasoPrueba%')->count(),
             'ultimas' => $ultimas,
             'requisitos' => $this->requisitosPrevios($empresa),
             'progreso' => $requisitos->progresoPiloto($empresa),
         ]);
-    }
-
-    /**
-     * Corre la secuencia completa. Se detiene en el primer caso obligatorio
-     * que falle para no arrastrar errores en cadena.
-     */
-    public function ejecutar(Empresa $empresa, EjecutorPruebas $ejecutor): RedirectResponse
-    {
-        $resultado = $ejecutor->ejecutarSecuencia($empresa, CasoPrueba::FASE_PILOTO);
-
-        $mensaje = $resultado['fallo'] === null
-            ? "Secuencia completa: {$resultado['ejecutados']} casos ejecutados."
-            : "Se detuvo en: {$resultado['fallo']}.";
-
-        return $this->volver($empresa, $mensaje);
     }
 
     /**
@@ -63,11 +65,119 @@ class PruebaPilotoController extends Controller
      */
     public function ejecutarCaso(Empresa $empresa, CasoPrueba $caso, EjecutorPruebas $ejecutor): RedirectResponse
     {
+        if (($bloqueo = $this->bloqueo($empresa, $caso->requiereCertificado())) !== null) {
+            return $this->volver($empresa, $bloqueo);
+        }
+
         $ejecucion = $ejecutor->ejecutarCaso($empresa, $caso);
 
         $resultado = $ejecucion->estado === EjecucionPrueba::ESTADO_EXITOSO ? 'OK' : 'con error';
 
         return $this->volver($empresa, "Paso {$caso->orden} ({$caso->nombre}): {$resultado}.");
+    }
+
+    /**
+     * Corre todas las pruebas de una etapa del portal hasta completar sus
+     * pruebas esperadas.
+     */
+    public function ejecutarEtapa(Empresa $empresa, int $etapa, EjecutorPruebas $ejecutor): RedirectResponse
+    {
+        abort_unless(array_key_exists($etapa, CasoPrueba::ETAPAS), 404);
+
+        $firma = CasoPrueba::where('etapa', $etapa)->get()
+            ->contains(fn (CasoPrueba $caso): bool => $caso->requiereCertificado());
+
+        if (($bloqueo = $this->bloqueo($empresa, $firma)) !== null) {
+            return $this->volver($empresa, $bloqueo);
+        }
+
+        $nombre = CasoPrueba::ETAPAS[$etapa];
+
+        // Etapa grande (la II son 1800 llamadas): no entra en un request, va a
+        // la cola. Las chicas, como la I, siguen corriendo en el momento.
+        $faltan = CasoPrueba::where('etapa', $etapa)->get()
+            ->sum(fn (CasoPrueba $caso): int => $ejecutor->faltantes($empresa, $caso));
+
+        if ($faltan > self::MAXIMO_SINCRONO) {
+            $encolados = $ejecutor->encolarEtapa($empresa, $etapa);
+
+            return $this->volver($empresa, "Etapa {$etapa} ({$nombre}): {$encolados} prueba(s) en cola. ".
+                'Necesita un worker corriendo (php artisan queue:work). Recarga para ver el avance.');
+        }
+
+        $resultado = $ejecutor->ejecutarEtapa($empresa, $etapa);
+
+        $mensaje = match (true) {
+            $resultado['ejecutadas'] === 0 => "Etapa {$etapa} ({$nombre}): ya estaba completa, no se envio nada.",
+            $resultado['fallidas'] === 0 => "Etapa {$etapa} ({$nombre}): {$resultado['ejecutadas']} prueba(s) enviadas, todas OK.",
+            default => "Etapa {$etapa} ({$nombre}): {$resultado['fallidas']} de {$resultado['ejecutadas']} con error. Mira la respuesta de cada prueba.",
+        };
+
+        return $this->volver($empresa, $mensaje);
+    }
+
+    /**
+     * Cierra las operaciones del sistema en el punto de venta de una prueba,
+     * para que el SIN acepte emitir un CUIS nuevo (ver EjecutorPruebas).
+     */
+    public function cerrarOperaciones(Empresa $empresa, CasoPrueba $caso, EjecutorPruebas $ejecutor): RedirectResponse
+    {
+        abort_unless($caso->tipo === 'solicitudCuis', 404);
+
+        if (($bloqueo = $this->bloqueo($empresa, false)) !== null) {
+            return $this->volver($empresa, $bloqueo);
+        }
+
+        try {
+            $resultado = $ejecutor->cerrarOperacionesDePrueba($empresa, $caso);
+        } catch (SiatException $e) {
+            return $this->volver($empresa, 'No se pudo cerrar: '.$e->getMessage());
+        }
+
+        return $this->volver($empresa, $resultado['cerrado']
+            ? "Operaciones cerradas (CUIS {$resultado['cuis']}). Ahora ejecuta otra vez la prueba {$caso->orden}."
+            : "El SIN no cerro las operaciones: {$resultado['motivo']}");
+    }
+
+    /**
+     * Encola lo que le falta a UNA prueba (p. ej. las 50 de un catalogo), para
+     * completarla sin lanzar la etapa entera.
+     */
+    public function completarCaso(Empresa $empresa, CasoPrueba $caso, EjecutorPruebas $ejecutor): RedirectResponse
+    {
+        abort_if($caso->etapa === null, 404);
+
+        if (($bloqueo = $this->bloqueo($empresa, $caso->requiereCertificado())) !== null) {
+            return $this->volver($empresa, $bloqueo);
+        }
+
+        $encolados = $ejecutor->encolarCaso($empresa, $caso);
+
+        return $this->volver($empresa, $encolados === 0
+            ? "Prueba {$caso->orden}: ya estaba completa."
+            : "Prueba {$caso->orden}: {$encolados} ejecucion(es) en cola. Necesita php artisan queue:work.");
+    }
+
+    /**
+     * Motivo por el que no se puede correr, o null si se puede.
+     *
+     * Antes el bloqueo era global (token Y certificado para todo) y solo en el
+     * boton deshabilitado. Ahora es por lo que la prueba usa de verdad: pedir
+     * un CUIS solo necesita el token; el certificado, solo lo que firma.
+     */
+    private function bloqueo(Empresa $empresa, bool $necesitaCertificado): ?string
+    {
+        $requisitos = $this->requisitosPrevios($empresa);
+
+        if (! $requisitos['token']) {
+            return 'Falta el token delegado de la empresa: cargalo en la ficha antes de correr pruebas.';
+        }
+
+        if ($necesitaCertificado && ! $requisitos['certificado']) {
+            return 'Esta prueba firma documentos: carga el certificado .p12 antes de correrla.';
+        }
+
+        return null;
     }
 
     /**

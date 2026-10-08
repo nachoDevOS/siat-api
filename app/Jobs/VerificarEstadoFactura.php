@@ -69,7 +69,10 @@ class VerificarEstadoFactura implements ShouldQueue
     {
         $factura = Factura::with(['empresa', 'puntoVenta.sucursal', 'cufd'])->find($this->facturaId);
 
-        if ($factura === null || $factura->estado === Factura::ESTADO_VALIDADA) {
+        // Tampoco una ANULADA: si se anulo mientras este job esperaba en la
+        // cola, el estado que devuelve el SIN la pisaria y la anulacion se
+        // perderia de este lado.
+        if ($factura === null || in_array($factura->estado, [Factura::ESTADO_VALIDADA, Factura::ESTADO_ANULADA], true)) {
             return;
         }
 
@@ -77,7 +80,7 @@ class VerificarEstadoFactura implements ShouldQueue
 
         try {
             $respuesta = $fabrica->facturacion($factura->empresa)
-                ->verificarEstado($factura, (string) $cufd);
+                ->verificarEstado($factura, (string) $cufd, (string) $factura->puntoVenta->cuisVigente()?->codigo);
 
             $codigoEstado = (string) data_get($respuesta, 'RespuestaServicioFacturacion.codigoEstado');
             $descripcion = mb_strtoupper((string) data_get($respuesta, 'RespuestaServicioFacturacion.codigoDescripcion'));

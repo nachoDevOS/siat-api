@@ -46,12 +46,15 @@ class AnularFacturaEnSiat implements ShouldQueue
             return;
         }
 
-        $cufd = $factura->cufd?->codigo ?? optional($factura->puntoVenta->cufdVigente())->codigo;
+        // El SIN pide el CUFD VIGENTE para anular, no el de la emision (que a
+        // esta altura puede estar vencido).
+        $cufd = $factura->puntoVenta->cufdVigente()?->codigo ?? $factura->cufd?->codigo;
+        $cuis = $factura->puntoVenta->cuisVigente()?->codigo;
 
         try {
             $respuesta = RespuestaSiat::desde(
                 $fabrica->facturacion($factura->empresa)
-                    ->anular($factura, (int) $anulacion->motivo, (string) $cufd),
+                    ->anular($factura, (int) $anulacion->motivo, (string) $cufd, (string) $cuis),
             );
         } catch (SiatException $e) {
             // El SIAT no responde. Se reintenta respetando el backoff declarado

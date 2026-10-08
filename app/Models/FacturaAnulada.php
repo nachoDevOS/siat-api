@@ -20,6 +20,9 @@ class FacturaAnulada extends Model
     /** El SIN la rechazo: la factura sigue vigente ante el SIN. */
     public const ESTADO_RECHAZADA = 'RECHAZADA';
 
+    /** La anulacion se revirtio ante el SIN: la factura volvio a ser valida. */
+    public const ESTADO_REVERTIDA = 'REVERTIDA';
+
     protected $table = 'facturas_anuladas';
 
     protected $guarded = ['id'];

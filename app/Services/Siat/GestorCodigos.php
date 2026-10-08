@@ -34,6 +34,20 @@ class GestorCodigos
             ->codigos($puntoVenta->sucursal->empresa)
             ->solicitarCuis($puntoVenta);
 
+        return $this->guardarCuis($puntoVenta, $respuesta);
+    }
+
+    /**
+     * Guarda el CUIS de una respuesta del SIN ya obtenida.
+     *
+     * Separado de solicitarCuis() para el piloto: ahi hace falta mirar la
+     * respuesta cruda —si 'transaccion' vino en false, el SIN devolvio el CUIS
+     * que ya existia y NO cuenta la prueba— sin dejar de guardar el codigo.
+     *
+     * @throws SiatException si la respuesta no trae codigo.
+     */
+    public function guardarCuis(PuntoVenta $puntoVenta, mixed $respuesta): Cuis
+    {
         $codigo = (string) data_get($respuesta, 'RespuestaCuis.codigo');
 
         if (blank($codigo)) {
@@ -77,6 +91,22 @@ class GestorCodigos
             ->codigos($puntoVenta->sucursal->empresa)
             ->solicitarCufd($puntoVenta, $cuis->codigo);
 
+        return $this->guardarCufd($puntoVenta, $cuis, $respuesta);
+    }
+
+    /**
+     * Guarda el CUFD de una respuesta del SIN ya obtenida.
+     *
+     * Separado de solicitarCufd() por lo mismo que guardarCuis(): el piloto
+     * necesita mirar 'transaccion' en la respuesta cruda sin dejar de guardar
+     * el codigo, que es el que hay que usar para facturar.
+     *
+     * @param  Cuis  $cuis  CUIS con el que se pidio: queda atado al CUFD.
+     *
+     * @throws SiatException si faltan codigo o codigo de control.
+     */
+    public function guardarCufd(PuntoVenta $puntoVenta, Cuis $cuis, mixed $respuesta): Cufd
+    {
         $codigo = (string) data_get($respuesta, 'RespuestaCufd.codigo');
         $codigoControl = (string) data_get($respuesta, 'RespuestaCufd.codigoControl');
 

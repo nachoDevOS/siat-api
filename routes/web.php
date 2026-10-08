@@ -89,7 +89,18 @@ Route::prefix('admin')->name('admin.')->middleware('auth')->group(function () {
 
     // Panel de pruebas piloto (fase 3).
     Route::get('empresas/{empresa}/pruebas', [PruebaPilotoController::class, 'show'])->name('pruebas.show');
-    Route::post('empresas/{empresa}/pruebas', [PruebaPilotoController::class, 'ejecutar'])->name('pruebas.ejecutar');
+    // Una etapa entera del portal del SIN (I = Obtencion de CUIS, ...). Va
+    // antes de {caso} para que 'etapas' no se tome como id de caso.
+    Route::post('empresas/{empresa}/pruebas/etapas/{etapa}', [PruebaPilotoController::class, 'ejecutarEtapa'])
+        ->whereNumber('etapa')
+        ->name('pruebas.etapa');
+    // Destraba una prueba de CUIS: el SIN no emite otro mientras haya uno
+    // vigente. Cierra las operaciones del sistema en ese punto de venta.
+    Route::post('empresas/{empresa}/pruebas/{caso}/cerrar-operaciones', [PruebaPilotoController::class, 'cerrarOperaciones'])
+        ->name('pruebas.cerrar-operaciones');
+    // Encola lo que le falta a una prueba de etapa (ej: las 50 de un catalogo).
+    Route::post('empresas/{empresa}/pruebas/{caso}/completar', [PruebaPilotoController::class, 'completarCaso'])
+        ->name('pruebas.completar');
     // Un solo paso, para reintentar el que fallo sin repetir los anteriores.
     Route::post('empresas/{empresa}/pruebas/{caso}', [PruebaPilotoController::class, 'ejecutarCaso'])
         ->name('pruebas.caso');

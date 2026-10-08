@@ -28,23 +28,37 @@ class EnviarPaqueteContingencia implements ShouldQueue
 
     public function handle(ArmadorPaquete $armador, FabricaServicios $fabrica): void
     {
-        $paquete = Paquete::with(['empresa', 'puntoVenta.sucursal'])->find($this->paqueteId);
+        $paquete = Paquete::with(['empresa', 'puntoVenta.sucursal', 'evento'])->find($this->paqueteId);
 
         if ($paquete === null || $paquete->estado === 'ENVIADO') {
             return;
         }
 
-        $xml = $armador->armar($paquete);
+        $tar = $armador->armar($paquete);
 
         // El try cubre SOLO la llamada: lo que se reintenta es un SIAT que no
         // responde, nada mas.
         try {
             // Codigos del SIN, no ids internos de nuestras tablas.
+            //
+            // Todos los campos de solicitudRecepcionPaquete del WSDL. Antes solo
+            // viajaban sucursal y punto de venta y ext-soap cortaba sin enviar.
             $respuesta = RespuestaSiat::desde(
                 $fabrica->facturacion($paquete->empresa)->recepcionarPaquete([
                     'codigoSucursal' => $paquete->puntoVenta->sucursal->codigo_sucursal,
                     'codigoPuntoVenta' => $paquete->puntoVenta->codigo_punto_venta,
-                ], $xml),
+                    'codigoDocumentoSector' => config('siat.codigos.documento_sector'),
+                    'codigoEmision' => Factura::EMISION_CONTINGENCIA,
+                    'tipoFacturaDocumento' => config('siat.codigos.tipo_factura_documento'),
+                    'cufd' => (string) $paquete->puntoVenta->cufdVigente()?->codigo,
+                    'cuis' => (string) $paquete->puntoVenta->cuisVigente()?->codigo,
+                    // El CAFC es de la modalidad computarizada: aca no aplica.
+                    'cafc' => null,
+                    'cantidadFacturas' => $paquete->cantidad_facturas,
+                    // El codigo con el que el SIN registro el evento: es lo que
+                    // justifica que estas facturas se emitieran fuera de linea.
+                    'codigoEvento' => $paquete->evento?->codigo_recepcion,
+                ], $tar),
             );
         } catch (SiatException $e) {
             // El SIAT no respondio. Se respeta el backoff declarado del job en

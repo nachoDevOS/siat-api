@@ -21,6 +21,41 @@ class CasoPrueba extends Model
 
     public const FASE_PILOTO = 3;
 
+    /**
+     * Etapas del portal del SIN (Seguimiento de Autorizacion de Sistemas), con
+     * el nombre que muestra el portal. Se agregan a medida que se implementan.
+     *
+     * @var array<int, string>
+     */
+    public const ETAPAS = [
+        1 => 'Obtencion de CUIS',
+        2 => 'Sincronizacion de Catalogos',
+        3 => 'Obtencion CUFD',
+        4 => 'Consumo de metodos de emision individual',
+        5 => 'Registro de Eventos Significativos',
+        6 => 'Consumo de metodos de emision de paquetes',
+        7 => 'Anulacion',
+        8 => 'Firma Digital',
+        11 => 'Reversion',
+    ];
+
+    /**
+     * Tipos que firman un documento: sin certificado .p12 activo no pueden
+     * correr. El resto (codigos, catalogos, consultas) solo necesita el token,
+     * asi que exigir el certificado ahi bloqueaba etapas que no lo usan.
+     *
+     * @var list<string>
+     */
+    private const TIPOS_QUE_FIRMAN = [
+        'recepcionFactura',
+        'recepcionFacturaDescuento',
+        'recepcionFacturaNit',
+        'anulacionFactura',
+        'recepcionPaquete',
+        'emisionIndividual',
+        'paqueteContingencia',
+    ];
+
     protected $table = 'casos_prueba';
 
     protected $guarded = ['id'];
@@ -30,7 +65,14 @@ class CasoPrueba extends Model
         return [
             'payload_ejemplo' => 'array',
             'obligatorio' => 'boolean',
+            'etapa' => 'integer',
+            'pruebas_esperadas' => 'integer',
         ];
+    }
+
+    public function requiereCertificado(): bool
+    {
+        return in_array($this->tipo, self::TIPOS_QUE_FIRMAN, true);
     }
 
     public function ejecuciones(): HasMany

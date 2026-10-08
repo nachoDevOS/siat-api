@@ -51,14 +51,22 @@ class FirmadorXml
         // 2. Armar el SignedInfo con esa referencia.
         $signedInfo = $this->construirSignedInfo($doc, $digestDocumento);
 
-        // 3. Canonicalizar el SignedInfo y firmarlo con la clave privada.
-        $c14nSignedInfo = $signedInfo->C14N();
-        openssl_sign($c14nSignedInfo, $firmaBinaria, $clavePrivada, OPENSSL_ALGO_SHA256);
-        $signatureValue = base64_encode($firmaBinaria);
-
-        // 4. Armar el bloque <Signature> completo e incrustarlo en el documento.
-        $signature = $this->construirSignature($doc, $signedInfo, $signatureValue, $certX509);
+        // 3. Colgar el <Signature> del documento ANTES de canonicalizar el
+        //    SignedInfo. El verificador lo canonicaliza en su lugar, donde
+        //    hereda los namespaces de la raiz (xmlns:xsi). Canonicalizado suelto
+        //    salian otros bytes y la firma no verificaba en ningun lado:
+        //    comprobado con openssl_verify sobre el documento ya firmado.
+        $signature = $doc->createElementNS(self::NS_DSIG, 'Signature');
+        $signature->appendChild($signedInfo);
         $doc->documentElement->appendChild($signature);
+
+        // 4. Canonicalizar el SignedInfo en contexto y firmarlo.
+        if (! openssl_sign($signedInfo->C14N(), $firmaBinaria, $clavePrivada, OPENSSL_ALGO_SHA256)) {
+            throw new SiatException('No se pudo firmar el documento con la clave del certificado.');
+        }
+
+        // 5. Completar el <Signature> con el valor y el certificado.
+        $this->completarSignature($doc, $signature, base64_encode($firmaBinaria), $certX509);
 
         return $doc->saveXML();
     }
@@ -126,17 +134,12 @@ class FirmadorXml
         return $signedInfo;
     }
 
-    private function construirSignature(
+    private function completarSignature(
         DOMDocument $doc,
-        \DOMElement $signedInfo,
+        \DOMElement $signature,
         string $signatureValue,
         string $certX509,
-    ): \DOMElement {
-        $signature = $doc->createElementNS(self::NS_DSIG, 'Signature');
-
-        // El SignedInfo ya construido se mueve dentro del Signature.
-        $signature->appendChild($signedInfo);
-
+    ): void {
         $sigValue = $doc->createElementNS(self::NS_DSIG, 'SignatureValue');
         $sigValue->appendChild($doc->createTextNode($signatureValue));
         $signature->appendChild($sigValue);
@@ -157,8 +160,6 @@ class FirmadorXml
         // contrastarse contra un XML firmado de ejemplo oficial del SIN. Un
         // bloque con la estructura equivocada hace rechazar TODAS las facturas,
         // que es peor que la firma XML-DSig base que hoy se genera.
-
-        return $signature;
     }
 
     /**

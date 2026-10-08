@@ -29,14 +29,7 @@ class ServicioFacturacion extends ServicioBase
      */
     public function recepcionarFactura(Factura $factura, string $cufd, string $cuis): mixed
     {
-        $solicitud = $this->solicitudBase();
-        $solicitud['codigoSucursal'] = $factura->puntoVenta->sucursal->codigo_sucursal;
-        $solicitud['codigoPuntoVenta'] = $factura->puntoVenta->codigo_punto_venta;
-        $solicitud['codigoDocumentoSector'] = $factura->codigo_documento_sector;
-        $solicitud['codigoEmision'] = $factura->tipo_emision;
-        $solicitud['cufd'] = $cufd;
-        $solicitud['cuis'] = $cuis;
-        $solicitud['tipoFacturaDocumento'] = config('siat.codigos.tipo_factura_documento');
+        $solicitud = $this->cabeceraDeFactura($factura, $cufd, $cuis);
         $solicitud['fechaEnvio'] = now()->format('Y-m-d\TH:i:s.v');
 
         // El SIN recibe el XML comprimido en gzip, y el hash es EL DEL GZIP,
@@ -54,13 +47,9 @@ class ServicioFacturacion extends ServicioBase
     /**
      * Consulta el estado de una factura por su CUF.
      */
-    public function verificarEstado(Factura $factura, string $cufd): mixed
+    public function verificarEstado(Factura $factura, string $cufd, string $cuis): mixed
     {
-        $solicitud = $this->solicitudBase();
-        $solicitud['codigoSucursal'] = $factura->puntoVenta->sucursal->codigo_sucursal;
-        $solicitud['codigoPuntoVenta'] = $factura->puntoVenta->codigo_punto_venta;
-        $solicitud['codigoDocumentoSector'] = $factura->codigo_documento_sector;
-        $solicitud['cufd'] = $cufd;
+        $solicitud = $this->cabeceraDeFactura($factura, $cufd, $cuis);
         $solicitud['cuf'] = $factura->cuf;
 
         return $this->invocar('compra_venta', 'verificacionEstadoFactura', [
@@ -70,19 +59,35 @@ class ServicioFacturacion extends ServicioBase
 
     /**
      * Anula una factura ya validada, dentro del plazo permitido.
+     *
+     * @param  string  $cufd  CUFD VIGENTE del punto de venta (el portal pide "su
+     *                        CUFD valido"), no el que se uso al emitir.
      */
-    public function anular(Factura $factura, int $motivo, string $cufd): mixed
+    public function anular(Factura $factura, int $motivo, string $cufd, string $cuis): mixed
     {
-        $solicitud = $this->solicitudBase();
-        $solicitud['codigoSucursal'] = $factura->puntoVenta->sucursal->codigo_sucursal;
-        $solicitud['codigoPuntoVenta'] = $factura->puntoVenta->codigo_punto_venta;
-        $solicitud['codigoDocumentoSector'] = $factura->codigo_documento_sector;
-        $solicitud['cufd'] = $cufd;
+        $solicitud = $this->cabeceraDeFactura($factura, $cufd, $cuis);
         $solicitud['cuf'] = $factura->cuf;
         $solicitud['codigoMotivo'] = $motivo;
 
         return $this->invocar('compra_venta', 'anulacionFactura', [
             'SolicitudServicioAnulacionFactura' => $solicitud,
+        ]);
+    }
+
+    /**
+     * Revierte la anulacion de una factura: vuelve a quedar valida ante el SIN.
+     *
+     * VERIFICADO CONTRA EL WSDL DEL PILOTO (2026-10-08): struct
+     * solicitudReversionAnulacion = la base de recepcion + cuf. No lleva motivo,
+     * aunque el portal lo liste entre los parametros de la prueba.
+     */
+    public function revertirAnulacion(Factura $factura, string $cufd, string $cuis): mixed
+    {
+        $solicitud = $this->cabeceraDeFactura($factura, $cufd, $cuis);
+        $solicitud['cuf'] = $factura->cuf;
+
+        return $this->invocar('compra_venta', 'reversionAnulacionFactura', [
+            'SolicitudServicioReversionAnulacionFactura' => $solicitud,
         ]);
     }
 
@@ -112,9 +117,37 @@ class ServicioFacturacion extends ServicioBase
     {
         $solicitud = array_merge($this->solicitudBase(), $datos);
 
-        return $this->invocar('compra_venta', 'validacionRecepcionPaquete', [
+        // El WSDL del piloto la llama validacionRecepcionPaqueteFactura (se
+        // listo con siat:inspeccionar-wsdl el 2026-10-07): con el nombre de
+        // antes ext-soap cortaba con "Function not found".
+        return $this->invocar('compra_venta', 'validacionRecepcionPaqueteFactura', [
             'SolicitudServicioValidacionRecepcionPaquete' => $solicitud,
         ]);
+    }
+
+    /**
+     * Campos de la struct base 'solicitudRecepcion' del WSDL, que heredan la
+     * recepcion, la anulacion y la verificacion de estado.
+     *
+     * VERIFICADO CONTRA EL WSDL DEL PILOTO (2026-10-07). Antes la anulacion y la
+     * verificacion no mandaban codigoEmision, cuis ni tipoFacturaDocumento, y
+     * ext-soap corta sin enviar cuando falta un campo de la struct: ninguna de
+     * las dos podia llegar al SIN.
+     *
+     * @return array<string, mixed>
+     */
+    private function cabeceraDeFactura(Factura $factura, string $cufd, string $cuis): array
+    {
+        $solicitud = $this->solicitudBase();
+        $solicitud['codigoSucursal'] = $factura->puntoVenta->sucursal->codigo_sucursal;
+        $solicitud['codigoPuntoVenta'] = $factura->puntoVenta->codigo_punto_venta;
+        $solicitud['codigoDocumentoSector'] = $factura->codigo_documento_sector;
+        $solicitud['codigoEmision'] = $factura->tipo_emision;
+        $solicitud['tipoFacturaDocumento'] = config('siat.codigos.tipo_factura_documento');
+        $solicitud['cufd'] = $cufd;
+        $solicitud['cuis'] = $cuis;
+
+        return $solicitud;
     }
 
     /**

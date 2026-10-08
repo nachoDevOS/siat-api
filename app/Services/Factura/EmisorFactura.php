@@ -37,11 +37,15 @@ class EmisorFactura
      * Emite una factura para una empresa a partir de la venta normalizada.
      *
      * @param  array<string, mixed>  $venta
+     * @param  bool  $encolarEnvio  false = no despachar EnviarFacturaAlSiat. Lo
+     *                              usa el piloto, que envia en el momento para
+     *                              leer la respuesta del SIN; encolarlo ademas
+     *                              mandaria la misma factura dos veces.
      *
      * @throws FacturaInvalidaException si la venta no pasa las reglas locales.
      * @throws CufdVencidoException si el punto de venta no tiene CUFD vigente.
      */
-    public function emitir(Empresa $empresa, array $venta): Factura
+    public function emitir(Empresa $empresa, array $venta, bool $encolarEnvio = true): Factura
     {
         $referencia = $venta['referencia_externa'] ?? null;
 
@@ -86,7 +90,7 @@ class EmisorFactura
         );
 
         try {
-            return $this->emitirEnTransaccion($empresa, $puntoVenta, $cufd, $venta, $totales, $actividades);
+            return $this->emitirEnTransaccion($empresa, $puntoVenta, $cufd, $venta, $totales, $actividades, $encolarEnvio);
         } catch (UniqueConstraintViolationException $e) {
             // Dos peticiones con la misma referencia entraron a la vez: la que
             // perdio la carrera devuelve la factura que gano, no un error.
@@ -116,10 +120,16 @@ class EmisorFactura
         array $venta,
         array $totales,
         array $actividades,
+        bool $encolarEnvio,
     ): Factura {
-        return DB::transaction(function () use ($empresa, $puntoVenta, $cufd, $venta, $totales, $actividades) {
+        return DB::transaction(function () use ($empresa, $puntoVenta, $cufd, $venta, $totales, $actividades, $encolarEnvio) {
             $numero = $this->reservarNumero($puntoVenta);
-            $fecha = now();
+            // Sin milisegundos A PROPOSITO. La fecha entra al CUF con ellos
+            // (YmdHisv) y viaja en el XML; pero fecha_emision se guarda como
+            // datetime de segundos y el XML salia con .000 mientras el CUF
+            // llevaba los reales: el SIN recalcula el CUF desde el XML y lo
+            // rechazaba. Con .000 en los dos lados no pueden diferir.
+            $fecha = now()->startOfSecond();
 
             // Con un evento de contingencia abierto, esta factura se emite
             // FUERA DE LINEA. Hay que saberlo antes de calcular el CUF: el tipo
@@ -166,7 +176,7 @@ class EmisorFactura
             // Bajo contingencia no se intenta el envio individual: el SIAT no
             // esta respondiendo y estas facturas viajan juntas en el paquete que
             // arma GestorContingencia::recuperar() cuando el servicio vuelve.
-            if (! $enContingencia) {
+            if (! $enContingencia && $encolarEnvio) {
                 // Del paso 12 en adelante es asincrono: el worker envia al SIAT.
                 // afterCommit para que el worker no busque una factura que
                 // todavia no existe (o que un rollback posterior deje sin existir).

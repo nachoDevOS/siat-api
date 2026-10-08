@@ -7,6 +7,7 @@ use App\Jobs\EnviarPaqueteContingencia;
 use App\Models\EventoSignificativo;
 use App\Services\Contingencia\GestorContingencia;
 use App\Services\Siat\FabricaServicios;
+use App\Services\Siat\GestorCodigos;
 use App\Services\Siat\RespuestaSiat;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
@@ -28,6 +29,7 @@ class SiatRecuperarContingencia extends Command
     public function __construct(
         private readonly GestorContingencia $contingencia,
         private readonly FabricaServicios $fabrica,
+        private readonly GestorCodigos $codigos,
     ) {
         parent::__construct();
     }
@@ -124,16 +126,38 @@ class SiatRecuperarContingencia extends Command
         }
 
         try {
+            // El WSDL exige cuis y el CUFD VIGENTE ademas del CUFD del evento, y
+            // los dos CUFD tienen que ser distintos: si el vigente sigue siendo
+            // el de la caida, se pide uno nuevo. Antes no se mandaban y ext-soap
+            // cortaba sin enviar: ningun evento llegaba al SIN.
+            $puntoVenta = $evento->puntoVenta;
+            $cuis = $puntoVenta->cuisVigente();
+            $cufd = $puntoVenta->cufdVigente();
+
+            if ($cuis === null) {
+                throw new SiatException("El punto de venta {$puntoVenta->codigo_punto_venta} no tiene CUIS vigente.");
+            }
+
+            if ($cufd === null || $cufd->codigo === $evento->cufd_evento) {
+                $cufd = $this->codigos->solicitarCufd($puntoVenta);
+            }
+
             $respuesta = RespuestaSiat::desde(
                 $this->fabrica->operaciones($evento->empresa)->registrarEvento([
-                    'codigoSucursal' => $evento->puntoVenta->sucursal->codigo_sucursal,
-                    'codigoPuntoVenta' => $evento->puntoVenta->codigo_punto_venta,
+                    'codigoSucursal' => $puntoVenta->sucursal->codigo_sucursal,
+                    'codigoPuntoVenta' => $puntoVenta->codigo_punto_venta,
                     'codigoMotivoEvento' => $evento->codigo_evento,
                     'descripcion' => $evento->descripcion,
+                    'cuis' => $cuis->codigo,
+                    'cufd' => $cufd->codigo,
                     'cufdEvento' => $evento->cufd_evento,
                     'fechaHoraInicioEvento' => $evento->fecha_inicio?->format('Y-m-d\TH:i:s.v'),
                     'fechaHoraFinEvento' => now()->format('Y-m-d\TH:i:s.v'),
                 ]),
+                // La respuesta del evento no viene bajo RespuestaServicioFacturacion
+                // sino bajo RespuestaListaEventos (WSDL del piloto): leida con la
+                // raiz equivocada, todo evento parecia rechazado.
+                'RespuestaListaEventos',
             );
         } catch (SiatException $e) {
             $this->warn("Evento {$evento->id}: fallo el registro en el SIN ({$e->getMessage()}).");
@@ -147,7 +171,7 @@ class SiatRecuperarContingencia extends Command
             return false;
         }
 
-        $evento->update(['codigo_recepcion' => $respuesta->codigoRecepcion]);
+        $evento->update(['codigo_recepcion' => data_get($respuesta->crudo, 'codigoRecepcionEventoSignificativo')]);
 
         return true;
     }

@@ -149,9 +149,9 @@ class RequisitosEtapa
                 'detalle' => 'Dura 24 horas y su codigo de control entra al calculo del CUF.',
             ],
             [
-                'titulo' => "Casos del piloto superados ({$progreso['exitosos']}/{$progreso['total']})",
+                'titulo' => "Pruebas del piloto correctas ({$progreso['exitosos']}/{$progreso['total']})",
                 'cumplido' => $progreso['total'] > 0 && $progreso['exitosos'] === $progreso['total'],
-                'detalle' => 'Los casos obligatorios de la fase piloto deben quedar en EXITOSO.',
+                'detalle' => 'Todas las pruebas de todas las etapas del portal deben llegar a sus esperadas.',
             ],
         ];
     }
@@ -193,20 +193,21 @@ class RequisitosEtapa
      */
     public function progresoPiloto(Empresa $empresa): array
     {
-        $casos = CasoPrueba::where('fase', CasoPrueba::FASE_PILOTO)->get();
+        // Se mide como el portal del SIN: pruebas correctas sobre esperadas,
+        // sumando todas las etapas. Las de mas en una prueba no compensan las
+        // que faltan en otra, por eso cada una se corta en sus esperadas.
+        $casos = CasoPrueba::where('fase', CasoPrueba::FASE_PILOTO)->whereNotNull('etapa')->get();
 
-        // Solo cuenta la ULTIMA ejecucion de cada caso: un caso que fallo y
-        // despues paso, paso.
-        $ultimas = EjecucionPrueba::where('empresa_id', $empresa->id)
-            ->get()
+        $correctas = EjecucionPrueba::where('empresa_id', $empresa->id)
+            ->where('estado', EjecucionPrueba::ESTADO_EXITOSO)
+            ->selectRaw('caso_id, count(*) as total')
             ->groupBy('caso_id')
-            ->map(fn ($grupo) => $grupo->sortByDesc('ejecutado_en')->first());
+            ->pluck('total', 'caso_id');
 
-        $exitosos = $casos->filter(
-            fn (CasoPrueba $caso): bool => ($ultimas[$caso->id] ?? null)?->estado === EjecucionPrueba::ESTADO_EXITOSO,
-        )->count();
-
-        $total = $casos->count();
+        $total = (int) $casos->sum('pruebas_esperadas');
+        $exitosos = (int) $casos->sum(
+            fn (CasoPrueba $caso): int => min((int) ($correctas[$caso->id] ?? 0), $caso->pruebas_esperadas),
+        );
 
         return [
             'exitosos' => $exitosos,
