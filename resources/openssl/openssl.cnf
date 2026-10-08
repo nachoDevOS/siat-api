@@ -1,0 +1,10 @@
+# Configuracion minima de OpenSSL para GeneradorCertificadoPrueba.
+#
+# PHP en Windows no trae un openssl.cnf en la ruta que espera OpenSSL, y sin el
+# openssl_pkey_new() / openssl_csr_new() fallan en silencio. El subject del
+# certificado se arma por codigo, asi que alcanza con declarar la seccion.
+
+[ req ]
+distinguished_name = req_distinguished_name
+
+[ req_distinguished_name ]

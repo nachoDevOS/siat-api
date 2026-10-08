@@ -139,6 +139,16 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | openssl.cnf para generar certificados de prueba
+    |--------------------------------------------------------------------------
+    | PHP en Windows (Laragon, XAMPP) no encuentra un openssl.cnf por defecto y
+    | sin el no se puede generar ni una clave. Se usa uno minimo del proyecto;
+    | se puede apuntar a otro desde el .env.
+    */
+    'openssl_config' => env('SIAT_OPENSSL_CONF', resource_path('openssl/openssl.cnf')),
+
+    /*
+    |--------------------------------------------------------------------------
     | Timeouts del SoapClient (segundos)
     |--------------------------------------------------------------------------
     | El SIAT puede tardar entre 0.8 y 4 segundos. Damos margen para no cortar

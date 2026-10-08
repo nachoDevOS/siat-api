@@ -77,9 +77,13 @@ class CertificadoFactory extends Factory
             return self::$p12EnCache;
         }
 
-        $clave = openssl_pkey_new(['private_key_bits' => 2048]);
-        $csr = openssl_csr_new(['commonName' => 'certificado-de-prueba'], $clave);
-        $x509 = openssl_csr_sign($csr, null, $clave, 365);
+        // Mismo openssl.cnf que GeneradorCertificadoPrueba: sin el, en Windows
+        // no se genera ni la clave.
+        $opciones = ['config' => config('siat.openssl_config')];
+
+        $clave = openssl_pkey_new($opciones + ['private_key_bits' => 2048]);
+        $csr = openssl_csr_new(['commonName' => 'certificado-de-prueba'], $clave, $opciones);
+        $x509 = openssl_csr_sign($csr, null, $clave, 365, $opciones);
 
         openssl_pkcs12_export($x509, $p12, $clave, self::PASSPHRASE_PRUEBA);
 

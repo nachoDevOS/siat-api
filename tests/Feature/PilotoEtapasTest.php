@@ -678,6 +678,10 @@ function empresaConDosCufd(): array
     $anterior = Cufd::factory()->create(['punto_venta_id' => $pv1->id, 'codigo' => 'CUFD-VIEJO']);
     $actual = Cufd::factory()->create(['punto_venta_id' => $pv1->id, 'codigo' => 'CUFD-NUEVO']);
 
+    // Los CUFD ya llevan una hora emitidos: hay ventana para ubicar eventos
+    // despues de su emision, como exige el SIN.
+    test()->travel(1)->hours();
+
     return [$empresa, $anterior, $actual];
 }
 
@@ -700,12 +704,12 @@ test('el seeder carga la etapa V: 7 motivos x 2 puntos de venta, 5 cada uno', fu
 });
 
 test('un evento va con el CUFD vigente, el anterior como cufdEvento y un rango ya terminado', function () {
-    [$empresa] = empresaConDosCufd();
+    [$empresa, $anterior] = empresaConDosCufd();
     $caso = CasoPrueba::where('etapa', 5)->where('orden', 1)->sole();
 
     $operaciones = Mockery::mock(ServicioOperaciones::class);
     $operaciones->shouldReceive('registrarEvento')->once()
-        ->with(Mockery::on(function (array $datos): bool {
+        ->with(Mockery::on(function (array $datos) use ($anterior): bool {
             $inicio = Carbon\Carbon::parse($datos['fechaHoraInicioEvento']);
             $fin = Carbon\Carbon::parse($datos['fechaHoraFinEvento']);
 
@@ -715,7 +719,8 @@ test('un evento va con el CUFD vigente, el anterior como cufdEvento y un rango y
                 && $datos['codigoMotivoEvento'] === 1
                 && $datos['codigoPuntoVenta'] === 1
                 && $inicio->diffInMinutes($fin) == 1
-                && $fin->lessThanOrEqualTo(now()->subMinutes(10));
+                && $inicio->greaterThan($anterior->created_at)
+                && $fin->lessThanOrEqualTo(now()->subMinutes(2));
         }))
         ->andReturn(eventoAceptado(555));
     codigosSimulados(Mockery::mock(ServicioCodigos::class), $operaciones);
@@ -745,9 +750,71 @@ test('los eventos de un mismo punto de venta no se pisan entre si', function () 
         $this->post(route('admin.pruebas.caso', [$empresa, $caso]));
     }
 
-    // Cada uno termina antes de que empiece el anterior.
-    expect($rangos[1][1] < $rangos[0][0])->toBeTrue()
-        ->and($rangos[2][1] < $rangos[1][0])->toBeTrue();
+    // Van hacia adelante: cada uno empieza despues de que termina el anterior.
+    expect($rangos[1][0] > $rangos[0][1])->toBeTrue()
+        ->and($rangos[2][0] > $rangos[1][1])->toBeTrue();
+});
+
+test('ningun evento empieza antes de la emision del CUFD del evento (error 984 del SIN)', function () {
+    [$empresa, $anterior] = empresaConDosCufd();
+    $caso = CasoPrueba::where('etapa', 5)->where('orden', 1)->sole();
+
+    $inicios = [];
+    $operaciones = Mockery::mock(ServicioOperaciones::class);
+    $operaciones->shouldReceive('registrarEvento')
+        ->andReturnUsing(function (array $datos) use (&$inicios) {
+            $inicios[] = Carbon\Carbon::parse($datos['fechaHoraInicioEvento']);
+
+            return eventoAceptado();
+        });
+    codigosSimulados(Mockery::mock(ServicioCodigos::class), $operaciones);
+
+    // Antes, a partir del ~20 los rangos cruzaban hacia atras la emision.
+    foreach (range(1, 30) as $i) {
+        $this->post(route('admin.pruebas.caso', [$empresa, $caso]));
+    }
+
+    expect($inicios)->toHaveCount(30);
+
+    foreach ($inicios as $inicio) {
+        expect($inicio->greaterThan($anterior->created_at))->toBeTrue();
+    }
+});
+
+test('rellena el hueco entre la emision del CUFD y los eventos ya registrados', function () {
+    [$empresa, $anterior] = empresaConDosCufd();
+    $caso = CasoPrueba::where('etapa', 5)->where('orden', 1)->sole();
+
+    // Un evento viejo ocupa el medio de la ventana.
+    $ocupadoDesde = $anterior->created_at->copy()->addMinutes(30);
+    EjecucionPrueba::create(['empresa_id' => $empresa->id, 'caso_id' => $caso->id, 'estado' => EjecucionPrueba::ESTADO_EXITOSO,
+        'respuesta' => ['inicio' => $ocupadoDesde->toDateTimeString(), 'fin' => $ocupadoDesde->copy()->addMinute()->toDateTimeString()],
+        'ejecutado_en' => now()]);
+
+    $operaciones = Mockery::mock(ServicioOperaciones::class);
+    $operaciones->shouldReceive('registrarEvento')->once()
+        ->with(Mockery::on(fn (array $d) => Carbon\Carbon::parse($d['fechaHoraFinEvento'])->lessThan($ocupadoDesde)))
+        ->andReturn(eventoAceptado());
+    codigosSimulados(Mockery::mock(ServicioCodigos::class), $operaciones);
+
+    $this->post(route('admin.pruebas.caso', [$empresa, $caso]));
+
+    expect(EjecucionPrueba::latest('id')->first()->estado)->toBe(EjecucionPrueba::ESTADO_EXITOSO);
+});
+
+test('sin ventana de tiempo no llama al SIN y avisa cuanto esperar', function () {
+    [$empresa] = empresaConDosCufd();
+    // Vuelve al momento de la emision: ningun evento puede haber terminado.
+    test()->travelBack();
+    $caso = CasoPrueba::where('etapa', 5)->where('orden', 1)->sole();
+
+    $operaciones = Mockery::mock(ServicioOperaciones::class);
+    $operaciones->shouldNotReceive('registrarEvento');
+    codigosSimulados(Mockery::mock(ServicioCodigos::class), $operaciones);
+
+    $this->post(route('admin.pruebas.caso', [$empresa, $caso]));
+
+    expect(EjecucionPrueba::sole()->respuesta['error'])->toContain('Reintenta en');
 });
 
 test('un evento rechazado por el SIN queda FALLIDO con su motivo', function () {
@@ -770,6 +837,7 @@ test('sin CUFD anterior se pide uno nuevo y el que habia pasa a ser el del event
     $empresa = empresaConCuisEnPv1();
     $pv1 = PuntoVenta::where('codigo_punto_venta', 1)->sole();
     Cufd::factory()->create(['punto_venta_id' => $pv1->id, 'codigo' => 'CUFD-UNICO']);
+    $this->travel(1)->hours();
     $caso = CasoPrueba::where('etapa', 5)->where('orden', 1)->sole();
 
     $codigos = Mockery::mock(ServicioCodigos::class);
@@ -806,6 +874,9 @@ function empresaListaParaPaquetes(): Empresa
     $empresa = empresaListaParaFacturar();
     $pv1 = PuntoVenta::where('codigo_punto_venta', 1)->sole();
     Cufd::factory()->create(['punto_venta_id' => $pv1->id, 'codigo' => 'CUFD-ACTUAL', 'codigo_control' => 'CTRLACT']);
+
+    // Ventana para el evento despues de la emision del CUFD del evento.
+    test()->travel(1)->hours();
 
     return $empresa;
 }

@@ -34,7 +34,14 @@ class GeneradorCertificadoPrueba
             throw new SiatException('Solo se puede generar un certificado de prueba para una empresa en el ambiente de pruebas (2).');
         }
 
-        $clave = openssl_pkey_new(['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA]);
+        // Sin un openssl.cnf explicito, PHP en Windows no genera ni la clave.
+        $opciones = ['config' => config('siat.openssl_config'), 'digest_alg' => 'sha256'];
+
+        $clave = openssl_pkey_new($opciones + ['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA]);
+
+        if ($clave === false) {
+            throw new SiatException('OpenSSL no pudo generar la clave privada: '.$this->erroresOpenssl());
+        }
 
         // El titular es la empresa (razon social y NIT), como en un certificado
         // real; la organizacion avisa que es de prueba a quien lo inspeccione.
@@ -43,9 +50,13 @@ class GeneradorCertificadoPrueba
             'serialNumber' => (string) $empresa->nit,
             'organizationName' => 'AUTOFIRMADO - SOLO PRUEBAS',
             'countryName' => 'BO',
-        ], $clave, ['digest_alg' => 'sha256']);
+        ], $clave, $opciones);
 
-        $x509 = openssl_csr_sign($solicitud, null, $clave, self::DIAS_VIGENCIA, ['digest_alg' => 'sha256'], random_int(1, PHP_INT_MAX));
+        if ($solicitud === false) {
+            throw new SiatException('OpenSSL no pudo armar la solicitud del certificado: '.$this->erroresOpenssl());
+        }
+
+        $x509 = openssl_csr_sign($solicitud, null, $clave, self::DIAS_VIGENCIA, $opciones, random_int(1, PHP_INT_MAX));
 
         // La passphrase la elige el sistema: nadie la tiene que tipear, solo
         // protege el .p12 dentro de la base (que ademas va cifrado).
@@ -66,5 +77,19 @@ class GeneradorCertificadoPrueba
                 'activo' => true,
             ]);
         });
+    }
+
+    /**
+     * Vacia la cola de errores de OpenSSL en un solo texto para el mensaje.
+     */
+    private function erroresOpenssl(): string
+    {
+        $errores = [];
+
+        while (($error = openssl_error_string()) !== false) {
+            $errores[] = $error;
+        }
+
+        return implode(' | ', array_unique($errores)) ?: 'sin detalle';
     }
 }

@@ -464,7 +464,13 @@ class EjecutorPruebas
      * Minutos hacia atras desde ahora en los que termina, como tarde, un evento
      * de prueba. El SIN no acepta un evento que todavia no termino.
      */
-    private const MINUTOS_FIN_EVENTO = 10;
+    private const MINUTOS_FIN_EVENTO = 2;
+
+    /**
+     * Margen entre la emision del cufdEvento y el inicio del primer evento,
+     * por si el reloj del SIN y el nuestro no coinciden al segundo.
+     */
+    private const SEGUNDOS_TRAS_EMISION = 5;
 
     /**
      * Registra un evento significativo de la etapa V.
@@ -503,11 +509,17 @@ class EjecutorPruebas
             );
         }
 
+        // El MAS ANTIGUO de los vigentes, no el ultimo: el evento tiene que caer
+        // despues de que el SIN emitio el cufdEvento (si no, responde 984), asi
+        // que cuanto mas viejo, mas ventana de tiempo hay para ubicar los 140
+        // eventos de las etapas V y VI. Del mismo CUIS que el vigente, porque
+        // el SIN ata cada CUFD al CUIS que lo genero.
         $delEvento = $local->cufds()
             ->where('id', '<', $actual->id)
             ->where('codigo', '!=', $actual->codigo)
             ->where('fecha_vigencia', '>', now())
-            ->latest('id')
+            ->when($actual->cuis_id !== null, fn ($q) => $q->where('cuis_id', $actual->cuis_id))
+            ->oldest('id')
             ->first();
 
         // Sin uno anterior, el vigente pasa a ser el del evento y se pide otro.
@@ -519,7 +531,7 @@ class EjecutorPruebas
         // El CUIS va atado al CUFD vigente (ver PuntoVenta::cuisDe).
         $cuis = $local->cuisDe($actual);
 
-        [$inicio, $fin] = $this->rangoDeEvento($empresa, $codigoPuntoVenta);
+        [$inicio, $fin] = $this->rangoDeEvento($empresa, $codigoPuntoVenta, $delEvento);
 
         $respuesta = RespuestaSiat::desde(
             $this->fabrica->operaciones($empresa)->registrarEvento([
@@ -569,35 +581,80 @@ class EjecutorPruebas
     /**
      * Inicio y fin del proximo evento de prueba de un punto de venta.
      *
-     * Cada evento termina un segundo antes de que empiece el anterior de ese
-     * punto de venta: los rangos bajan en el tiempo sin depender de la hora en
-     * que corra cada job. Un segundo y no un minuto de separacion, porque las
-     * etapas V y VI juntas son 105 eventos por punto de venta y cada minuto de
-     * mas los aleja de la vigencia del CUFD del evento.
+     * El SIN exige que el evento caiga DENTRO de la vida del cufdEvento: uno
+     * que empieza antes de que ese CUFD se emitiera vuelve con "[984] EL EVENTO
+     * SIGNIFICATIVO NO CORRESPONDE AL CUFD DEL EVENTO REGISTRADO". Antes los
+     * eventos se apilaban hacia ATRAS desde ahora, un minuto cada uno, y a los
+     * ~20 cruzaban la emision del CUFD: desde ahi fallaban todos.
+     *
+     * Ahora van hacia ADELANTE: el primer hueco libre de un minuto despues de
+     * la emision del cufdEvento, sin pisar los eventos ya registrados de ese
+     * punto de venta, y que ya haya terminado.
      *
      * @return array{0: Carbon, 1: Carbon}
+     *
+     * @throws SiatException si todavia no hay hueco: hay que esperar.
      */
-    private function rangoDeEvento(Empresa $empresa, int $codigoPuntoVenta): array
+    private function rangoDeEvento(Empresa $empresa, int $codigoPuntoVenta, Cufd $cufdEvento): array
     {
         $casosDelPuntoVenta = CasoPrueba::whereIn('tipo', self::TIPOS_CON_EVENTO)->get()
             ->filter(fn (CasoPrueba $c): bool => (int) data_get($c->payload_ejemplo, 'codigoPuntoVenta') === $codigoPuntoVenta)
             ->pluck('id');
 
-        $primerInicio = EjecucionPrueba::where('empresa_id', $empresa->id)
+        $ocupados = EjecucionPrueba::where('empresa_id', $empresa->id)
             ->whereIn('caso_id', $casosDelPuntoVenta)
             ->where('estado', EjecucionPrueba::ESTADO_EXITOSO)
             ->get()
-            ->map(fn (EjecucionPrueba $e) => data_get($e->respuesta, 'inicio'))
-            ->filter()
-            ->min();
+            ->map(fn (EjecucionPrueba $e): array => [data_get($e->respuesta, 'inicio'), data_get($e->respuesta, 'fin')])
+            ->filter(fn (array $r): bool => filled($r[0]))
+            ->map(fn (array $r): array => [
+                Carbon::parse($r[0]),
+                // Las ejecuciones viejas solo guardaban el inicio.
+                filled($r[1]) ? Carbon::parse($r[1]) : Carbon::parse($r[0])->addMinute(),
+            ])
+            ->sortBy(fn (array $r) => $r[0]->getTimestamp())
+            ->values();
 
-        $fin = now()->startOfMinute()->subMinutes(self::MINUTOS_FIN_EVENTO);
+        $inicio = $this->emisionDe($cufdEvento)->addSeconds(self::SEGUNDOS_TRAS_EMISION);
 
-        if ($primerInicio !== null) {
-            $fin = $fin->min(Carbon::parse($primerInicio)->subSecond());
+        foreach ($ocupados as [$desde, $hasta]) {
+            // Entra entero antes de este evento: listo.
+            if ($inicio->copy()->addMinute()->lessThan($desde)) {
+                break;
+            }
+
+            if ($hasta->greaterThanOrEqualTo($inicio)) {
+                $inicio = $hasta->copy()->addSecond();
+            }
         }
 
-        return [$fin->copy()->subMinute(), $fin];
+        $fin = $inicio->copy()->addMinute();
+        $limite = now()->subMinutes(self::MINUTOS_FIN_EVENTO);
+
+        if ($fin->greaterThan($limite)) {
+            $espera = (int) ceil($limite->diffInSeconds($fin) / 60);
+
+            throw new SiatException(
+                "Todavia no hay lugar para otro evento en el punto de venta {$codigoPuntoVenta}: tiene que caer despues de la emision del CUFD del evento y ya haber terminado. Reintenta en {$espera} min.",
+            );
+        }
+
+        return [$inicio, $fin];
+    }
+
+    /**
+     * Momento en que el SIN emitio un CUFD.
+     *
+     * El SIN declara la vigencia (emision + 24 h); nuestro created_at puede
+     * diferir unos segundos por el reloj. Se toma el mas tardio de los dos.
+     */
+    private function emisionDe(Cufd $cufd): Carbon
+    {
+        $segunElSin = $cufd->fecha_vigencia?->copy()->subDay();
+        $segunNosotros = $cufd->created_at?->copy() ?? now();
+
+        return ($segunElSin !== null && $segunElSin->greaterThan($segunNosotros) ? $segunElSin : $segunNosotros)
+            ->startOfSecond();
     }
 
     /**
