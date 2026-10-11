@@ -86,7 +86,6 @@ class EmisorFactura
             $venta['items'],
             (float) ($venta['descuento_global'] ?? 0),
             (float) ($venta['gift_card'] ?? 0),
-            (float) ($venta['anticipo'] ?? 0),
         );
 
         try {
@@ -313,13 +312,13 @@ class EmisorFactura
             'comprador_razon_social' => $comprador['razon_social'],
             'comprador_email' => $comprador['email'] ?? null,
             'metodo_pago' => $venta['metodo_pago'],
-            'numero_tarjeta' => $venta['numero_tarjeta'] ?? null,
+            'numero_tarjeta' => $this->enmascararTarjeta($venta['numero_tarjeta'] ?? null),
+            'codigo_excepcion' => (int) ($venta['codigo_excepcion'] ?? 0),
             'moneda' => $venta['moneda'] ?? 1,
             'tipo_cambio' => $venta['tipo_cambio'] ?? 1,
             'subtotal' => $totales['subtotal'],
             'descuento_global' => $totales['descuento_global'],
             'gift_card' => $totales['gift_card'],
-            'anticipo' => $totales['anticipo'],
             'monto_total' => $totales['monto_total'],
             'monto_total_moneda' => $totales['monto_total'],
             'monto_total_sujeto_iva' => $totales['monto_total_sujeto_iva'],
@@ -356,6 +355,29 @@ class EmisorFactura
         }
 
         return $factura;
+    }
+
+    /**
+     * Deja solo los 4 primeros y los 4 ultimos digitos de la tarjeta, con
+     * ceros en el medio, que es como el SIN espera el numeroTarjeta.
+     *
+     * Se enmascara ANTES de guardar: el numero completo no debe quedar ni en
+     * la base ni en el XML firmado (que es permanente y viaja al SIN). Un
+     * numero de 8 digitos o menos ya viene parcial y se deja como esta.
+     */
+    private function enmascararTarjeta(?string $numero): ?string
+    {
+        $digitos = preg_replace('/\D/', '', (string) $numero);
+
+        if ($digitos === '') {
+            return null;
+        }
+
+        if (strlen($digitos) <= 8) {
+            return $digitos;
+        }
+
+        return substr($digitos, 0, 4).str_repeat('0', strlen($digitos) - 8).substr($digitos, -4);
     }
 
     private function buscarExistente(Empresa $empresa, ?string $referencia): ?Factura

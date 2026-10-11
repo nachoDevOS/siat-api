@@ -1,8 +1,10 @@
 <?php
 
+use App\Jobs\AnularFacturaEnSiat;
 use App\Jobs\EnviarFacturaAlSiat;
 use App\Jobs\VerificarEstadoFactura;
 use App\Models\Factura;
+use App\Models\FacturaAnulada;
 use Illuminate\Support\Facades\Schedule;
 
 /*
@@ -42,6 +44,24 @@ Schedule::call(function () {
         ->pluck('id')
         ->each(fn (int $id) => VerificarEstadoFactura::dispatch($id));
 })->everyFifteenMinutes()->name('verificar-enviadas')->withoutOverlapping();
+
+/*
+ * Cada 15 min: retoma las anulaciones que el SIN todavia no confirmo.
+ *
+ * El job agota sus cinco intentos en ~23 min (backoff 30/120/300/900) y deja la
+ * anulacion PENDIENTE si el SIAT siguio caido; sin esto la factura quedaba
+ * ANULADA de este lado y vigente ante el SIN para siempre. Se esperan 30 min
+ * y el job es unico por factura, asi que no se pisa con uno en vuelo.
+ */
+Schedule::call(function () {
+    FacturaAnulada::where('estado', FacturaAnulada::ESTADO_PENDIENTE)
+        ->whereNull('codigo_recepcion')
+        ->where('anulada_en', '<', now()->subMinutes(30))
+        ->orderBy('id')
+        ->limit(200)
+        ->pluck('factura_id')
+        ->each(fn (int $id) => AnularFacturaEnSiat::dispatch($id));
+})->everyFifteenMinutes()->name('reintentar-anulaciones')->withoutOverlapping();
 
 // Cada 10 min: cierra los eventos de contingencia cuyo SIAT ya volvio y manda
 // el paquete. Sin esto una factura en CONTINGENCIA no llega nunca al SIN.

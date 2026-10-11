@@ -11,9 +11,10 @@ namespace App\Services\Webhooks;
  * proxy hacia la red interna. Eso es SSRF.
  *
  * La comprobacion resuelve el host por DNS y exige que TODAS sus direcciones
- * sean publicas. No cubre el rebinding de DNS (que la IP cambie entre esta
- * comprobacion y la conexion real); para eso haria falta fijar la IP en el
- * cliente HTTP, que es el siguiente paso si el modelo de amenaza lo pide.
+ * sean publicas. Contra el rebinding de DNS (que el host resuelva a una IP
+ * publica aca y a una interna al conectar) evaluar() devuelve ademas la IP ya
+ * validada, para fijarla en el cliente HTTP con CURLOPT_RESOLVE: la conexion
+ * va exactamente a la direccion que se reviso.
  */
 class DestinoWebhook
 {
@@ -33,41 +34,62 @@ class DestinoWebhook
      */
     public function motivoRechazo(string $url): ?string
     {
+        return $this->evaluar($url)['motivo'];
+    }
+
+    /**
+     * Evalua la URL resolviendo el DNS UNA sola vez.
+     *
+     * 'fijar' es la entrada para CURLOPT_RESOLVE ("host:puerto:ip") con la IP
+     * que paso el control; null cuando no hace falta fijar nada (URL rechazada,
+     * host que ya es IP literal o destinos privados permitidos en desarrollo).
+     *
+     * @return array{motivo: ?string, fijar: ?string}
+     */
+    public function evaluar(string $url): array
+    {
         $partes = parse_url($url);
 
         if ($partes === false || blank($partes['host'] ?? null)) {
-            return 'La URL del webhook no es valida.';
+            return ['motivo' => 'La URL del webhook no es valida.', 'fijar' => null];
         }
 
         $esquema = strtolower($partes['scheme'] ?? '');
 
         if (! in_array($esquema, ['http', 'https'], true)) {
-            return "Esquema no permitido en el webhook: '{$esquema}'.";
+            return ['motivo' => "Esquema no permitido en el webhook: '{$esquema}'.", 'fijar' => null];
         }
 
         // En desarrollo se apunta a localhost a proposito; en produccion no.
         if (config('siat.webhooks.permitir_destinos_privados')) {
-            return null;
+            return ['motivo' => null, 'fijar' => null];
         }
 
         if ($esquema !== 'https') {
-            return 'El webhook debe usar https.';
+            return ['motivo' => 'El webhook debe usar https.', 'fijar' => null];
         }
 
         $host = $partes['host'];
         $direcciones = $this->resolver($host);
 
         if ($direcciones === []) {
-            return "No se pudo resolver el host del webhook: '{$host}'.";
+            return ['motivo' => "No se pudo resolver el host del webhook: '{$host}'.", 'fijar' => null];
         }
 
         foreach ($direcciones as $ip) {
             if (! $this->esPublica($ip)) {
-                return "El webhook apunta a una direccion interna ({$ip}).";
+                return ['motivo' => "El webhook apunta a una direccion interna ({$ip}).", 'fijar' => null];
             }
         }
 
-        return null;
+        // Un host que ya es IP no pasa por DNS: no hay nada que fijar.
+        if (filter_var(trim($host, '[]'), FILTER_VALIDATE_IP) !== false) {
+            return ['motivo' => null, 'fijar' => null];
+        }
+
+        $puerto = $partes['port'] ?? 443;
+
+        return ['motivo' => null, 'fijar' => "{$host}:{$puerto}:{$direcciones[0]}"];
     }
 
     public function esAceptable(string $url): bool
@@ -81,7 +103,7 @@ class DestinoWebhook
      *
      * @return list<string>
      */
-    private function resolver(string $host): array
+    protected function resolver(string $host): array
     {
         // Los hosts IPv6 vienen entre corchetes en la URL.
         $host = trim($host, '[]');

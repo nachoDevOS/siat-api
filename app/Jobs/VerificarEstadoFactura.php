@@ -126,6 +126,13 @@ class VerificarEstadoFactura implements ShouldQueue
      */
     private function reintentar(): void
     {
+        // En el ultimo intento no se reencola: un release ahi hace que el
+        // worker lo descarte por MaxAttemptsExceeded y termine en failed_jobs,
+        // justo lo que este metodo quiere evitar.
+        if ($this->attempts() >= $this->tries) {
+            return;
+        }
+
         $this->release($this->backoff[$this->attempts() - 1] ?? 600);
     }
 }

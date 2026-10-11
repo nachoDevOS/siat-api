@@ -48,6 +48,7 @@ class Factura extends Model
             'fecha_emision' => 'datetime',
             'enviada_en' => 'datetime',
             'validada_en' => 'datetime',
+            'codigo_excepcion' => 'integer',
             'tipo_cambio' => 'decimal:5',
             'subtotal' => 'decimal:2',
             'descuento_global' => 'decimal:2',

@@ -43,7 +43,9 @@ class SiatClient
         $wsdl = $this->urlWsdl($claveServicio);
 
         try {
-            $cliente = new SoapClient($wsdl, $this->opciones());
+            // Construir el cliente descarga el WSDL: es una lectura de red mas
+            // y sin el timeout un SIAT colgado tambien colgaba aca al worker.
+            $cliente = $this->conTimeout(fn () => $this->crearSoapClient($wsdl));
         } catch (SoapFault $e) {
             // Envolvemos el SoapFault en nuestra excepcion para que el resto
             // del sistema no dependa de la clase de SOAP directamente.
@@ -56,6 +58,14 @@ class SiatClient
         $this->ultimoCliente = $cliente;
 
         return $cliente;
+    }
+
+    /**
+     * Construye el SoapClient, lo que descarga y parsea el WSDL.
+     */
+    protected function crearSoapClient(string $wsdl): SoapClient
+    {
+        return new SoapClient($wsdl, $this->opciones());
     }
 
     /**
@@ -92,12 +102,26 @@ class SiatClient
      */
     public function llamar(SoapClient $soap, string $operacion, array $parametros): mixed
     {
+        return $this->conTimeout(fn () => $soap->{$operacion}($parametros));
+    }
+
+    /**
+     * Ejecuta una lectura de red con default_socket_timeout = siat.timeout y
+     * lo deja como estaba al salir, aunque la lectura falle.
+     *
+     * @template T
+     *
+     * @param  callable(): T  $lectura
+     * @return T
+     */
+    private function conTimeout(callable $lectura): mixed
+    {
         $anterior = ini_get('default_socket_timeout');
 
         ini_set('default_socket_timeout', (string) config('siat.timeout'));
 
         try {
-            return $soap->{$operacion}($parametros);
+            return $lectura();
         } finally {
             ini_set('default_socket_timeout', $anterior);
         }

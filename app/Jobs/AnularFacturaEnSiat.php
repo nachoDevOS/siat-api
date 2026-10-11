@@ -7,8 +7,10 @@ use App\Models\Factura;
 use App\Models\FacturaAnulada;
 use App\Services\Siat\FabricaServicios;
 use App\Services\Siat\RespuestaSiat;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Queue\Attributes\UniqueFor;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -18,8 +20,14 @@ use Illuminate\Support\Facades\Log;
  * sistema de ventas) y este job la confirma contra el SIN. Hasta que el SIN
  * devuelva su codigo de recepcion, la anulacion esta registrada pero no
  * confirmada.
+ *
+ * Es unico por factura: la tarea programada que retoma las anulaciones
+ * colgadas puede despacharlo mientras otro sigue en cola. Dos anulaciones en
+ * vuelo serian peligrosas: la segunda vuelve del SIN como "ya anulada", se lee
+ * como rechazo y revertiria en local una anulacion que SI se hizo.
  */
-class AnularFacturaEnSiat implements ShouldQueue
+#[UniqueFor(3600)]
+class AnularFacturaEnSiat implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
@@ -29,6 +37,11 @@ class AnularFacturaEnSiat implements ShouldQueue
     public array $backoff = [30, 120, 300, 900];
 
     public function __construct(public readonly int $facturaId) {}
+
+    public function uniqueId(): string
+    {
+        return (string) $this->facturaId;
+    }
 
     public function handle(FabricaServicios $fabrica): void
     {
@@ -41,8 +54,10 @@ class AnularFacturaEnSiat implements ShouldQueue
         $anulacion = FacturaAnulada::where('factura_id', $factura->id)->first();
 
         // Sin registro de anulacion no hay nada que transmitir; y si el SIN ya
-        // dio su codigo de recepcion, este job ya cumplio.
-        if ($anulacion === null || filled($anulacion->codigo_recepcion)) {
+        // dio su codigo de recepcion o ya la rechazo, este job ya cumplio.
+        if ($anulacion === null
+            || $anulacion->estado !== FacturaAnulada::ESTADO_PENDIENTE
+            || filled($anulacion->codigo_recepcion)) {
             return;
         }
 
@@ -60,15 +75,23 @@ class AnularFacturaEnSiat implements ShouldQueue
             );
         } catch (SiatException $e) {
             // El SIAT no responde. Se reintenta respetando el backoff declarado
-            // del job; agotados los intentos la falla queda en failed_jobs con
-            // la anulacion todavia PENDIENTE, que es lo que refleja la realidad.
+            // del job.
             if ($this->attempts() < $this->tries) {
                 $this->release($this->backoff[$this->attempts() - 1] ?? 900);
 
                 return;
             }
 
-            throw $e;
+            // Agotados los intentos NO se lanza: antes quedaba en failed_jobs y
+            // nadie la retomaba, con la factura ANULADA aca y vigente en el SIN.
+            // Sigue PENDIENTE y la tarea programada 'reintentar-anulaciones' la
+            // vuelve a despachar.
+            Log::warning('El SIAT no respondio a la anulacion; queda pendiente para la tarea programada.', [
+                'factura_id' => $factura->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return;
         }
 
         // El SIN puede rechazar la anulacion (fuera de plazo, motivo invalido,

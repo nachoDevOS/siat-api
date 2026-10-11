@@ -11,6 +11,7 @@ use App\Services\Siat\RespuestaSiat;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
+use Throwable;
 
 /**
  * Envia una factura ya emitida al SIAT en segundo plano (paso 12 del flujo).
@@ -32,14 +33,29 @@ class EnviarFacturaAlSiat implements ShouldQueue
     {
         $factura = Factura::with(['empresa', 'puntoVenta.sucursal', 'cufd', 'items'])->find($this->facturaId);
 
-        if ($factura === null || $factura->estado === Factura::ESTADO_VALIDADA) {
+        // Solo se transmite lo que todavia no viajo. Un job duplicado (el
+        // scheduler de pendientes + uno atrasado en la cola) no puede reenviar
+        // una RECIBIDA u OBSERVADA, ni mandar en linea una que ya cayo a
+        // CONTINGENCIA y va a viajar en el paquete, ni revivir una ANULADA.
+        if ($factura === null || $factura->estado !== Factura::ESTADO_PENDIENTE) {
             return;
         }
 
         // El PDF se puede generar ya, no depende del SIAT. En un reintento ya
         // esta hecho y no hace falta volver a renderizarlo.
+        //
+        // Una falla del PDF NO frena el envio: el documento legal es el XML
+        // firmado. Antes una excepcion de dompdf tumbaba el job y la factura
+        // nunca llegaba al SIN. Si falta, la descarga lo genera a pedido.
         if (blank($factura->ruta_pdf)) {
-            $factura->update(['ruta_pdf' => $pdf->generarYGuardar($factura)]);
+            try {
+                $factura->update(['ruta_pdf' => $pdf->generarYGuardar($factura)]);
+            } catch (Throwable $e) {
+                Log::error('No se pudo generar el PDF de la factura; se envia igual.', [
+                    'factura_id' => $factura->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
 
         $cufd = $factura->cufd?->codigo ?? optional($factura->puntoVenta->cufdVigente())->codigo;
@@ -63,9 +79,26 @@ class EnviarFacturaAlSiat implements ShouldQueue
                 return;
             }
 
-            // El SIN acuso recibo de ESTA factura: pasa a RECIBIDA. ENVIADA
-            // queda para las que viajan dentro de un paquete de contingencia,
-            // donde el acuse es del paquete y no de cada factura.
+            // En linea el SIN suele validar en la misma respuesta (908). Si ya
+            // la dio por validada, preguntarle de nuevo 15 s despues es un
+            // viaje de mas y deja al cliente esperando el webhook sin motivo.
+            if (in_array($respuesta->codigoEstado, VerificarEstadoFactura::CODIGOS_VALIDADA, true)) {
+                $factura->update([
+                    'estado' => Factura::ESTADO_VALIDADA,
+                    'enviada_en' => now(),
+                    'validada_en' => now(),
+                    'codigo_recepcion' => $respuesta->codigoRecepcion,
+                    'codigo_estado_siat' => $respuesta->codigoEstado,
+                ]);
+
+                NotificarWebhook::dispatch($factura->id, 'factura.validada');
+
+                return;
+            }
+
+            // El SIN acuso recibo de ESTA factura sin validarla todavia: pasa a
+            // RECIBIDA. ENVIADA queda para las que viajan dentro de un paquete
+            // de contingencia, donde el acuse es del paquete y no de cada factura.
             $factura->update([
                 'estado' => Factura::ESTADO_RECIBIDA,
                 'enviada_en' => now(),

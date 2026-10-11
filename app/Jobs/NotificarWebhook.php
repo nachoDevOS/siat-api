@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\Empresa;
 use App\Models\Factura;
 use App\Services\Webhooks\DestinoWebhook;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -43,7 +44,7 @@ class NotificarWebhook implements ShouldQueue
 
         // La URL la eligio el cliente: si apunta a la red interna se descarta
         // sin reintentar, porque reintentar no la va a volver segura.
-        $motivo = $destino->motivoRechazo($url);
+        ['motivo' => $motivo, 'fijar' => $fijar] = $destino->evaluar($url);
 
         if ($motivo !== null) {
             Log::warning('Webhook descartado por destino no permitido.', [
@@ -69,7 +70,12 @@ class NotificarWebhook implements ShouldQueue
         $json = json_encode($cuerpo);
 
         Http::timeout((int) config('siat.webhooks.timeout'))
-            ->withHeaders($this->cabeceras($json))
+            // Se conecta a la IP que se acaba de validar y no a lo que el DNS
+            // conteste en el segundo siguiente (rebinding).
+            ->when($fijar !== null, fn ($http) => $http->withOptions([
+                'curl' => [CURLOPT_RESOLVE => [$fijar]],
+            ]))
+            ->withHeaders($this->cabeceras($factura->empresa, $json))
             ->withBody($json, 'application/json')
             ->post($url)
             ->throw();
@@ -80,11 +86,11 @@ class NotificarWebhook implements ShouldQueue
      *
      * @return array<string, string>
      */
-    private function cabeceras(string $json): array
+    private function cabeceras(Empresa $empresa, string $json): array
     {
         $cabeceras = ['X-Siat-Evento' => $this->evento];
 
-        $secreto = config('siat.webhooks.secreto');
+        $secreto = $empresa->secretoWebhook();
 
         if (blank($secreto)) {
             return $cabeceras;

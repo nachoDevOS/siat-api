@@ -52,6 +52,19 @@
                     </td>
                 </tr>
                 <tr><th>Webhook</th><td>{{ $empresa->webhook_url ?: '—' }}</td></tr>
+                @if (filled($empresa->webhook_url))
+                    {{-- El cliente lo necesita para verificar X-Siat-Signature. --}}
+                    <tr>
+                        <th>Secreto webhook</th>
+                        <td>
+                            @if ($empresa->secretoWebhook())
+                                <span class="clave">{{ $empresa->secretoWebhook() }}</span>
+                            @else
+                                <x-semaforo color="ambar" texto="sin SIAT_WEBHOOK_SECRET: los avisos viajan sin firmar" />
+                            @endif
+                        </td>
+                    </tr>
+                @endif
             </table>
         </div>
 

@@ -80,6 +80,25 @@ class Empresa extends Model
     }
 
     /**
+     * Secreto con el que se firman (HMAC) los webhooks de ESTA empresa.
+     *
+     * Antes era uno solo para todos los clientes: cualquiera de ellos podia
+     * firmar un aviso falso dirigido a otro. Se deriva del secreto global y del
+     * id, asi que es distinto por empresa sin guardar nada nuevo, y rotar el
+     * global rota todos. Null si el proveedor no configuro el global.
+     */
+    public function secretoWebhook(): ?string
+    {
+        $base = config('siat.webhooks.secreto');
+
+        if (blank($base)) {
+            return null;
+        }
+
+        return hash_hmac('sha256', "webhook:{$this->id}", $base);
+    }
+
+    /**
      * Solo puede facturar por la API una empresa que ya paso todas las fases.
      */
     public function estaEnProduccion(): bool

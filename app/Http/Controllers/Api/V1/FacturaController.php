@@ -14,6 +14,7 @@ use App\Models\Empresa;
 use App\Models\Factura;
 use App\Models\FacturaAnulada;
 use App\Services\Factura\EmisorFactura;
+use App\Services\Factura\GeneradorPdf;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -174,11 +175,18 @@ class FacturaController extends Controller
     /**
      * GET /api/v1/facturas/{cuf}/pdf — descarga el PDF.
      */
-    public function pdf(Request $request, string $cuf): Response
+    public function pdf(Request $request, string $cuf, GeneradorPdf $generador): Response
     {
         $factura = $this->buscar($request, $cuf);
 
-        abort_if(blank($factura->ruta_pdf) || ! Storage::disk('local')->exists($factura->ruta_pdf), 404);
+        // El envio al SIN no espera al PDF: si no se pudo generar entonces (o
+        // todavia no se envio), se genera a pedido. Toda factura con XML
+        // firmado tiene su representacion imprimible.
+        if (blank($factura->ruta_pdf) || ! Storage::disk('local')->exists($factura->ruta_pdf)) {
+            abort_if(blank($factura->xml_firmado), 404);
+
+            $factura->update(['ruta_pdf' => $generador->generarYGuardar($factura)]);
+        }
 
         return response(Storage::disk('local')->get($factura->ruta_pdf), 200, [
             'Content-Type' => 'application/pdf',

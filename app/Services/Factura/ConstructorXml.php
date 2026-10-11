@@ -98,7 +98,9 @@ class ConstructorXml
             'montoTotalMoneda' => $this->monto($factura->monto_total_moneda),
             'montoGiftCard' => $this->monto($factura->gift_card),
             'descuentoAdicional' => $this->monto($factura->descuento_global),
-            'codigoExcepcion' => null,
+            // 0 normal, 1 = emitir aunque el NIT no valide. Va siempre con
+            // valor y no nil, igual que el sistema que factura en produccion.
+            'codigoExcepcion' => $factura->codigo_excepcion ?? 0,
             // Siempre nil: el CAFC es de la modalidad computarizada y este
             // sistema solo emite electronica en linea. El elemento igual va,
             // porque el XSD lo declara en la secuencia de la cabecera.
