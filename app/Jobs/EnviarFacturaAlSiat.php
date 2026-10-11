@@ -10,6 +10,7 @@ use App\Services\Siat\FabricaServicios;
 use App\Services\Siat\RespuestaSiat;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Queue\Attributes\Queue;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -19,6 +20,7 @@ use Throwable;
  * El cliente ya recibio su CUF; aca solo se transmite. Si el SIAT no responde,
  * se deriva a contingencia para no bloquear la venta.
  */
+#[Queue('facturas')]
 class EnviarFacturaAlSiat implements ShouldQueue
 {
     use Queueable;
@@ -132,6 +134,9 @@ class EnviarFacturaAlSiat implements ShouldQueue
         $factura->update([
             'estado' => Factura::ESTADO_OBSERVADA,
             'codigo_estado_siat' => $respuesta->codigoEstado,
+            // Queda en la factura y viaja en el webhook: el cliente necesita
+            // saber QUE corregir, no solo que fue rechazada.
+            'motivo_observacion' => $respuesta->motivo(),
         ]);
 
         Log::warning('El SIN rechazo la recepcion de la factura.', [

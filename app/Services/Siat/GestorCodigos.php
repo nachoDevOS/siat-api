@@ -6,7 +6,9 @@ use App\Exceptions\SiatException;
 use App\Models\Cufd;
 use App\Models\Cuis;
 use App\Models\PuntoVenta;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -22,6 +24,133 @@ use Illuminate\Support\Facades\Log;
 class GestorCodigos
 {
     public function __construct(private readonly FabricaServicios $fabrica) {}
+
+    /**
+     * CUIS vigente del punto de venta; si no hay, lo pide al SIN.
+     *
+     * Los sistemas de venta no manejan codigos: esta API los consigue sola
+     * cuando hacen falta. Pedirlo con uno vigente seria inutil (el SIN
+     * devuelve el mismo con el codigo 980), por eso solo se pide si no hay.
+     *
+     * @throws SiatException si el SIN no lo entrega.
+     */
+    public function asegurarCuis(PuntoVenta $puntoVenta): Cuis
+    {
+        return $puntoVenta->cuisVigente() ?? $this->solicitarCuis($puntoVenta);
+    }
+
+    /**
+     * CUFD vigente del punto de venta; si no hay, lo pide al SIN (y antes el
+     * CUIS, si tambien falta).
+     *
+     * Va con un lock por punto de venta: si dos cajas venden a la vez justo
+     * cuando vencio el CUFD, la segunda espera a la primera y usa el CUFD que
+     * esta consiguio, en vez de pedir otro.
+     *
+     * @throws SiatException si el SIN no responde o no entrega codigos.
+     * @throws LockTimeoutException si otra peticion retiene el lock demasiado.
+     */
+    public function asegurarCufd(PuntoVenta $puntoVenta): Cufd
+    {
+        $vigente = $puntoVenta->cufdVigente();
+
+        if ($vigente !== null) {
+            return $vigente;
+        }
+
+        return Cache::lock("siat:cufd:{$puntoVenta->id}", 60)->block(
+            (int) config('siat.timeout') + 5,
+            // Dentro del lock se vuelve a mirar: la peticion que lo tenia
+            // pudo haber conseguido el CUFD mientras esta esperaba.
+            fn (): Cufd => $puntoVenta->cufdVigente() ?? $this->renovarCufd($puntoVenta),
+        );
+    }
+
+    /**
+     * Pide SIEMPRE un CUFD nuevo, consiguiendo antes el CUIS si no hay uno
+     * vigente. Es lo que usan la renovacion preventiva y la de emergencia.
+     *
+     * @throws SiatException
+     */
+    public function renovarCufd(PuntoVenta $puntoVenta): Cufd
+    {
+        $this->asegurarCuis($puntoVenta);
+
+        return $this->solicitarCufd($puntoVenta);
+    }
+
+    /**
+     * Pide el CUIS y, si el SIN entrego uno NUEVO, tambien un CUFD atado a el.
+     *
+     * El SIN ata cada CUFD al CUIS con el que se pidio: verificado en el
+     * piloto, un CUFD viejo con el CUIS nuevo responde [913] CUIS INVALIDO. Si
+     * el CUIS cambia y el CUFD no, en cuanto el CUIS anterior deja de valer las
+     * facturas salen observadas. Si el SIN devolvio el MISMO CUIS (codigo 980,
+     * "ya habia uno vigente") no cambio nada y el CUFD actual sigue sirviendo.
+     *
+     * Es lo que usan el boton "Solicitar CUIS" del panel y la renovacion
+     * diaria; el alta de sucursal o punto de venta ya pide los dos.
+     *
+     * @throws SiatException si el SIN no entrega el CUIS, o si entrego uno
+     *                       nuevo pero no el CUFD (el CUIS queda guardado).
+     */
+    public function renovarCuis(PuntoVenta $puntoVenta): Cuis
+    {
+        $cuis = $this->solicitarCuis($puntoVenta);
+
+        if (! $cuis->wasRecentlyCreated) {
+            return $cuis;
+        }
+
+        try {
+            $this->solicitarCufd($puntoVenta);
+        } catch (SiatException $e) {
+            throw new SiatException("CUIS nuevo obtenido, pero el CUFD atado a el no: {$e->getMessage()}", $e);
+        }
+
+        return $cuis;
+    }
+
+    /**
+     * Obliga al SIN a entregar un CUIS NUEVO: cierra las operaciones del
+     * sistema en el punto de venta y vuelve a pedirlo (con su CUFD).
+     *
+     * Es la unica forma: mientras el CUIS siga vigente, pedirlo devuelve el
+     * mismo (980). Antes de cerrar se le pregunta al SIN cual es su CUIS
+     * vigente en vez de confiar en la base local, porque el cierre se hace
+     * sobre ese.
+     *
+     * Ojo: las facturas que todavia no viajaron con el CUFD anterior pueden
+     * volver con 913. El panel lo advierte antes de llamar.
+     *
+     * @throws SiatException si el SIN no cierra las operaciones, si despues
+     *                       devuelve el mismo CUIS, o si falla el CUFD nuevo.
+     */
+    public function forzarCuisNuevo(PuntoVenta $puntoVenta): Cuis
+    {
+        $actual = $this->solicitarCuis($puntoVenta);
+
+        $cierre = RespuestaSiat::desde(
+            $this->fabrica->operaciones($puntoVenta->sucursal->empresa)->cerrarOperacionesSistema(
+                (int) $puntoVenta->sucursal->codigo_sucursal,
+                (int) $puntoVenta->codigo_punto_venta,
+                $actual->codigo,
+            ),
+            'RespuestaCierreSistemas',
+        );
+
+        if (! $cierre->aceptada) {
+            throw new SiatException("El SIN no cerro las operaciones, el CUIS sigue siendo {$actual->codigo}: {$cierre->motivo()}");
+        }
+
+        $nuevo = $this->renovarCuis($puntoVenta);
+
+        if ($nuevo->codigo === $actual->codigo) {
+            throw new SiatException("Se cerraron las operaciones, pero el SIN devolvio el mismo CUIS ({$actual->codigo}). Reintenta en unos minutos.");
+        }
+
+        return $nuevo;
+    }
 
     /**
      * Solicita el CUIS del punto de venta y lo guarda como historial.

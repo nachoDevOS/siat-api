@@ -1,0 +1,575 @@
+openapi: 3.0.3
+info:
+  title: siat-api — API REST v1
+  version: "1.0.0"
+  description: |
+    Facturación electrónica en línea ante el SIAT (Bolivia), documento sector 1 — Factura Compra Venta.
+
+    El sistema de ventas solo manda la venta en JSON: esta API calcula el CUF, arma y firma el XML,
+    lo envía al SIN y maneja sola los códigos CUIS y CUFD.
+
+    **Autenticación:** `Authorization: Bearer {token}`. Cada token pertenece a una empresa, tiene un
+    perfil de permisos y se crea desde el panel del proveedor. Cada operación indica el permiso que
+    exige en `x-permiso`.
+
+    Guía completa: `API.md`, en esta misma carpeta.
+servers:
+  - url: https://{dominio}/api/v1
+    variables:
+      dominio:
+        default: api.proveedor.bo
+security:
+  - bearer: []
+tags:
+  - name: Estado
+  - name: Catálogos
+  - name: Estructura
+  - name: Códigos
+  - name: NIT
+  - name: Facturas
+
+paths:
+  /estado:
+    get:
+      tags: [Estado]
+      summary: ¿Puedo facturar?
+      x-permiso: estado:leer
+      responses:
+        "200":
+          description: Estado de la integración
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean, example: true }
+                  empresa:
+                    type: object
+                    properties:
+                      estado: { type: string, example: PRODUCCION }
+                      en_produccion: { type: boolean }
+                  puntos_venta_activos: { type: integer }
+                  puntos_venta_registrados_en_siat: { type: integer }
+                  puntos_venta_con_cufd: { type: integer }
+                  puede_facturar: { type: boolean }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+        "403": { $ref: "#/components/responses/Prohibido" }
+
+  /catalogos/{tipo}:
+    get:
+      tags: [Catálogos]
+      summary: Catálogos para armar la venta
+      x-permiso: catalogos:leer
+      parameters:
+        - name: tipo
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [unidades_medida, tipos_moneda, tipos_documento_identidad, tipos_metodo_pago, motivos_anulacion, tipos_documento_sector, paises_origen, tipos_punto_venta, actividades, productos, leyendas]
+          description: |
+            Globales del SIN, o del NIT de la empresa: `actividades`, `productos` (homologados; los únicos
+            `codigo_producto_sin` aceptados) y `leyendas`.
+      responses:
+        "200":
+          description: Filas del catálogo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean }
+                  tipo: { type: string }
+                  datos:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                      example: { codigo: "58", descripcion: "UNIDAD (SERVICIOS)" }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+        "403": { $ref: "#/components/responses/Prohibido" }
+
+  /sucursales:
+    get:
+      tags: [Estructura]
+      summary: Sucursales con sus puntos de venta activos
+      x-permiso: estructura:leer
+      responses:
+        "200":
+          description: Sucursales
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean }
+                  sucursales:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        sucursal: { type: integer, example: 0 }
+                        nombre: { type: string }
+                        municipio: { type: string, nullable: true }
+                        direccion: { type: string, nullable: true }
+                        telefono: { type: string, nullable: true }
+                        puntos_venta:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              punto_venta: { type: integer }
+                              nombre: { type: string }
+                              registrado_en_siat: { type: boolean }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+        "403": { $ref: "#/components/responses/Prohibido" }
+
+  /puntos-venta:
+    get:
+      tags: [Estructura]
+      summary: Puntos de venta activos
+      x-permiso: estructura:leer
+      responses:
+        "200":
+          description: Puntos de venta
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean }
+                  puntos_venta:
+                    type: array
+                    items: { $ref: "#/components/schemas/PuntoVenta" }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+        "403": { $ref: "#/components/responses/Prohibido" }
+    post:
+      tags: [Estructura]
+      summary: Alta LOCAL de un punto de venta
+      description: |
+        Crea el registro local. Para facturar con él, el proveedor debe registrarlo en el SIN desde el
+        panel (es irreversible).
+      x-permiso: estructura:gestionar
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sucursal, nombre, tipo_punto_venta]
+              properties:
+                sucursal: { type: integer, minimum: 0 }
+                nombre: { type: string, maxLength: 255 }
+                tipo_punto_venta: { type: integer }
+      responses:
+        "201":
+          description: Creado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean }
+                  punto_venta: { $ref: "#/components/schemas/PuntoVenta" }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+        "403": { $ref: "#/components/responses/Prohibido" }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+
+  /puntos-venta/{sucursal}/{puntoVenta}/codigos:
+    get:
+      tags: [Códigos]
+      summary: Vigencia de CUIS y CUFD
+      description: |
+        La API maneja los códigos sola. Acá solo se ven las vigencias: **nunca se devuelven los
+        códigos** ni el código de control.
+      x-permiso: codigos:leer
+      parameters:
+        - $ref: "#/components/parameters/Sucursal"
+        - $ref: "#/components/parameters/PuntoVenta"
+      responses:
+        "200":
+          description: Vigencias
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean }
+                  sucursal: { type: integer }
+                  punto_venta: { type: integer }
+                  registrado_en_siat: { type: boolean }
+                  cuis: { $ref: "#/components/schemas/Vigencia" }
+                  cufd: { $ref: "#/components/schemas/Vigencia" }
+                  puede_facturar: { type: boolean }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+        "403": { $ref: "#/components/responses/Prohibido" }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+
+  /puntos-venta/{sucursal}/{puntoVenta}/cufd:
+    post:
+      tags: [Códigos]
+      summary: Forzar un CUFD nuevo (emergencia)
+      description: Máximo 3 por punto de venta y por hora. Normalmente no hace falta.
+      x-permiso: codigos:renovar
+      parameters:
+        - $ref: "#/components/parameters/Sucursal"
+        - $ref: "#/components/parameters/PuntoVenta"
+      responses:
+        "201":
+          description: CUFD nuevo obtenido
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean }
+                  cufd: { $ref: "#/components/schemas/Vigencia" }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+        "403": { $ref: "#/components/responses/Prohibido" }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /nit/{nit}/verificar:
+    get:
+      tags: [NIT]
+      summary: Verificar un NIT ante el SIN
+      description: |
+        Devuelve si el NIT es válido y el `codigo_excepcion` que corresponde mandar al emitir con
+        tipo de documento 5. La respuesta se recuerda 1 hora.
+      x-permiso: facturas:emitir
+      parameters:
+        - name: nit
+          in: path
+          required: true
+          schema: { type: string, pattern: '^\d{1,20}$' }
+      responses:
+        "200":
+          description: Resultado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean }
+                  nit: { type: string }
+                  valido: { type: boolean }
+                  mensaje: { type: string, nullable: true, example: "[986] NIT ACTIVO" }
+                  codigo_excepcion: { type: integer, enum: [0, 1] }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+        "403": { $ref: "#/components/responses/Prohibido" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /facturas:
+    get:
+      tags: [Facturas]
+      summary: Listar facturas (50 por página)
+      x-permiso: facturas:leer
+      parameters:
+        - { name: desde, in: query, schema: { type: string, format: date } }
+        - name: estado
+          in: query
+          schema: { type: string, enum: [PENDIENTE, RECIBIDA, ENVIADA, VALIDADA, OBSERVADA, CONTINGENCIA, ANULADA] }
+        - { name: sucursal, in: query, schema: { type: integer, minimum: 0 }, description: "Va junto con punto_venta" }
+        - { name: punto_venta, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: referencia_externa, in: query, schema: { type: string, maxLength: 100 }, description: "Su id de venta (clave de idempotencia)" }
+        - { name: hasta, in: query, schema: { type: string, format: date } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200":
+          description: Página de facturas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean }
+                  facturas:
+                    type: array
+                    items: { $ref: "#/components/schemas/Factura" }
+                  paginacion:
+                    type: object
+                    properties:
+                      total: { type: integer }
+                      pagina: { type: integer }
+                      por_pagina: { type: integer }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+        "403": { $ref: "#/components/responses/Prohibido" }
+    post:
+      tags: [Facturas]
+      summary: Emitir una factura
+      description: |
+        Responde con el CUF al instante; la factura ya es válida e imprimible. El estado final llega por
+        webhook o con `GET /facturas/{cuf}`. Exige la empresa en `PRODUCCION`. Idempotente por
+        `referencia_externa` / `X-Idempotency-Key`.
+      x-permiso: facturas:emitir
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, maxLength: 100 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Venta" }
+      responses:
+        "201":
+          description: Emitida
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RespuestaFactura" }
+        "202":
+          description: Emitida en contingencia (válida; viajará cuando vuelva el SIN)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RespuestaFactura" }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+        "403": { $ref: "#/components/responses/Prohibido" }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+        "422":
+          description: Forma inválida (formato Laravel) o FACTURA_INVALIDA con `detalles`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /facturas/{cuf}:
+    get:
+      tags: [Facturas]
+      summary: Estado de una factura
+      x-permiso: facturas:leer
+      parameters: [{ $ref: "#/components/parameters/Cuf" }]
+      responses:
+        "200":
+          description: Factura
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RespuestaFactura" }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+        "403": { $ref: "#/components/responses/Prohibido" }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+
+  /facturas/{cuf}/pdf:
+    get:
+      tags: [Facturas]
+      summary: PDF imprimible
+      x-permiso: facturas:leer
+      parameters: [{ $ref: "#/components/parameters/Cuf" }]
+      responses:
+        "200":
+          description: PDF
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+
+  /facturas/{cuf}/xml:
+    get:
+      tags: [Facturas]
+      summary: XML firmado (documento legal)
+      x-permiso: facturas:leer
+      parameters: [{ $ref: "#/components/parameters/Cuf" }]
+      responses:
+        "200":
+          description: XML
+          content:
+            application/xml:
+              schema: { type: string }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+
+  /facturas/{cuf}/anular:
+    post:
+      tags: [Facturas]
+      summary: Anular una factura
+      description: |
+        Se registra al instante y se transmite al SIN en segundo plano. Si el SIN la rechaza, la factura
+        vuelve a su estado anterior (webhook `factura.anulacion_rechazada`).
+      x-permiso: facturas:anular
+      parameters: [{ $ref: "#/components/parameters/Cuf" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [motivo]
+              properties:
+                motivo: { type: integer, description: "Catálogo motivos_anulacion" }
+      responses:
+        "200":
+          description: Anulación registrada (o ya estaba anulada)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean }
+                  mensaje: { type: string }
+                  cuf: { type: string }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+        "403": { $ref: "#/components/responses/Prohibido" }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+        "409": { $ref: "#/components/responses/Error" }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: "Token de Sanctum, con el formato `12|siat_...`"
+
+  parameters:
+    Sucursal:
+      name: sucursal
+      in: path
+      required: true
+      schema: { type: integer, minimum: 0 }
+      description: Código de sucursal del SIN (0 = casa matriz)
+    PuntoVenta:
+      name: puntoVenta
+      in: path
+      required: true
+      schema: { type: integer, minimum: 0 }
+      description: Código de punto de venta del SIN
+    Cuf:
+      name: cuf
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    Error:
+      description: Error con código
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NoAutenticado:
+      description: "TOKEN_INVALIDO: falta, no existe, venció o fue revocado"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Prohibido:
+      description: "PERMISO_INSUFICIENTE, IP_NO_PERMITIDA o EMPRESA_NO_HABILITADA"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NoEncontrado:
+      description: No existe o no es de la empresa del token
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        exito: { type: boolean, example: false }
+        error:
+          type: string
+          example: FACTURA_INVALIDA
+          description: |
+            TOKEN_INVALIDO, IP_NO_PERMITIDA, PERMISO_INSUFICIENTE, EMPRESA_NO_HABILITADA,
+            FACTURA_INVALIDA, FACTURA_NO_ANULABLE, NIT_INVALIDO, PUNTO_VENTA_NO_REGISTRADO,
+            DEMASIADAS_PETICIONES, DEMASIADAS_RENOVACIONES, SIAT_NO_DISPONIBLE
+        mensaje: { type: string }
+        detalles:
+          type: array
+          items: { type: string }
+
+    Vigencia:
+      type: object
+      properties:
+        vigente: { type: boolean }
+        vence: { type: string, format: date-time, nullable: true }
+
+    PuntoVenta:
+      type: object
+      properties:
+        sucursal: { type: integer }
+        punto_venta: { type: integer }
+        nombre: { type: string }
+        tipo_punto_venta: { type: integer }
+        activo: { type: boolean }
+        registrado_en_siat: { type: boolean }
+        tiene_cufd_vigente: { type: boolean }
+
+    Venta:
+      type: object
+      required: [sucursal, punto_venta, comprador, metodo_pago, items]
+      properties:
+        sucursal: { type: integer, minimum: 0 }
+        punto_venta: { type: integer, minimum: 0 }
+        referencia_externa: { type: string, maxLength: 100, description: Clave de idempotencia }
+        comprador:
+          type: object
+          required: [tipo_documento, numero_documento, razon_social]
+          properties:
+            tipo_documento: { type: integer, description: "1 CI, 5 NIT… (catálogo tipos_documento_identidad)" }
+            numero_documento: { type: string, maxLength: 50 }
+            complemento: { type: string, maxLength: 5, nullable: true }
+            razon_social: { type: string, maxLength: 255 }
+            email: { type: string, format: email, nullable: true }
+        codigo_excepcion: { type: integer, enum: [0, 1], description: "1 solo con tipo_documento 5 y NIT no válido" }
+        metodo_pago: { type: integer }
+        numero_tarjeta: { type: string, maxLength: 20, nullable: true, description: Se guarda enmascarado }
+        moneda: { type: integer, enum: [1], description: Solo bolivianos }
+        tipo_cambio: { type: number, enum: [1] }
+        descuento_global: { type: number, minimum: 0 }
+        gift_card: { type: number, minimum: 0, description: No puede superar el total }
+        anticipo: { type: number, enum: [0], description: No admitido en compra-venta }
+        usuario: { type: string, maxLength: 100 }
+        leyenda: { type: string, maxLength: 500 }
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [codigo_producto_sin, descripcion, cantidad, unidad_medida, precio_unitario]
+            properties:
+              codigo_producto_sin: { type: integer, description: "Homologado para el NIT (catálogo productos)" }
+              codigo_interno: { type: string, maxLength: 100 }
+              descripcion: { type: string, maxLength: 500 }
+              cantidad: { type: number, exclusiveMinimum: true, minimum: 0 }
+              unidad_medida: { type: integer }
+              precio_unitario: { type: number, minimum: 0 }
+              descuento: { type: number, minimum: 0, description: "No puede superar cantidad × precio" }
+              numero_serie: { type: string, maxLength: 100 }
+              numero_imei: { type: string, maxLength: 100 }
+      example:
+        sucursal: 0
+        punto_venta: 0
+        referencia_externa: VENTA-000123
+        comprador: { tipo_documento: 5, numero_documento: "1023456028", razon_social: FERRETERIA EL MARTILLO SRL }
+        metodo_pago: 1
+        items:
+          - { codigo_producto_sin: 83141, descripcion: Martillo 16 oz, cantidad: 2, unidad_medida: 58, precio_unitario: 45.5, descuento: 1 }
+
+    Factura:
+      type: object
+      properties:
+        cuf: { type: string }
+        numero_factura: { type: integer }
+        sucursal: { type: integer }
+        punto_venta: { type: integer }
+        fecha_emision: { type: string, format: date-time }
+        estado:
+          type: string
+          enum: [PENDIENTE, RECIBIDA, ENVIADA, VALIDADA, OBSERVADA, CONTINGENCIA, ANULADA]
+        codigo_estado_siat: { type: string, nullable: true, example: "908" }
+        motivo_observacion: { type: string, nullable: true, description: "Por qué el SIN la observó (solo en OBSERVADA)", example: "[1001] HASH INVALIDO" }
+        leyenda: { type: string, nullable: true }
+        total: { type: number }
+        referencia_externa: { type: string, nullable: true }
+        url_verificacion: { type: string, format: uri }
+        url_pdf: { type: string, format: uri }
+        url_xml: { type: string, format: uri }
+
+    RespuestaFactura:
+      type: object
+      properties:
+        exito: { type: boolean }
+        factura: { $ref: "#/components/schemas/Factura" }

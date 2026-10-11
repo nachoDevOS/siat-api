@@ -41,11 +41,23 @@ class PuntosVentaSiat
      */
     public function deSucursal(Sucursal $sucursal): array
     {
-        return Cache::remember(
-            self::clave($sucursal),
-            now()->addMinutes(self::MINUTOS_CACHE),
-            fn (): array => $this->consultar($sucursal),
-        );
+        $guardada = Cache::get(self::clave($sucursal));
+
+        if ($guardada !== null) {
+            return $guardada;
+        }
+
+        $resultado = $this->consultar($sucursal);
+
+        // Solo se guarda una respuesta buena. Un error (SIAT caido, CUIS que
+        // el SIN no acepta) se cacheaba 30 minutos y la ficha lo seguia
+        // mostrando aunque el problema ya estuviera resuelto: un CUIS nuevo
+        // no se reflejaba hasta que vencia el cache.
+        if ($resultado['error'] === null) {
+            Cache::put(self::clave($sucursal), $resultado, now()->addMinutes(self::MINUTOS_CACHE));
+        }
+
+        return $resultado;
     }
 
     /**

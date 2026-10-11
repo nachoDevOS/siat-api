@@ -36,7 +36,6 @@ class FacturaFactory extends Factory
             'subtotal' => 150.00,
             'descuento_global' => 0,
             'gift_card' => 0,
-            'anticipo' => 0,
             'monto_total' => 150.00,
             'monto_total_moneda' => 150.00,
             'monto_total_sujeto_iva' => 150.00,

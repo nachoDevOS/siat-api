@@ -68,14 +68,14 @@ class PruebaPilotoController extends Controller
     public function ejecutarCaso(Empresa $empresa, CasoPrueba $caso, EjecutorPruebas $ejecutor): RedirectResponse
     {
         if (($bloqueo = $this->bloqueo($empresa, $caso->requiereCertificado())) !== null) {
-            return $this->volver($empresa, $bloqueo);
+            return $this->volver($empresa, $bloqueo, error: true);
         }
 
         $ejecucion = $ejecutor->ejecutarCaso($empresa, $caso);
 
-        $resultado = $ejecucion->estado === EjecucionPrueba::ESTADO_EXITOSO ? 'OK' : 'con error';
+        $exitosa = $ejecucion->estado === EjecucionPrueba::ESTADO_EXITOSO;
 
-        return $this->volver($empresa, "Paso {$caso->orden} ({$caso->nombre}): {$resultado}.");
+        return $this->volver($empresa, "Paso {$caso->orden} ({$caso->nombre}): ".($exitosa ? 'OK.' : 'con error.'), error: ! $exitosa);
     }
 
     /**
@@ -90,7 +90,7 @@ class PruebaPilotoController extends Controller
             ->contains(fn (CasoPrueba $caso): bool => $caso->requiereCertificado());
 
         if (($bloqueo = $this->bloqueo($empresa, $firma)) !== null) {
-            return $this->volver($empresa, $bloqueo);
+            return $this->volver($empresa, $bloqueo, error: true);
         }
 
         $nombre = CasoPrueba::ETAPAS[$etapa];
@@ -127,18 +127,32 @@ class PruebaPilotoController extends Controller
         abort_unless($caso->tipo === 'solicitudCuis', 404);
 
         if (($bloqueo = $this->bloqueo($empresa, false)) !== null) {
-            return $this->volver($empresa, $bloqueo);
+            return $this->volver($empresa, $bloqueo, error: true);
         }
 
         try {
             $resultado = $ejecutor->cerrarOperacionesDePrueba($empresa, $caso);
         } catch (SiatException $e) {
-            return $this->volver($empresa, 'No se pudo cerrar: '.$e->getMessage());
+            return $this->volver($empresa, 'No se pudo cerrar: '.$e->getMessage(), error: true);
         }
 
-        return $this->volver($empresa, $resultado['cerrado']
-            ? "Operaciones cerradas (CUIS {$resultado['cuis']}). Ahora ejecuta otra vez la prueba {$caso->orden}."
-            : "El SIN no cerro las operaciones: {$resultado['motivo']}");
+        if (! $resultado['cerrado']) {
+            return $this->volver($empresa, "El SIN no cerro las operaciones: {$resultado['motivo']}", error: true);
+        }
+
+        // Cerrar solo sirve para poder pedir un CUIS nuevo: se repite la
+        // prueba en el mismo clic, en vez de obligar a un segundo boton.
+        $ejecucion = $ejecutor->ejecutarCaso($empresa, $caso);
+
+        if ($ejecucion->estado === EjecucionPrueba::ESTADO_EXITOSO) {
+            $nuevo = data_get($ejecucion->respuesta, 'cuis');
+
+            return $this->volver($empresa, "Operaciones cerradas y prueba {$caso->orden} repetida: CUIS nuevo {$nuevo}, contado. "
+                .(data_get($ejecucion->respuesta, 'cufd_renovado') ? 'Tambien se renovo el CUFD atado a el.' : ''));
+        }
+
+        return $this->volver($empresa, "Operaciones cerradas (CUIS {$resultado['cuis']}), pero la prueba volvio a fallar: "
+            .data_get($ejecucion->respuesta, 'error', 'sin detalle'), error: true);
     }
 
     /**
@@ -191,7 +205,7 @@ class PruebaPilotoController extends Controller
         abort_if($caso->etapa === null, 404);
 
         if (($bloqueo = $this->bloqueo($empresa, $caso->requiereCertificado())) !== null) {
-            return $this->volver($empresa, $bloqueo);
+            return $this->volver($empresa, $bloqueo, error: true);
         }
 
         $encolados = $ejecutor->encolarCaso($empresa, $caso);
@@ -263,8 +277,12 @@ class PruebaPilotoController extends Controller
         ];
     }
 
-    private function volver(Empresa $empresa, string $mensaje): RedirectResponse
+    /**
+     * Las fallas van como 'error' para que el panel las muestre en rojo y no
+     * como un aviso verde de exito.
+     */
+    private function volver(Empresa $empresa, string $mensaje, bool $error = false): RedirectResponse
     {
-        return redirect()->route('admin.pruebas.show', $empresa)->with('estado', $mensaje);
+        return redirect()->route('admin.pruebas.show', $empresa)->with($error ? 'error' : 'estado', $mensaje);
     }
 }

@@ -50,6 +50,15 @@ class Certificado extends Model
         return $this->emitido_por === self::EMISOR_AUTOFIRMADO;
     }
 
+    /**
+     * Si ya vencio. Vale hasta el final del dia de vencimiento. Sin fecha
+     * cargada no se puede afirmar que este vencido.
+     */
+    public function estaVencido(): bool
+    {
+        return $this->vence_el !== null && $this->vence_el->copy()->endOfDay()->isPast();
+    }
+
     public function empresa(): BelongsTo
     {
         return $this->belongsTo(Empresa::class);

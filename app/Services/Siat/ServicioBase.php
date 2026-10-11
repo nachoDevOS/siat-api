@@ -74,8 +74,6 @@ abstract class ServicioBase
 
             throw new SiatException(
                 "Falla en la operacion '{$operacion}': {$e->getMessage()}",
-                xmlEnviado: $this->cliente->ultimaPeticionXml(),
-                xmlRecibido: $this->cliente->ultimaRespuestaXml(),
                 previous: $e,
             );
         } catch (Throwable $e) {

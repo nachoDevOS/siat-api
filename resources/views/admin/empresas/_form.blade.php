@@ -45,15 +45,16 @@
 <div class="campo">
     <label>Ambiente</label>
     <select name="codigo_ambiente">
-        <option value="2" @selected(old('codigo_ambiente', $e?->codigo_ambiente) == 2)>Piloto</option>
-        <option value="1" @selected(old('codigo_ambiente', $e?->codigo_ambiente) == 1)>Produccion</option>
+        {{-- Una empresa nueva arranca en el ambiente por defecto (SIAT_AMBIENTE). --}}
+        <option value="2" @selected(old('codigo_ambiente', $e?->codigo_ambiente ?? config('siat.ambiente_por_defecto')) == 2)>Piloto</option>
+        <option value="1" @selected(old('codigo_ambiente', $e?->codigo_ambiente ?? config('siat.ambiente_por_defecto')) == 1)>Produccion</option>
     </select>
 </div>
 {{-- La modalidad no se elige: el sistema solo emite electronica en linea.
      Va como hidden para que el formulario siga mandando el campo. --}}
 <div class="campo">
     <label>Modalidad</label>
-    <input type="hidden" name="codigo_modalidad" value="1">
+    <input type="hidden" name="codigo_modalidad" value="{{ config('siat.codigos.modalidad.electronica') }}">
     <input type="text" value="Electronica en linea" disabled>
 </div>
 <div class="campo">
@@ -64,7 +65,4 @@
         @endforeach
     </select>
 </div>
-<div class="campo">
-    <label>Webhook URL</label>
-    <input name="webhook_url" value="{{ old('webhook_url', $e?->webhook_url) }}">
-</div>
+

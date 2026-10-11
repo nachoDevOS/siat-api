@@ -16,9 +16,8 @@ class CasoPrueba extends Model
     /** @use HasFactory<CasoPruebaFactory> */
     use HasFactory;
 
-    // Fase 1 = pruebas del sistema con tu NIT. Fase 3 = piloto por cliente.
-    public const FASE_SISTEMA = 1;
-
+    // Fase 3 = piloto por cliente, la unica que corre este sistema. (La fase
+    // 1, pruebas del sistema con el NIT del proveedor, se hizo en el portal.)
     public const FASE_PILOTO = 3;
 
     /**

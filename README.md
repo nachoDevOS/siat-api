@@ -1,59 +1,58 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# siat-api
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Proveedor de **facturación electrónica en línea** ante el SIAT (Servicio de Impuestos Nacionales
+de Bolivia), multi-cliente, para el **documento sector 1 — Factura Compra Venta**.
 
-## About Laravel
+Los sistemas de venta de los clientes mandan un JSON a una API REST (autenticada con tokens
+Bearer de Sanctum, uno por sistema y con permisos) y reciben el CUF al instante.
+`siat-api` resuelve todo lo demás: CUIS y CUFD, CUF, XML, firma digital, envío y verificación ante
+el SIN, anulación, contingencia, catálogos y avisos por webhook.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+| | |
+|---|---|
+| Stack | PHP 8.3 · Laravel 13 · Sanctum · MySQL · colas en base de datos · Pest 4 · panel Blade con CSS propio (sin Node ni build de frontend) |
+| Modalidad | Electrónica en línea (1) |
+| Documento | Sector 1, compra-venta con crédito fiscal |
+| Ambientes | 1 producción · 2 piloto (por empresa) |
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+---
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
-
-## Learning Laravel
-
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
-
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
-
-## Agentic Development
-
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+## Inicio rápido (desarrollo)
 
 ```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+composer install
+cp .env.example .env && php artisan key:generate
+# completar SIAT_PROVEEDOR_* y SIAT_WEBHOOK_SECRET en .env
+php artisan migrate --seed          # admin@admin.com / password
+php artisan serve                   # panel en http://localhost:8000/admin
+php artisan queue:work --queue=facturas,default,piloto   # worker (obligatorio; reiniciar tras cada cambio de código)
+php artisan schedule:work           # tareas programadas
+php artisan test --compact          # tests
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+---
 
-## Contributing
+## Documentación
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+| Documento | Para quién | Contenido |
+|---|---|---|
+| [docs/ARQUITECTURA.md](docs/ARQUITECTURA.md) | Desarrolladores | Componentes, flujo de emisión, estados, jobs, tareas programadas, contingencia, seguridad |
+| [docs/integracion/](docs/integracion/) | **Sistemas externos (se les entrega esta carpeta)** | Guía de integración paso a paso, endpoints, errores, webhooks y especificación OpenAPI. No contiene nada interno |
+| [docs/OPERACION.md](docs/OPERACION.md) | Quien instala y mantiene | Instalación, variables de entorno, worker, cron, comandos `siat:*`, monitoreo, solución de problemas |
+| [docs/ALTA-DE-CLIENTE.md](docs/ALTA-DE-CLIENTE.md) | Operador del panel | Paso a paso para dar de alta un contribuyente |
+| [docs/PILOTO.md](docs/PILOTO.md) | Operador / desarrolladores | Etapas del portal del SIN y su estado |
+| [docs/CONTRATO-SIAT.md](docs/CONTRATO-SIAT.md) | Desarrolladores | Lo verificado y lo pendiente del contrato SOAP, CUF, XML y firma |
+| [docs/BASE-DE-DATOS.md](docs/BASE-DE-DATOS.md) | Desarrolladores | Tablas, columnas y relaciones |
+| [docs/ESTADO-Y-PENDIENTES.md](docs/ESTADO-Y-PENDIENTES.md) | Todos | Qué falta para producción e historial de cambios |
+| [docs/ANALISIS-SISTEMA.md](docs/ANALISIS-SISTEMA.md) | Referencia | Auditorías anteriores (histórico) |
+| [docs/PROMPT-SISTEMA-FACTURACION-SIAT.md](docs/PROMPT-SISTEMA-FACTURACION-SIAT.md) | Referencia | Especificación original del sistema |
 
-## Code of Conduct
+---
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+## Reglas del proyecto
 
-## Security Vulnerabilities
-
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
-
-## License
-
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
-# siat-api
+- Nada de SOAP fuera de `app/Services/Siat/`; todo pasa por `FabricaServicios`.
+- No inventar nombres del SIN: verificar con `php artisan siat:inspeccionar-wsdl` o con el WSDL
+  vigente antes de tocar una operación o un campo.
+- Comentarios en español explicando el **porqué**.
+- Todo cambio lleva su test; formatear con `vendor/bin/pint --dirty --format agent`.

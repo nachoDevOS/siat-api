@@ -11,27 +11,30 @@ use SimpleSoftwareIO\QrCode\Facades\QrCode;
  * El contenido del QR es la URL publica del SIN donde cualquiera puede
  * verificar la factura con su CUF, numero y NIT emisor.
  *
- * OJO: confirmar el dominio y los nombres de parametros de la URL de consulta
- * contra el manual vigente del SIN antes de produccion (rule 7).
+ * La pagina depende del AMBIENTE de la empresa (config siat.qr.urls): antes
+ * apuntaba siempre a produccion y el QR de una factura del piloto llevaba a una
+ * consulta donde esa factura no existe.
  */
 class GeneradorQr
 {
-    // Base de la URL publica de consulta del SIN.
-    private const BASE_CONSULTA = 'https://siat.impuestos.gob.bo/consulta/QR';
-
     /**
      * URL que codifica el QR: identifica la factura para su verificacion.
      */
     public function urlVerificacion(Factura $factura): string
     {
+        $empresa = $factura->empresa;
+
+        $base = config("siat.qr.urls.{$empresa->codigo_ambiente}")
+            ?? config('siat.qr.urls.'.config('siat.codigos.ambiente.produccion'));
+
         $parametros = http_build_query([
-            'nit' => $factura->empresa->nit,
+            'nit' => $empresa->nit,
             'cuf' => $factura->cuf,
             'numero' => $factura->numero_factura,
-            't' => 1, // tipo de factura; verificar contra el manual del SIN
+            't' => config('siat.qr.tamanio'),
         ]);
 
-        return self::BASE_CONSULTA.'?'.$parametros;
+        return $base.'?'.$parametros;
     }
 
     /**

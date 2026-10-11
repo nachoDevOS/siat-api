@@ -10,12 +10,14 @@ use App\Services\Siat\FabricaServicios;
 use App\Services\Siat\RespuestaSiat;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Queue\Attributes\Queue;
 use Illuminate\Support\Facades\Log;
 
 /**
  * Envia un paquete de facturas de contingencia al SIAT (recepcionPaqueteFactura)
  * y marca las facturas como enviadas.
  */
+#[Queue('facturas')]
 class EnviarPaqueteContingencia implements ShouldQueue
 {
     use Queueable;

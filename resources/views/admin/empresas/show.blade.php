@@ -8,6 +8,7 @@
 
         $tieneCertificado = $certificado !== null;
         $tieneToken = filled($empresa->token_delegado);
+        $venceToken = $empresa->vencimientoTokenDelegado();
         // El alta guiada habilita cada accion recien cuando la anterior esta
         // hecha, para no tener que adivinar el orden correcto.
         $puedeCorrerPiloto = $tieneToken && $tieneCertificado;
@@ -22,6 +23,7 @@
             </div>
         </div>
         <div>
+            <a class="btn gris" href="{{ route('admin.empresas.api', $empresa) }}">Acceso API</a>
             <a class="btn gris" href="{{ route('admin.pruebas.show', $empresa) }}">Pruebas piloto</a>
             <a class="btn gris" href="{{ route('admin.empresas.edit', $empresa) }}">Editar</a>
         </div>
@@ -47,25 +49,34 @@
                 <tr>
                     <th>Token delegado</th>
                     <td>
-                        <x-semaforo :color="$tieneToken ? 'verde' : 'rojo'"
-                                    :texto="$tieneToken ? 'cargado' : 'sin cargar: no se puede hablar con el SIAT'" />
+                        @if (! $tieneToken)
+                            <x-semaforo color="rojo" texto="sin cargar: no se puede hablar con el SIAT" />
+                        @elseif ($venceToken === null)
+                            <x-semaforo color="verde" texto="cargado" />
+                        @elseif ($venceToken->isPast())
+                            <x-semaforo color="rojo" :texto="'vencio el '.$venceToken->format('d/m/Y').': regeneralo en la Oficina Virtual'" />
+                        @else
+                            <x-semaforo :color="$venceToken->lessThan(now()->addDays(30)) ? 'ambar' : 'verde'"
+                                        :texto="'cargado, vence el '.$venceToken->format('d/m/Y').' ('.$venceToken->diffForHumans().')'" />
+                        @endif
                     </td>
                 </tr>
-                <tr><th>Webhook</th><td>{{ $empresa->webhook_url ?: '—' }}</td></tr>
-                @if (filled($empresa->webhook_url))
-                    {{-- El cliente lo necesita para verificar X-Siat-Signature. --}}
-                    <tr>
-                        <th>Secreto webhook</th>
-                        <td>
-                            @if ($empresa->secretoWebhook())
-                                <span class="clave">{{ $empresa->secretoWebhook() }}</span>
-                            @else
-                                <x-semaforo color="ambar" texto="sin SIAT_WEBHOOK_SECRET: los avisos viajan sin firmar" />
-                            @endif
-                        </td>
-                    </tr>
-                @endif
             </table>
+        </div>
+
+        {{-- ---- Acceso API (resumen; el detalle va en su propia pantalla) ---- --}}
+        <div class="tarjeta">
+            <h2>Acceso API</h2>
+            <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+                <div style="flex:1; min-width:220px; font-size:13px;">
+                    <x-semaforo :color="$tokensActivos > 0 ? 'verde' : 'ambar'"
+                                :texto="$tokensActivos > 0 ? 'token activo' : 'sin token: el sistema del cliente no puede usar la API'" />
+                    <div style="color:var(--suave); margin-top:6px;">
+                        Webhook: {{ $empresa->webhook_url ? 'configurado' : 'sin configurar' }}
+                    </div>
+                </div>
+                <a class="btn" href="{{ route('admin.empresas.api', $empresa) }}">Gestionar acceso API</a>
+            </div>
         </div>
 
         {{-- ---- Certificado digital ---- --}}
@@ -90,7 +101,8 @@
             {{-- Solo en pruebas: en produccion un autofirmado no tiene validez. --}}
             @if ($empresa->codigo_ambiente === config('siat.codigos.ambiente.piloto'))
                 <form method="POST" action="{{ route('admin.empresas.certificados.prueba', $empresa) }}" style="margin:0 0 10px;"
-                      onsubmit="return confirm('Genera un certificado AUTOFIRMADO a nombre de la empresa y lo deja activo en lugar del actual. Solo sirve para el piloto. ¿Continuar?');">
+                      data-titulo="Generar certificado de prueba" data-boton="Generar"
+                      data-confirmar="Genera un certificado AUTOFIRMADO a nombre de la empresa y lo deja activo en lugar del actual. Solo sirve para el piloto.">
                     @csrf
                     <button class="btn gris" type="submit">Generar certificado de prueba</button>
                 </form>
@@ -114,7 +126,8 @@
             {{-- Queda al final del lateral y no entre las acciones: es
                  irreversible y no debe caer cerca de un boton de uso diario. --}}
         <form method="POST" action="{{ route('admin.empresas.destroy', $empresa) }}"
-              onsubmit="return confirm('Eliminar esta empresa y todos sus datos?')">
+              data-titulo="Eliminar empresa" data-boton="Eliminar" data-peligro
+              data-confirmar="Se eliminan la empresa y todos sus datos. No se puede deshacer.">
             @csrf
             @method('DELETE')
             <button class="btn rojo" type="submit">Eliminar empresa</button>
@@ -439,9 +452,7 @@
                             {{-- Solicitud al SIAT. El CUFD exige CUIS: el boton queda
                                  deshabilitado hasta tenerlo. --}}
                             <div style="display:flex; gap:6px; flex-wrap:wrap;">
-                                <form method="POST" action="{{ route('admin.codigos.cuis', $pv) }}">@csrf
-                                    <button class="btn gris" type="submit">Solicitar CUIS</button>
-                                </form>
+                                <x-dialogo-cuis :punto-venta="$pv" />
                                 <form method="POST" action="{{ route('admin.codigos.cufd', $pv) }}">@csrf
                                     <button class="btn gris" type="submit" @disabled($cuis === null)
                                             title="{{ $cuis === null ? 'Primero hace falta un CUIS vigente' : '' }}">
@@ -545,7 +556,8 @@
 
                             <form method="POST" action="{{ route('admin.sucursales.puntos-venta.registrar', $sucursal) }}"
                                   style="display:flex; gap:8px; align-items:end; flex-wrap:wrap;"
-                                  onsubmit="return confirm('Se va a crear un punto de venta NUEVO en Impuestos Nacionales. No se puede deshacer. Continuar?')">
+                                  data-titulo="Registrar punto de venta en el SIN" data-boton="Registrar" data-peligro
+                                  data-confirmar="Se va a crear un punto de venta NUEVO en Impuestos Nacionales. No se puede deshacer: un punto de venta no se borra, solo se cierra.">
                                 @csrf
                                 <div class="campo" style="margin:0;">
                                     <label>Nombre</label>
@@ -600,6 +612,27 @@
                 Virtual (la casa matriz es la 0). Este sistema no crea sucursales en
                 el SIAT: si el codigo no existe alla, el SIN rechaza sus facturas.
             </p>
+        </div>
+
+        {{-- ---- Catalogos del NIT ---- --}}
+        <div class="tarjeta">
+            <h2>Catalogos del NIT</h2>
+            <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+                <div style="flex:1; min-width:220px; font-size:13px;">
+                    <x-semaforo :color="$catalogosNit['productos'] > 0 ? 'verde' : 'ambar'"
+                                :texto="$catalogosNit['productos'] > 0 ? 'sincronizados' : 'sin sincronizar'" />
+                    <div style="color:var(--suave); margin-top:6px;">
+                        {{ $catalogosNit['actividades'] }} actividades ·
+                        {{ $catalogosNit['productos'] }} productos homologados ·
+                        {{ $catalogosNit['leyendas'] }} leyendas.
+                        Se actualizan solos cada dia a las 03:30.
+                    </div>
+                </div>
+                <form method="POST" action="{{ route('admin.empresas.catalogos', $empresa) }}" style="margin:0;">
+                    @csrf
+                    <button class="btn gris" type="submit">Sincronizar ahora</button>
+                </form>
+            </div>
         </div>
 
         {{-- ---- Piloto ---- --}}

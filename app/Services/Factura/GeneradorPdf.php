@@ -2,6 +2,7 @@
 
 namespace App\Services\Factura;
 
+use App\Models\Catalogo;
 use App\Models\Factura;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\Storage;
@@ -14,7 +15,10 @@ use Illuminate\Support\Facades\Storage;
  */
 class GeneradorPdf
 {
-    public function __construct(private readonly GeneradorQr $qr) {}
+    public function __construct(
+        private readonly GeneradorQr $qr,
+        private readonly MontoEnLetras $letras,
+    ) {}
 
     /**
      * Renderiza el PDF, lo guarda en storage/app/siat/pdf y devuelve la ruta
@@ -28,6 +32,11 @@ class GeneradorPdf
             'factura' => $factura,
             'qr' => $this->qr->dataUri($factura),
             'urlVerificacion' => $this->qr->urlVerificacion($factura),
+            // "Son: ..." de la representacion grafica: sobre lo que se paga.
+            'montoLiteral' => $this->letras->bolivianos((float) $factura->monto_total - (float) $factura->gift_card),
+            // Nombre de cada unidad de medida del catalogo del SIN; si no esta
+            // sincronizado, la vista muestra el codigo.
+            'unidades' => Catalogo::deTipo('unidades_medida')->pluck('descripcion', 'codigo_clasificador')->all(),
         ]);
 
         $ruta = "siat/pdf/{$factura->cuf}.pdf";

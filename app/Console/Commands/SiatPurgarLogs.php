@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\LogApi;
 use App\Models\LogSiat;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
@@ -37,6 +38,18 @@ class SiatPurgarLogs extends Command
         } while ($lote > 0);
 
         $this->info("Logs SIAT borrados (anteriores a {$corte->toDateString()}): {$borrados}");
+
+        // logs_api tiene su propia retencion: no guarda datos del comprador,
+        // pero sin poda crece con cada venta de cada cliente.
+        $corteApi = now()->subDays((int) config('siat.api.retencion_logs_dias'));
+        $borradosApi = 0;
+
+        do {
+            $lote = LogApi::where('created_at', '<', $corteApi)->limit(1000)->delete();
+            $borradosApi += $lote;
+        } while ($lote > 0);
+
+        $this->info("Logs API borrados (anteriores a {$corteApi->toDateString()}): {$borradosApi}");
 
         return self::SUCCESS;
     }

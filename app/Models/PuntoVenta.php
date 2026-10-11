@@ -72,6 +72,21 @@ class PuntoVenta extends Model
             || (int) $this->codigo_punto_venta === self::CODIGO_IMPLICITO;
     }
 
+    /**
+     * Punto de venta ACTIVO de una empresa por sus codigos del SIN (sucursal
+     * y punto de venta), que es como lo nombran los sistemas de venta: nunca
+     * por id interno. Falla con 404 si no es de esa empresa.
+     */
+    public static function deEmpresaPorCodigos(Empresa $empresa, int $codigoSucursal, int $codigoPuntoVenta): self
+    {
+        return self::query()
+            ->whereHas('sucursal', fn ($q) => $q->where('empresa_id', $empresa->id)->where('codigo_sucursal', $codigoSucursal))
+            ->where('codigo_punto_venta', $codigoPuntoVenta)
+            ->where('activo', true)
+            ->with('sucursal.empresa')
+            ->firstOrFail();
+    }
+
     public function sucursal(): BelongsTo
     {
         return $this->belongsTo(Sucursal::class);

@@ -3,17 +3,17 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\ActividadEconomica;
 use App\Models\Catalogo;
 use App\Models\Empresa;
 use App\Models\Factura;
+use App\Models\LeyendaFactura;
+use App\Models\ProductoServicio;
 use App\Services\Panel\EstadosVisuales;
 use App\Services\Panel\PuntosVentaSiat;
 use App\Services\Panel\RequisitosEtapa;
-use App\Services\Webhooks\DestinoWebhook;
-use Closure;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
@@ -75,17 +75,13 @@ class EmpresaController extends Controller
     {
         $datos = $this->validar($request);
 
-        // Se genera la API key una sola vez: se guarda su hash y se muestra la
-        // clave en claro al alta. Despues ya no se puede recuperar.
-        $apiKey = Str::random(48);
-        $datos['api_key_hash'] = hash('sha256', $apiKey);
-
         $empresa = Empresa::create($datos);
 
+        // El acceso a la API ya no nace con la empresa: se crean tokens desde
+        // su ficha, uno por cada sistema de ventas y con el perfil que toque.
         return redirect()
             ->route('admin.empresas.show', $empresa)
-            ->with('api_key', $apiKey)
-            ->with('estado', 'Empresa creada. Copie la API key: solo se muestra ahora.');
+            ->with('estado', 'Empresa creada. Para conectar su sistema de ventas, crea un token en "Acceso API".');
     }
 
     /**
@@ -116,6 +112,15 @@ class EmpresaController extends Controller
             'semaforoCertificado' => $requisitos->semaforoCertificado($empresa),
             'requisitos' => $requisitos->para($empresa),
             'progresoPiloto' => $requisitos->progresoPiloto($empresa),
+            // Resumen del acceso API; el detalle esta en su propia pantalla.
+            'tokensActivos' => $empresa->tokens()->where(fn ($q) => $q->whereNull('expires_at')->orWhere('expires_at', '>', now()))->count(),
+            // Cuanto hay de cada catalogo del NIT: sin productos homologados
+            // la emision no puede resolver la actividad de cada item.
+            'catalogosNit' => [
+                'actividades' => ActividadEconomica::where('empresa_id', $empresa->id)->count(),
+                'productos' => ProductoServicio::where('empresa_id', $empresa->id)->count(),
+                'leyendas' => LeyendaFactura::where('empresa_id', $empresa->id)->count(),
+            ],
             // Codigos reales del SIN para el desplegable de tipo de punto de
             // venta, en vez de un numero a mano. Vacio hasta sincronizar.
             'tiposPuntoVenta' => Catalogo::where('tipo', 'tipos_punto_venta')
@@ -166,7 +171,6 @@ class EmpresaController extends Controller
             unset($datos['token_delegado']);
         }
 
-        // El propio modelo invalida el cache por api_key_hash al guardarse.
         $empresa->update($datos);
 
         return redirect()
@@ -212,15 +216,7 @@ class EmpresaController extends Controller
             // la autorizacion R-1359 del proveedor es de modalidad 1.
             'codigo_modalidad' => ['required', 'integer', 'in:1'],
             'estado' => ['required', Rule::in(self::ESTADOS)],
-            // Se valida el destino aca y no solo al notificar: asi el operador
-            // ve el error al guardar en vez de descubrirlo por webhooks mudos.
-            'webhook_url' => ['nullable', 'url', 'max:255', function (string $atributo, mixed $valor, Closure $falla) {
-                $motivo = app(DestinoWebhook::class)->motivoRechazo((string) $valor);
-
-                if ($motivo !== null) {
-                    $falla($motivo);
-                }
-            }],
+            // La URL del webhook se edita en "Acceso API" (AccesoApiController).
         ]);
     }
 }

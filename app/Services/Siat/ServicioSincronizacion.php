@@ -65,14 +65,6 @@ class ServicioSincronizacion extends ServicioBase
     }
 
     /**
-     * Mensajes de servicio del SIN.
-     */
-    public function listaMensajes(string $cuis, int $codigoSucursal, int $codigoPuntoVenta): mixed
-    {
-        return $this->invocarCatalogo('sincronizarListaMensajesServicios', $cuis, $codigoSucursal, $codigoPuntoVenta);
-    }
-
-    /**
      * Parametrica generica (unidades de medida, tipos de moneda, etc.).
      * El nombre de la operacion varia por parametrica; se recibe como argumento.
      */

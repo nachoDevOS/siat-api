@@ -10,6 +10,7 @@ use App\Services\Siat\RespuestaSiat;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Queue\Attributes\Queue;
 use Illuminate\Queue\Attributes\UniqueFor;
 use Illuminate\Support\Facades\Log;
 
@@ -27,6 +28,7 @@ use Illuminate\Support\Facades\Log;
  * como rechazo y revertiria en local una anulacion que SI se hizo.
  */
 #[UniqueFor(3600)]
+#[Queue('facturas')]
 class AnularFacturaEnSiat implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;

@@ -33,6 +33,21 @@ class Factura extends Model
 
     public const ESTADO_ANULADA = 'ANULADA';
 
+    /**
+     * Todos los estados, para validar filtros.
+     *
+     * @var list<string>
+     */
+    public const ESTADOS = [
+        self::ESTADO_PENDIENTE,
+        self::ESTADO_ENVIADA,
+        self::ESTADO_RECIBIDA,
+        self::ESTADO_VALIDADA,
+        self::ESTADO_OBSERVADA,
+        self::ESTADO_CONTINGENCIA,
+        self::ESTADO_ANULADA,
+    ];
+
     // Tipo de emision segun el SIN: 1 = en linea, 2 = contingencia.
     public const EMISION_EN_LINEA = 1;
 
@@ -53,7 +68,6 @@ class Factura extends Model
             'subtotal' => 'decimal:2',
             'descuento_global' => 'decimal:2',
             'gift_card' => 'decimal:2',
-            'anticipo' => 'decimal:2',
             'monto_total' => 'decimal:2',
             'monto_total_moneda' => 'decimal:2',
             'monto_total_sujeto_iva' => 'decimal:2',

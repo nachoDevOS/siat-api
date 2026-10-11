@@ -5,13 +5,16 @@ namespace App\Jobs;
 use App\Exceptions\SiatException;
 use App\Models\Factura;
 use App\Services\Siat\FabricaServicios;
+use App\Services\Siat\RespuestaSiat;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Queue\Attributes\Queue;
 
 /**
  * Consulta al SIAT el estado final de una factura ya enviada y lo refleja
  * (VALIDADA u OBSERVADA), avisando al cliente por webhook.
  */
+#[Queue('facturas')]
 class VerificarEstadoFactura implements ShouldQueue
 {
     use Queueable;
@@ -84,6 +87,7 @@ class VerificarEstadoFactura implements ShouldQueue
                     $factura->cufd ?? $factura->puntoVenta->cufdVigente(),
                 )?->codigo);
 
+            $leida = RespuestaSiat::desde($respuesta);
             $codigoEstado = (string) data_get($respuesta, 'RespuestaServicioFacturacion.codigoEstado');
             $descripcion = mb_strtoupper((string) data_get($respuesta, 'RespuestaServicioFacturacion.codigoDescripcion'));
 
@@ -103,6 +107,9 @@ class VerificarEstadoFactura implements ShouldQueue
             $factura->update([
                 'estado' => $validada ? Factura::ESTADO_VALIDADA : Factura::ESTADO_OBSERVADA,
                 'validada_en' => $validada ? now() : null,
+                // El porque del rechazo, con el codigo de estado si el SIN no
+                // adjunto mensajes.
+                'motivo_observacion' => $validada ? null : $this->motivo($leida, $codigoEstado),
             ]);
 
             NotificarWebhook::dispatch(
@@ -113,6 +120,19 @@ class VerificarEstadoFactura implements ShouldQueue
             // Aun sin respuesta: se reintenta por el backoff del job.
             $this->reintentar();
         }
+    }
+
+    /**
+     * Motivo legible de una observacion: los mensajes del SIN o, si no vino
+     * ninguno, el codigo de estado con su descripcion.
+     */
+    private function motivo(RespuestaSiat $respuesta, string $codigoEstado): string
+    {
+        if ($respuesta->mensajes !== []) {
+            return $respuesta->motivo();
+        }
+
+        return trim("[{$codigoEstado}] ".($respuesta->descripcion ?? 'El SIN observo la factura sin detallar el motivo.'));
     }
 
     /**

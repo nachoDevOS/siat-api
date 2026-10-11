@@ -101,8 +101,9 @@ class RequisitosEtapa
 
         return [
             [
-                'titulo' => 'Token delegado cargado',
-                'cumplido' => filled($empresa->token_delegado),
+                'titulo' => 'Token delegado cargado y vigente',
+                'cumplido' => filled($empresa->token_delegado)
+                    && ! ($empresa->vencimientoTokenDelegado()?->isPast() ?? false),
                 'detalle' => 'Se genera en la Oficina Virtual del SIN y autentica cada llamada SOAP.',
             ],
             [

@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Exceptions\CufdVencidoException;
 use App\Exceptions\FacturaInvalidaException;
-use App\Exceptions\FacturaObservadaException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\AnularFacturaRequest;
 use App\Http\Requests\EmitirFacturaRequest;
@@ -18,6 +17,7 @@ use App\Services\Factura\GeneradorPdf;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rule;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -62,13 +62,6 @@ class FacturaController extends Controller
                 'error' => 'SIAT_NO_DISPONIBLE',
                 'mensaje' => $e->getMessage(),
             ], Response::HTTP_SERVICE_UNAVAILABLE);
-        } catch (FacturaObservadaException $e) {
-            return response()->json([
-                'exito' => false,
-                'error' => 'FACTURA_OBSERVADA',
-                'mensaje' => 'El SIAT rechazo la factura',
-                'detalles' => $e->observaciones,
-            ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
         // Una factura en contingencia ya es valida; se responde 202.
@@ -102,9 +95,25 @@ class FacturaController extends Controller
     {
         $empresa = $this->empresa($request);
 
+        $filtros = $request->validate([
+            'desde' => ['nullable', 'date'],
+            'hasta' => ['nullable', 'date'],
+            'estado' => ['nullable', Rule::in(Factura::ESTADOS)],
+            'sucursal' => ['nullable', 'integer', 'min:0'],
+            'punto_venta' => ['nullable', 'integer', 'min:0', 'required_with:sucursal'],
+            // Para encontrar la venta propia despues de un timeout sin
+            // respuesta: es la misma clave de idempotencia.
+            'referencia_externa' => ['nullable', 'string', 'max:100'],
+        ]);
+
         $facturas = Factura::where('empresa_id', $empresa->id)
-            ->when($request->filled('desde'), fn ($q) => $q->whereDate('fecha_emision', '>=', $request->date('desde')))
-            ->when($request->filled('hasta'), fn ($q) => $q->whereDate('fecha_emision', '<=', $request->date('hasta')))
+            ->when($filtros['desde'] ?? null, fn ($q, $desde) => $q->whereDate('fecha_emision', '>=', $desde))
+            ->when($filtros['hasta'] ?? null, fn ($q, $hasta) => $q->whereDate('fecha_emision', '<=', $hasta))
+            ->when($filtros['estado'] ?? null, fn ($q, $estado) => $q->where('estado', $estado))
+            ->when($filtros['referencia_externa'] ?? null, fn ($q, $referencia) => $q->where('referencia_externa', $referencia))
+            ->when(isset($filtros['punto_venta']), fn ($q) => $q->whereHas('puntoVenta', fn ($pv) => $pv
+                ->where('codigo_punto_venta', $filtros['punto_venta'])
+                ->whereHas('sucursal', fn ($s) => $s->where('codigo_sucursal', $filtros['sucursal']))))
             ->with('puntoVenta.sucursal')
             ->latest('fecha_emision')
             ->paginate(50);

@@ -61,6 +61,13 @@ class NotificarWebhook implements ShouldQueue
             'referencia_externa' => $factura->referencia_externa,
             'estado' => $factura->estado,
             'codigo_recepcion' => $factura->codigo_recepcion,
+            // El porque de un rechazo, para que el sistema de ventas sepa que
+            // corregir. Null en los eventos que no son rechazos.
+            'motivo' => match ($this->evento) {
+                'factura.observada' => $factura->motivo_observacion,
+                'factura.anulacion_rechazada' => $factura->anulacion?->motivo_rechazo,
+                default => null,
+            },
             'emitido_en' => now()->toIso8601String(),
         ];
 

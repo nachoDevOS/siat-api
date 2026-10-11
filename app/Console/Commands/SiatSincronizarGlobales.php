@@ -4,7 +4,6 @@ namespace App\Console\Commands;
 
 use App\Exceptions\SiatException;
 use App\Models\Empresa;
-use App\Models\PuntoVenta;
 use App\Services\Catalogos\SincronizadorGlobal;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
@@ -33,10 +32,7 @@ class SiatSincronizarGlobales extends Command
         // Se busca el PUNTO DE VENTA, no el CUIS suelto: el SIN valida que el
         // CUIS corresponda a la sucursal y al punto de venta de la peticion, y
         // antes se mandaba el CUIS de uno con "punto de venta 0" de otro.
-        $puntoVenta = PuntoVenta::with('sucursal.empresa')
-            ->whereHas('sucursal', fn ($q) => $q->where('empresa_id', $empresa->id))
-            ->get()
-            ->first(fn (PuntoVenta $pv) => $pv->cuisVigente() !== null);
+        $puntoVenta = $empresa->puntoVentaConCuisVigente();
 
         if ($puntoVenta === null) {
             $this->warn("La empresa {$empresa->nombre_comercial} no tiene ningun punto de venta con CUIS vigente.");

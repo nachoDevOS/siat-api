@@ -80,17 +80,35 @@ return [
             'produccion' => 1,
             'piloto' => 2,
         ],
+        // Modalidad electronica en linea: la unica que emite este sistema.
         'modalidad' => [
             'electronica' => 1,
-            'computarizada' => 2,
         ],
-        // El SIN usa 0 para la casa matriz; el resto son sucursales reales.
-        'casa_matriz' => 0,
         // Documento sector 1 = Factura de compra-venta (unico alcance por ahora).
         'documento_sector' => 1,
         // tipoFacturaDocumento: 1 = factura con derecho a credito fiscal.
         // Viaja en recepcionFactura y tambien entra al calculo del CUF.
         'tipo_factura_documento' => 1,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | QR de verificacion de la factura
+    |--------------------------------------------------------------------------
+    | Pagina publica del SIN donde se consulta una factura por NIT, CUF y
+    | numero. Depende del ambiente: una factura del piloto no existe en la
+    | consulta de produccion y viceversa. La de piloto y el parametro t=2 son
+    | los que usa 'ventas'; la de produccion, el mismo camino en el dominio
+    | principal del SIN.
+    */
+    'qr' => [
+        'urls' => [
+            1 => env('SIAT_QR_URL_PRODUCCION', 'https://siat.impuestos.gob.bo/consulta/QR'),
+            2 => env('SIAT_QR_URL_PILOTO', 'https://pilotosiat.impuestos.gob.bo/consulta/QR'),
+        ],
+        // Tamano de la representacion grafica: 1 = rollo, 2 = media pagina /
+        // carta. El PDF de este sistema es de pagina completa.
+        'tamanio' => (int) env('SIAT_QR_TAMANIO', 2),
     ],
 
     /*
@@ -105,8 +123,47 @@ return [
         // Peticiones por minuto y por empresa.
         'rate_limit' => (int) env('SIAT_RATE_LIMIT', 120),
 
-        // Minutos que se cachea la empresa resuelta desde su API key.
-        'cache_apikey_minutos' => (int) env('SIAT_CACHE_APIKEY_MINUTOS', 5),
+        // Peticiones por minuto y por token (cada caja o sistema).
+        'rate_limit_token' => (int) env('SIAT_RATE_LIMIT_TOKEN', 60),
+
+        // Dias que se conserva el registro de llamadas a la API (logs_api).
+        'retencion_logs_dias' => (int) env('SIAT_API_RETENCION_LOGS_DIAS', 90),
+
+        /*
+        | Permisos (abilities de Sanctum) que puede llevar un token. Cada ruta
+        | de la API exige uno; un token sin ese permiso recibe 403.
+        */
+        'permisos' => [
+            'estado:leer' => 'Consultar si la integracion puede facturar',
+            'catalogos:leer' => 'Leer catalogos del SIN y del NIT',
+            'estructura:leer' => 'Leer sucursales y puntos de venta',
+            'estructura:gestionar' => 'Crear puntos de venta locales',
+            'codigos:leer' => 'Ver la vigencia de CUIS y CUFD (nunca los codigos)',
+            'codigos:renovar' => 'Forzar un CUFD nuevo (emergencia)',
+            'facturas:emitir' => 'Emitir facturas',
+            'facturas:leer' => 'Consultar y descargar facturas',
+            'facturas:anular' => 'Anular facturas',
+        ],
+
+        /*
+        | Perfiles que se eligen en el panel al crear un token. Una caja solo
+        | vende y consulta; anular o tocar codigos queda para administracion,
+        | asi un token de caja filtrado no puede anular facturas.
+        */
+        'perfiles' => [
+            'caja' => [
+                'nombre' => 'Caja / POS',
+                'permisos' => ['estado:leer', 'catalogos:leer', 'estructura:leer', 'codigos:leer', 'facturas:emitir', 'facturas:leer'],
+            ],
+            'administracion' => [
+                'nombre' => 'Administracion',
+                'permisos' => ['estado:leer', 'catalogos:leer', 'estructura:leer', 'estructura:gestionar', 'codigos:leer', 'codigos:renovar', 'facturas:emitir', 'facturas:leer', 'facturas:anular'],
+            ],
+            'consulta' => [
+                'nombre' => 'Solo consulta',
+                'permisos' => ['estado:leer', 'catalogos:leer', 'estructura:leer', 'codigos:leer', 'facturas:leer'],
+            ],
+        ],
     ],
 
     /*
@@ -127,6 +184,17 @@ return [
 
         'timeout' => (int) env('SIAT_WEBHOOK_TIMEOUT', 10),
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Proxies de confianza
+    |--------------------------------------------------------------------------
+    | IPs (o '*') de los proxies/balanceadores delante de la app, separadas por
+    | coma. Sin esto, detras de un proxy todas las peticiones parecen venir de
+    | la IP del proxy: la restriccion de IPs de los tokens deja de servir y
+    | logs_api registra la IP equivocada. Vacio = no se confia en ninguno.
+    */
+    'proxies_confiables' => env('TRUSTED_PROXIES'),
 
     /*
     |--------------------------------------------------------------------------

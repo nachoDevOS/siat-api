@@ -1,5 +1,9 @@
 # Análisis del sistema — siat-api
 
+> 📜 **Documento histórico.** Registra las auditorías del 2026-08-09 y 2026-08-10; varias cifras
+> (tablas, tests, pendientes) ya no están al día. La documentación vigente empieza en el
+> [README](../README.md); el estado actual está en [ESTADO-Y-PENDIENTES.md](ESTADO-Y-PENDIENTES.md).
+
 > Estado verificado el 2026-08-09 corriendo las migraciones reales (28 tablas, FKs e
 > índices comprobados) y la suite completa de tests. No es una lectura a ojo de los
 > archivos.

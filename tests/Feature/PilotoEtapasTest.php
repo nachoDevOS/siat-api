@@ -108,6 +108,8 @@ test('la etapa I pide un CUIS por cada punto de venta del portal, sin certificad
     // Siempre con los codigos del portal, este o no el punto de venta en local.
     $codigos->shouldReceive('solicitarCuisPara')->once()->with(0, 1)->andReturn(respuestaCuis('CUIS-PV1'));
     $codigos->shouldReceive('solicitarCuisPara')->once()->with(0, 0)->andReturn(respuestaCuis('CUIS-PV0'));
+    // CUIS nuevo en el PV 0 local: se pide tambien un CUFD atado a el.
+    $codigos->shouldReceive('solicitarCufd')->once()->with(Mockery::any(), 'CUIS-PV0')->andReturn(respuestaCufd('CUFD-PV0'));
     codigosSimulados($codigos);
 
     $this->post(route('admin.pruebas.etapa', [$empresa, 1]))
@@ -116,10 +118,12 @@ test('la etapa I pide un CUIS por cada punto de venta del portal, sin certificad
 
     expect(EjecucionPrueba::where('estado', EjecucionPrueba::ESTADO_EXITOSO)->count())->toBe(2);
 
-    // Solo el PV 0 esta en local: su CUIS quedo guardado con la vigencia del SIN.
+    // Solo el PV 0 esta en local: su CUIS quedo guardado con la vigencia del SIN,
+    // y su CUFD quedo atado a ese CUIS nuevo.
     $cuis = Cuis::sole();
     expect($cuis->codigo)->toBe('CUIS-PV0')
-        ->and($cuis->fecha_vigencia->year)->toBe(2027);
+        ->and($cuis->fecha_vigencia->year)->toBe(2027)
+        ->and(Cufd::sole()->cuis_id)->toBe($cuis->id);
 });
 
 test('reejecutar una etapa completa no vuelve a llamar al SIN', function () {
@@ -127,6 +131,7 @@ test('reejecutar una etapa completa no vuelve a llamar al SIN', function () {
 
     $codigos = Mockery::mock(ServicioCodigos::class);
     $codigos->shouldReceive('solicitarCuisPara')->twice()->andReturn(respuestaCuis('CUIS-PV1'), respuestaCuis('CUIS-PV0'));
+    $codigos->shouldReceive('solicitarCufd')->once()->andReturn(respuestaCufd('CUFD-PV0'));
     codigosSimulados($codigos);
 
     $this->post(route('admin.pruebas.etapa', [$empresa, 1]));
@@ -172,7 +177,7 @@ test('sin token no corre ninguna prueba', function () {
     codigosSimulados($codigos);
 
     $this->post(route('admin.pruebas.etapa', [$empresa, 1]))
-        ->assertSessionHas('estado', fn (string $m) => str_contains($m, 'token'));
+        ->assertSessionHas('error', fn (string $m) => str_contains($m, 'token'));
 
     expect(EjecucionPrueba::count())->toBe(0);
 });
@@ -182,7 +187,7 @@ test('una prueba que firma sigue exigiendo el certificado', function () {
     $caso = CasoPrueba::where('tipo', 'recepcionFactura')->sole();
 
     $this->post(route('admin.pruebas.caso', [$empresa, $caso]))
-        ->assertSessionHas('estado', fn (string $m) => str_contains($m, 'certificado'));
+        ->assertSessionHas('error', fn (string $m) => str_contains($m, 'certificado'));
 
     expect(EjecucionPrueba::count())->toBe(0);
 });
@@ -224,7 +229,7 @@ test('si el SIN devuelve el CUIS ya vigente (980) la prueba NO cuenta, pero el c
     expect(Cuis::sole()->codigo)->toBe('F533CEF5');
 
     $this->get(route('admin.pruebas.show', $empresa))
-        ->assertSee('Cerrar operaciones en el PV 0')
+        ->assertSee('Cerrar operaciones y pedir CUIS nuevo (PV 0)')
         ->assertSee('0/2');
 });
 
@@ -233,7 +238,11 @@ test('cerrar operaciones manda al SIN el CUIS vigente del punto de venta de la p
     $caso = CasoPrueba::where('etapa', 1)->where('orden', 2)->sole();
 
     $codigos = Mockery::mock(ServicioCodigos::class);
-    $codigos->shouldReceive('solicitarCuisPara')->once()->with(0, 0)->andReturn(respuestaCuisYaVigente('F533CEF5'));
+    // 1) el CUIS que el SIN tiene vigente, para cerrarlo; 2) al repetir la
+    // prueba, el SIN ya entrega uno nuevo.
+    $codigos->shouldReceive('solicitarCuisPara')->twice()->with(0, 0)
+        ->andReturn(respuestaCuisYaVigente('F533CEF5'), respuestaCuis('CUIS-NUEVO'));
+    $codigos->shouldReceive('solicitarCufd')->once()->with(Mockery::any(), 'CUIS-NUEVO')->andReturn(respuestaCufd('CUFD-NUEVO'));
 
     $operaciones = Mockery::mock(ServicioOperaciones::class);
     $operaciones->shouldReceive('cerrarOperacionesSistema')->once()->with(0, 0, 'F533CEF5')
@@ -241,10 +250,10 @@ test('cerrar operaciones manda al SIN el CUIS vigente del punto de venta de la p
     codigosSimulados($codigos, $operaciones);
 
     $this->post(route('admin.pruebas.cerrar-operaciones', [$empresa, $caso]))
-        ->assertSessionHas('estado', fn (string $m) => str_contains($m, 'Operaciones cerradas'));
+        ->assertSessionHas('estado', fn (string $m) => str_contains($m, 'Operaciones cerradas y prueba 2 repetida: CUIS nuevo CUIS-NUEVO, contado'));
 
-    // No es una prueba del portal: no deja ejecucion.
-    expect(EjecucionPrueba::count())->toBe(0);
+    // El cierre no cuenta; la prueba repetida si, y quedo exitosa.
+    expect(EjecucionPrueba::sole()->estado)->toBe(EjecucionPrueba::ESTADO_EXITOSO);
 });
 
 test('si el SIN no cierra las operaciones se muestra su motivo', function () {
@@ -262,7 +271,10 @@ test('si el SIN no cierra las operaciones se muestra su motivo', function () {
     codigosSimulados($codigos, $operaciones);
 
     $this->post(route('admin.pruebas.cerrar-operaciones', [$empresa, $caso]))
-        ->assertSessionHas('estado', fn (string $m) => str_contains($m, 'MOTIVO DEL SIN'));
+        ->assertSessionHas('error', fn (string $m) => str_contains($m, 'MOTIVO DEL SIN'));
+
+    // Si no cerro, no se repite la prueba.
+    expect(EjecucionPrueba::count())->toBe(0);
 });
 
 // --- Etapa II: sincronizacion de catalogos ----------------------------------
@@ -578,7 +590,7 @@ test('sin certificado la etapa IV no corre', function () {
     $empresa = empresaConCuisEnPv1();
 
     $this->post(route('admin.pruebas.etapa', [$empresa, 4]))
-        ->assertSessionHas('estado', fn (string $m) => str_contains($m, 'certificado'));
+        ->assertSessionHas('error', fn (string $m) => str_contains($m, 'certificado'));
 
     expect(EjecucionPrueba::count())->toBe(0);
 });

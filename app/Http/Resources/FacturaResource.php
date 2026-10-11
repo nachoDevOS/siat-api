@@ -26,6 +26,9 @@ class FacturaResource extends JsonResource
             'punto_venta' => $this->puntoVenta->codigo_punto_venta,
             'fecha_emision' => $this->fecha_emision?->toIso8601String(),
             'estado' => $this->estado,
+            'codigo_estado_siat' => $this->codigo_estado_siat,
+            // Por que el SIN la rechazo; null salvo en OBSERVADA.
+            'motivo_observacion' => $this->motivo_observacion,
             'leyenda' => $this->leyenda,
             'total' => (float) $this->monto_total,
             'referencia_externa' => $this->referencia_externa,

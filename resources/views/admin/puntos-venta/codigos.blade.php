@@ -46,9 +46,7 @@
         </div>
 
         <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:12px;">
-            <form method="POST" action="{{ route('admin.codigos.cuis', $puntoVenta) }}">@csrf
-                <button class="btn gris" type="submit">Solicitar CUIS</button>
-            </form>
+            <x-dialogo-cuis :punto-venta="$puntoVenta" />
             <form method="POST" action="{{ route('admin.codigos.cufd', $puntoVenta) }}">@csrf
                 <button class="btn gris" type="submit" @disabled($cuisEnUso === null)
                         title="{{ $cuisEnUso === null ? 'Primero hace falta un CUIS vigente' : '' }}">

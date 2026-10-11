@@ -1,15 +1,19 @@
 <?php
 
+use App\Http\Controllers\Admin\AccesoApiController;
 use App\Http\Controllers\Admin\ApiController;
+use App\Http\Controllers\Admin\CatalogoEmpresaController;
 use App\Http\Controllers\Admin\CertificadoController;
 use App\Http\Controllers\Admin\CodigoController;
 use App\Http\Controllers\Admin\ConfiguracionController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\EmpresaController;
+use App\Http\Controllers\Admin\FacturaController;
 use App\Http\Controllers\Admin\MonitorController;
 use App\Http\Controllers\Admin\PruebaPilotoController;
 use App\Http\Controllers\Admin\PuntoVentaController;
 use App\Http\Controllers\Admin\SucursalController;
+use App\Http\Controllers\Admin\TokenApiController;
 use App\Http\Controllers\Auth\LoginController;
 use Illuminate\Support\Facades\Route;
 
@@ -45,6 +49,14 @@ Route::prefix('admin')->name('admin.')->middleware('auth')->group(function () {
 
     Route::resource('empresas', EmpresaController::class);
 
+    // Facturas de todos los clientes, para soporte.
+    Route::get('facturas', [FacturaController::class, 'index'])->name('facturas.index');
+    Route::get('facturas/{factura}', [FacturaController::class, 'show'])->name('facturas.show');
+    Route::get('facturas/{factura}/pdf', [FacturaController::class, 'pdf'])->name('facturas.pdf');
+    Route::get('facturas/{factura}/xml', [FacturaController::class, 'xml'])->name('facturas.xml');
+    Route::post('facturas/{factura}/verificar', [FacturaController::class, 'verificar'])->name('facturas.verificar');
+    Route::post('facturas/{factura}/reenviar', [FacturaController::class, 'reenviar'])->name('facturas.reenviar');
+
     // Avance de etapa del cliente ante el SIN (lo decide el SIN, aca se refleja).
     Route::post('empresas/{empresa}/estado', [EmpresaController::class, 'cambiarEstado'])
         ->name('empresas.estado');
@@ -56,6 +68,19 @@ Route::prefix('admin')->name('admin.')->middleware('auth')->group(function () {
     // Solo en ambiente de pruebas.
     Route::post('empresas/{empresa}/certificados/prueba', [CertificadoController::class, 'generarPrueba'])
         ->name('empresas.certificados.prueba');
+    // Acceso API de la empresa: datos de conexion, tokens, webhook y llamadas.
+    Route::get('empresas/{empresa}/api', [AccesoApiController::class, 'show'])
+        ->name('empresas.api');
+    Route::put('empresas/{empresa}/api/webhook', [AccesoApiController::class, 'actualizarWebhook'])
+        ->name('empresas.api.webhook');
+    Route::post('empresas/{empresa}/tokens', [TokenApiController::class, 'store'])
+        ->name('empresas.tokens.store');
+    Route::delete('empresas/{empresa}/tokens/{token}', [TokenApiController::class, 'destroy'])
+        ->name('empresas.tokens.destroy');
+
+    // Catalogos del NIT (actividades, productos homologados, leyendas).
+    Route::post('empresas/{empresa}/catalogos', CatalogoEmpresaController::class)
+        ->name('empresas.catalogos');
     Route::post('empresas/{empresa}/sucursales', [SucursalController::class, 'store'])
         ->name('empresas.sucursales.store');
     // Municipio, direccion y telefono van en cada factura: hay que poder
@@ -89,6 +114,7 @@ Route::prefix('admin')->name('admin.')->middleware('auth')->group(function () {
 
     // Codigos CUIS / CUFD de un punto de venta: siempre se piden al SIAT.
     Route::post('puntos-venta/{puntoVenta}/cuis', [CodigoController::class, 'solicitarCuis'])->name('codigos.cuis');
+    Route::post('puntos-venta/{puntoVenta}/cuis-nuevo', [CodigoController::class, 'forzarCuis'])->name('codigos.cuis-nuevo');
     Route::post('puntos-venta/{puntoVenta}/cufd', [CodigoController::class, 'solicitarCufd'])->name('codigos.cufd');
 
     // Panel de pruebas piloto (fase 3).

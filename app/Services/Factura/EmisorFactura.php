@@ -4,14 +4,18 @@ namespace App\Services\Factura;
 
 use App\Exceptions\CufdVencidoException;
 use App\Exceptions\FacturaInvalidaException;
+use App\Exceptions\SiatException;
 use App\Jobs\EnviarFacturaAlSiat;
 use App\Models\Cufd;
 use App\Models\Empresa;
 use App\Models\Factura;
 use App\Models\PuntoVenta;
 use App\Services\Contingencia\GestorContingencia;
+use App\Services\Siat\GestorCodigos;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -31,7 +35,14 @@ class EmisorFactura
         private readonly FirmadorXml $firmadorXml,
         private readonly ResolutorActividad $resolutor,
         private readonly GestorContingencia $contingencia,
+        private readonly GestorCodigos $codigos,
     ) {}
+
+    /**
+     * Segundos durante los que no se vuelve a pedir un CUFD a un punto de
+     * venta despues de que el SIN fallo al entregarlo.
+     */
+    private const ESPERA_TRAS_FALLO_CUFD = 60;
 
     /**
      * Emite una factura para una empresa a partir de la venta normalizada.
@@ -66,15 +77,8 @@ class EmisorFactura
 
         $puntoVenta = $this->resolverPuntoVenta($empresa, $venta);
 
-        // CUFD vigente (capa reactiva). Si no hay, aca se solicitaria uno nuevo
-        // al SIAT; sin CUFD no se puede calcular el CUF, asi que se corta.
-        $cufd = $puntoVenta->cufdVigente();
-
-        if ($cufd === null) {
-            throw new CufdVencidoException(
-                "El punto de venta {$puntoVenta->codigo_punto_venta} no tiene un CUFD vigente.",
-            );
-        }
+        // CUFD vigente, o uno nuevo pedido en el momento (capa reactiva).
+        $cufd = $this->obtenerCufd($puntoVenta);
 
         // La actividad economica de cada item y la leyenda de la cabecera son
         // obligatorias en el XSD del SIN y no vienen en la venta: se deducen de
@@ -168,6 +172,14 @@ class EmisorFactura
                 ]);
             }
 
+            // Firmar con un certificado vencido no da error aca, pero el SIN
+            // rechaza la firma: todas las facturas saldrian observadas.
+            if ($certificado->estaVencido()) {
+                throw new FacturaInvalidaException([
+                    "El certificado digital de la empresa vencio el {$certificado->vence_el->format('d/m/Y')}: carga uno vigente para poder firmar.",
+                ]);
+            }
+
             // Un autofirmado sirve para el piloto y nada mas: una factura de
             // produccion firmada con el no tiene validez legal.
             if ($certificado->esDePrueba() && $empresa->codigo_ambiente === config('siat.codigos.ambiente.produccion')) {
@@ -229,6 +241,43 @@ class EmisorFactura
         }
 
         return $puntoVenta;
+    }
+
+    /**
+     * CUFD con el que se emite: el vigente o, si vencio, uno nuevo pedido al
+     * SIN en el momento (y el CUIS antes, si tambien falta). Los sistemas de
+     * venta no manejan codigos: la venta no se puede caer porque la
+     * renovacion preventiva no llego a tiempo.
+     *
+     * Dos casos NO intentan pedirlo, porque solo agregarian a la venta la
+     * espera del timeout del SIAT para terminar igual en error:
+     *   - el punto de venta esta en contingencia (el SIAT no responde);
+     *   - el SIN fallo hace menos de un minuto al entregarlo.
+     *
+     * @throws CufdVencidoException si no hay CUFD y no se pudo conseguir.
+     */
+    private function obtenerCufd(PuntoVenta $puntoVenta): Cufd
+    {
+        $vigente = $puntoVenta->cufdVigente();
+
+        if ($vigente !== null) {
+            return $vigente;
+        }
+
+        $sinCufd = "El punto de venta {$puntoVenta->codigo_punto_venta} no tiene un CUFD vigente";
+        $claveFallo = "siat:cufd-fallido:{$puntoVenta->id}";
+
+        if ($this->contingencia->hayContingenciaAbierta($puntoVenta) || Cache::has($claveFallo)) {
+            throw new CufdVencidoException("{$sinCufd} y el SIAT no esta respondiendo.");
+        }
+
+        try {
+            return $this->codigos->asegurarCufd($puntoVenta);
+        } catch (SiatException|LockTimeoutException $e) {
+            Cache::put($claveFallo, true, self::ESPERA_TRAS_FALLO_CUFD);
+
+            throw new CufdVencidoException("{$sinCufd} y el SIAT no entrego uno nuevo: {$e->getMessage()}", previous: $e);
+        }
     }
 
     /**

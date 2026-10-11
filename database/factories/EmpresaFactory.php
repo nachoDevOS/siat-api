@@ -24,8 +24,6 @@ class EmpresaFactory extends Factory
             'nit' => (string) fake()->numberBetween(1000000, 9999999),
             'codigo_sistema' => Str::upper(Str::random(30)),
             'token_delegado' => Str::random(40),
-            // Guardamos el hash de una API key generada al vuelo.
-            'api_key_hash' => hash('sha256', Str::random(48)),
             'codigo_ambiente' => 2, // Piloto
             'codigo_modalidad' => 1, // Electronica
             'estado' => Empresa::ESTADO_EN_REGISTRO,

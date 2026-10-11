@@ -68,21 +68,6 @@ class ServicioOperaciones extends ServicioBase
     }
 
     /**
-     * Cierra un punto de venta. Un PV cerrado no vuelve a abrirse.
-     */
-    public function cerrarPuntoVenta(PuntoVenta $puntoVenta, string $cuis): mixed
-    {
-        $solicitud = $this->solicitudBase();
-        $solicitud['codigoSucursal'] = $puntoVenta->sucursal->codigo_sucursal;
-        $solicitud['codigoPuntoVenta'] = $puntoVenta->codigo_punto_venta;
-        $solicitud['cuis'] = $cuis;
-
-        return $this->invocar('operaciones', 'cierrePuntoVenta', [
-            'SolicitudCierrePuntoVenta' => $solicitud,
-        ]);
-    }
-
-    /**
      * Cierra las operaciones del sistema en una sucursal / punto de venta.
      *
      * VERIFICADO CONTRA EL WSDL DEL PILOTO (2026-10-07): struct
@@ -113,20 +98,6 @@ class ServicioOperaciones extends ServicioBase
 
         return $this->invocar('operaciones', 'registroEventoSignificativo', [
             'SolicitudEventoSignificativo' => $solicitud,
-        ]);
-    }
-
-    /**
-     * Consulta un evento significativo por su fecha o codigo.
-     *
-     * @param  array<string, mixed>  $filtro
-     */
-    public function consultarEvento(array $filtro): mixed
-    {
-        $solicitud = array_merge($this->solicitudBase(), $filtro);
-
-        return $this->invocar('operaciones', 'consultaEventoSignificativo', [
-            'SolicitudConsultaEvento' => $solicitud,
         ]);
     }
 }

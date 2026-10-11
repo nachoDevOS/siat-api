@@ -17,8 +17,9 @@
         <h2>Base de la API</h2>
         <div class="baseurl">{{ $baseUrl }}v1</div>
         <p class="sub" style="color:var(--suave); font-size:13px; margin:10px 0 0;">
-            Toda peticion exige el header <code>X-API-Key</code> de la empresa. La emision de facturas
-            ademas requiere ambiente <strong>Produccion</strong> e idempotencia.
+            Toda peticion exige <code>Authorization: Bearer {token}</code>. Los tokens se crean en la
+            ficha de cada empresa, por perfil de permisos. La emision de facturas ademas requiere la
+            empresa en <strong>Produccion</strong> e idempotencia.
         </p>
     </div>
 
@@ -26,13 +27,14 @@
     <div class="tarjeta">
         <h2>Endpoints disponibles</h2>
         <table>
-            <thead><tr><th style="width:70px;">Metodo</th><th>Ruta</th><th>Descripcion</th></tr></thead>
+            <thead><tr><th style="width:70px;">Metodo</th><th>Ruta</th><th>Descripcion</th><th>Permiso</th></tr></thead>
             <tbody>
-                @foreach ($endpoints as [$metodo, $ruta, $desc])
+                @foreach ($endpoints as [$metodo, $ruta, $desc, $permiso])
                     <tr>
                         <td><span class="met {{ $metodo }}">{{ $metodo }}</span></td>
                         <td class="ruta">{{ $ruta }}</td>
                         <td>{{ $desc }}</td>
+                        <td class="ruta">{{ $permiso }}</td>
                     </tr>
                 @endforeach
             </tbody>
@@ -47,7 +49,7 @@
         </div>
         <table>
             <thead>
-                <tr><th>Empresa</th><th>NIT</th><th>Ambiente</th><th>Estado</th><th>Credencial</th><th>Webhook</th><th></th></tr>
+                <tr><th>Empresa</th><th>NIT</th><th>Ambiente</th><th>Estado</th><th>Tokens activos</th><th>Webhook</th><th></th></tr>
             </thead>
             <tbody>
                 @forelse ($empresas as $empresa)
@@ -63,14 +65,14 @@
                         </td>
                         <td><x-estado-empresa :estado="$empresa->estado" /></td>
                         <td>
-                            @if (filled($empresa->api_key_hash))
-                                <span class="ok">configurada</span>
+                            @if ($empresa->tokens_activos_count > 0)
+                                <span class="ok">{{ $empresa->tokens_activos_count }}</span>
                             @else
-                                <span class="no">falta</span>
+                                <span class="no">ninguno</span>
                             @endif
                         </td>
                         <td>{{ $empresa->webhook_url ? '✓' : '—' }}</td>
-                        <td><a href="{{ route('admin.empresas.show', $empresa) }}">Gestionar</a></td>
+                        <td><a href="{{ route('admin.empresas.api', $empresa) }}">Acceso API</a></td>
                     </tr>
                 @empty
                     <tr><td colspan="7" style="color:var(--suave);">Sin empresas registradas.</td></tr>

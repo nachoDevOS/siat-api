@@ -8,11 +8,13 @@ use App\Models\Empresa;
 use App\Services\Pruebas\EjecutorPruebas;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Queue\Attributes\Queue;
 
 /**
  * Ejecuta un caso de prueba del piloto en segundo plano, para que el panel no
  * quede bloqueado esperando la respuesta del SIAT.
  */
+#[Queue('piloto')]
 class EjecutarCasoPrueba implements ShouldQueue
 {
     use Queueable;

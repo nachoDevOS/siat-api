@@ -773,6 +773,10 @@ Eventos: `factura.validada`, `factura.observada`, `factura.anulada`.
 
 ### 11.1 Autenticación: API key propia, no Sanctum
 
+> **Decisión revisada el 2026-10-11:** se pasó a **Laravel Sanctum** con la `Empresa` como dueña
+> de los tokens (varios por empresa, con permisos, vencimiento, IPs y revocación). Ver
+> [integracion/API.md](integracion/API.md#1-autenticación-y-cabeceras). El texto de abajo queda como registro.
+
 Sanctum está pensado para tokens ligados a un modelo `User`. Aquí la llave
 identifica a una **empresa** en comunicación servidor-a-servidor.
 Un middleware propio con la key hasheada y la empresa en caché es más simple

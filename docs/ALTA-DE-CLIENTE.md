@@ -22,7 +22,7 @@ son.** Solo una cosa es tuya.
 | **NIT** | del **cliente** | — | ❌ nunca |
 | **Sucursales** | del **cliente** | el cliente, en su Oficina Virtual | ❌ nunca |
 | **Puntos de venta** | del **cliente** | **este sistema**, llamando al SIAT | ❌ nunca |
-| **API key** | del **cliente** | **este sistema**, al dar de alta | ❌ nunca |
+| **Tokens de API** | del **cliente** (uno por sistema que conecta) | **este sistema**, en *Acceso API* de la empresa | ❌ nunca |
 | URLs, timeouts, nombre del sistema | del **proveedor** | vos, en el `.env` | ✅ sí |
 
 ### El token delegado, en una frase
@@ -90,7 +90,7 @@ datos de sus sucursales** (código, municipio, dirección, teléfono).
 | # | Qué | Dónde |
 |---|---|---|
 | 4 | Generar el **token delegado** de ese NIT | tu Oficina Virtual → *Token Delegado* → seleccionar el NIT en **NIT Delegado** → **Solicitar** |
-| 5 | Dar de alta la empresa y entregarle la **API key** | este panel |
+| 5 | Dar de alta la empresa y entregarle su **token de API** (uno por empresa) | este panel |
 
 ---
 
@@ -123,11 +123,23 @@ Confirmá que el cliente ya hizo los tres puntos de §2.2 y que tenés en mano:
 | Ambiente | **Piloto** (2) | ✅ |
 | Modalidad | **Electronica** (1) | ✅ |
 | Estado | **EN_REGISTRO** | ✅ |
-| Webhook URL | opcional, `https` y host público | — |
 
-**Al guardar aparece la API key una única vez.** Se guarda solo su hash SHA-256; no se
-puede recuperar después. Entregásela al cliente por un canal seguro — es lo que su sistema
-de ventas pone en `X-Api-Key`.
+**Después, abrí *Acceso API*** (botón en la cabecera de la ficha). Es la pantalla de la
+integración de esa empresa, en cuatro bloques:
+
+1. **Datos de conexión**: la URL base y sus códigos de sucursal y punto de venta, listos para
+   entregar.
+2. **Token**: **uno por empresa**, que el sistema del cliente usa para todas sus sucursales y
+   puntos de venta. **Generar token** con el perfil (por defecto *Administración*), vencimiento e
+   IPs opcionales. **Se muestra una única vez** (Sanctum guarda solo su hash). Si se filtra,
+   **Regenerar token**: el anterior deja de funcionar al instante (todas las cajas del cliente
+   paran hasta que cargue el nuevo).
+3. **Webhook**: la URL `https` del sistema del cliente y su **secreto** (propio de la empresa,
+   derivado de `SIAT_WEBHOOK_SECRET`), con el que verifica la cabecera `X-Siat-Signature`.
+4. **Últimas llamadas** de sus sistemas a la API.
+
+Entregale al cliente, por un canal seguro, los datos del bloque 1, su token y el secreto, junto
+con la carpeta de integración [integracion/](integracion/) (guía y especificación OpenAPI).
 
 > El sistema permite el mismo NIT dos veces si el ambiente es distinto
 > (`UNIQUE(nit, codigo_ambiente)`): así el cliente puede existir en piloto y en producción
@@ -163,14 +175,22 @@ En cada punto de venta, **en este orden** (el sistema lo exige):
 
 | Código | Vigencia | Para qué |
 |---|---|---|
-| **CUIS** | ~1 año | identifica el punto de venta ante el SIN. Necesario para pedir CUFD y CAFC |
+| **CUIS** | ~1 año | identifica el punto de venta ante el SIN. Necesario para pedir CUFD |
 | **CUFD** | 24 h | su **código de control entra al cálculo del CUF** — sin CUFD no hay factura |
-| **CAFC** | por rango | opcional: reserva para emitir en contingencia |
 
-Cada botón tiene dos variantes: **solicitar al SIAT** (uso real) o **cargar manual** (para
-probar sin conexión, ver §7).
+Desde el panel se piden con **Solicitar CUIS** y **Solicitar CUFD** (siempre al SIAT; la carga
+manual se quitó). **Solicitar CUIS** abre un diálogo con dos opciones:
 
-El CUFD se renueva solo: cron horario que renueva los que vencen en menos de 2 horas.
+- **Revisar CUIS** (la segura): mientras el actual siga vigente, el SIN devuelve **el mismo**
+  (código 980) y no cambia nada.
+- **Forzar CUIS nuevo**: cierra las operaciones del sistema en ese punto de venta, pide un CUIS
+  **nuevo** y un CUFD atado a él. Avisa cuántas facturas PENDIENTES hay, porque pueden volver con
+  913. Usalo sin ventas en curso y solo si hace falta (por ejemplo, el SIN rechaza el CUIS con 913).
+
+Siempre que el SIN entrega un CUIS nuevo, el sistema pide también un CUFD atado a él: un CUFD
+viejo con el CUIS nuevo hace rechazar las facturas (913). Hacerlo acá es opcional: **la API los maneja sola** — renueva cada hora los CUFD por
+vencer, cada día los CUIS vencidos, y si al emitir falta el CUFD lo pide en ese momento. Los
+sistemas de venta del cliente nunca ven ni manejan estos códigos.
 
 ### Paso 6 — Correr el piloto
 
@@ -210,6 +230,12 @@ Cuando **el SIN** apruebe el piloto:
 4. Pasá el estado a **PRODUCCION**
 
 Recién ahí `POST /api/v1/facturas` deja de responder `403 EMPRESA_NO_HABILITADA`.
+
+> Antes de facturar en producción, el certificado activo tiene que ser el de la entidad
+> certificadora: con un autofirmado de prueba la emisión se rechaza. Después de pedir el CUIS
+> de producción, tocá **Sincronizar ahora** en la tarjeta *Catálogos del NIT* de la ficha: sin
+> productos homologados la emisión no puede resolver la actividad de cada ítem. De ahí en más
+> se sincronizan solos cada día a las 03:30.
 
 ---
 
@@ -269,8 +295,8 @@ refleja lo que ya pasó afuera.
 | **Token delegado** | ~1 año | a mano, en tu Oficina Virtual |
 | **Certificado `.p12`** | según emisor | el cliente lo compra de nuevo; el panel avisa 30 días antes |
 | **CUFD** | 24 h | automático, cron horario (2 h de anticipación) |
-| **CUIS** | ~1 año | avisa `siat:revisar-codigos`, diario 02:00 |
-| **CAFC** | por rango | avisa `siat:revisar-codigos` cuando se agota |
+| **CUIS** | ~1 año | automático, `siat:revisar-codigos` diario 02:00 (avisa si no puede) |
+| **Tokens de API** | el vencimiento que les pongas | *Acceso API* marca los vencidos; se crea uno nuevo |
 
 **Si todas las llamadas de un cliente empiezan a fallar por autenticación, mirá primero el
 token.** Es la causa más común y el error del SIN no lo dice claro.
@@ -281,25 +307,23 @@ token.** Es la causa más común y el error del SIN no lo dice claro.
 
 Para probar el panel, la emisión, el CUF y la firma sin credenciales reales:
 
-1. Generá un `.p12` autofirmado:
+1. Creá la empresa con NIT y token delegado inventados, **ambiente piloto (2)** y
+   **estado `PRODUCCION`** (para saltear el piloto).
+2. En la ficha: **Generar certificado de prueba** (autofirmado; solo sirve en piloto), y
+   sucursal `0` con punto de venta `0`.
+3. Sin SIN no se puede pedir un CUFD desde el panel (la carga manual se quitó: un código de
+   control mal pegado arruina todos los CUF). Para una prueba **solo local**, crealo a mano:
 
 ```bash
-openssl req -x509 -newkey rsa:2048 -keyout /tmp/clave.pem -out /tmp/cert.pem \
-  -days 365 -nodes -subj "/CN=prueba-siat"
-openssl pkcs12 -export -out ~/certificado-prueba.p12 \
-  -inkey /tmp/clave.pem -in /tmp/cert.pem -passout pass:secreto
+php artisan tinker --execute 'App\Models\Cufd::create(["punto_venta_id" => 1, "codigo" => "CUFD-LOCAL", "codigo_control" => "A1B2C3", "fecha_vigencia" => now()->addDay()]);'
 ```
 
-2. Creá la empresa con NIT y token inventados, **estado `PRODUCCION`** (para saltear el
-   piloto).
-3. Subí ese `.p12` (passphrase `secreto`), sucursal `0`, punto de venta `0`.
-4. **Cargá el CUFD manual** — el código de control es obligatorio, ej. `A1B2C3`. CUIS y
-   CAFC no hacen falta para emitir.
+4. En *Acceso API* → *Tokens*, creá un token con perfil *Caja / POS* y copialo.
 5. Emitir:
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/facturas \
-  -H "X-Api-Key: TU_API_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer 1|siat_TU_TOKEN" -H "Content-Type: application/json" \
   -d '{"sucursal":0,"punto_venta":0,"referencia_externa":"VENTA-001",
        "comprador":{"tipo_documento":1,"numero_documento":"1023456","razon_social":"JUAN PEREZ"},
        "metodo_pago":1,

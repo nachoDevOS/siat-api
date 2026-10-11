@@ -212,7 +212,8 @@ test('la tarea programada retoma solo las anulaciones colgadas', function () {
 });
 
 test('la descarga del PDF lo genera a pedido si el envio no lo dejo hecho', function () {
-    $empresa = Empresa::factory()->create(['api_key_hash' => hash('sha256', 'clave-de-prueba')]);
+    $empresa = Empresa::factory()->create();
+    $token = $empresa->emitirTokenApi('Caja', 'caja')->plainTextToken;
     $factura = Factura::factory()->for($empresa)->create(['xml_firmado' => '<f/>', 'ruta_pdf' => null]);
 
     $this->mock(GeneradorPdf::class, function ($mock) {
@@ -225,7 +226,7 @@ test('la descarga del PDF lo genera a pedido si el envio no lo dejo hecho', func
 
     Storage::fake('local');
 
-    $this->withHeader('X-Api-Key', 'clave-de-prueba')
+    $this->withToken($token)
         ->get("/api/v1/facturas/{$factura->cuf}/pdf")
         ->assertOk()
         ->assertHeader('Content-Type', 'application/pdf');

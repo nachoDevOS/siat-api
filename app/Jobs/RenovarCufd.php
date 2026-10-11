@@ -23,19 +23,18 @@ class RenovarCufd implements ShouldQueue
     {
         $puntoVenta = PuntoVenta::with('sucursal.empresa')->find($this->puntoVentaId);
 
-        if ($puntoVenta === null) {
+        // Solo puntos de venta que el SIN conoce, de empresas con token: con
+        // cualquiera de los otros el SIN rechaza y el job fallaria cada hora.
+        if ($puntoVenta === null
+            || ! $puntoVenta->existeEnElSiat()
+            || blank($puntoVenta->sucursal->empresa->token_delegado)) {
             return;
         }
 
-        // Sin CUIS vigente no se puede pedir CUFD; eso lo resuelve otro flujo,
-        // asi que no es una falla de este job.
-        if ($puntoVenta->cuisVigente() === null) {
-            return;
-        }
-
-        // El gestor valida que el SIN haya devuelto codigo y codigo de control:
-        // si no, lanza y el job falla en vez de guardar un CUFD vacio que
-        // envenenaria el CUF de todas las facturas del punto de venta.
-        $gestor->solicitarCufd($puntoVenta);
+        // Si el CUIS vencio, el gestor lo pide antes: la API maneja los
+        // codigos sola. Y valida que el SIN haya devuelto codigo y codigo de
+        // control: si no, lanza y el job falla en vez de guardar un CUFD vacio
+        // que envenenaria el CUF de todas las facturas del punto de venta.
+        $gestor->renovarCufd($puntoVenta);
     }
 }

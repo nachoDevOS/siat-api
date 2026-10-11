@@ -2,7 +2,9 @@
 
 use App\Jobs\AnularFacturaEnSiat;
 use App\Jobs\EnviarFacturaAlSiat;
+use App\Jobs\SincronizarCatalogosEmpresa;
 use App\Jobs\VerificarEstadoFactura;
+use App\Models\Empresa;
 use App\Models\Factura;
 use App\Models\FacturaAnulada;
 use Illuminate\Support\Facades\Schedule;
@@ -78,6 +80,19 @@ Schedule::command('siat:revisar-codigos')->dailyAt('02:00');
 
 // Diario 07:00: alerta certificados que vencen en menos de 30 dias.
 Schedule::command('siat:avisar-certificados')->dailyAt('07:00');
+
+/*
+ * Diario 03:30: catalogos del NIT de cada empresa (actividades, productos
+ * homologados, leyendas). Un producto que el cliente homologa en la Oficina
+ * Virtual no se puede facturar hasta que llega aca. Solo las empresas con token:
+ * sin el no hay como hablar con el SIN; el job ademas se salta las que todavia
+ * no tienen un punto de venta con CUIS vigente.
+ */
+Schedule::call(function () {
+    Empresa::whereNotNull('token_delegado')
+        ->pluck('id')
+        ->each(fn (int $id) => SincronizarCatalogosEmpresa::dispatch($id));
+})->dailyAt('03:30')->name('sincronizar-catalogos-empresas')->withoutOverlapping();
 
 // Domingo 03:00: sincroniza catalogos globales.
 Schedule::command('siat:sincronizar-globales')->weeklyOn(0, '03:00');

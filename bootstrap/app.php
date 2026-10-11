@@ -1,9 +1,11 @@
 <?php
 
-use App\Http\Middleware\AutenticarApiKey;
+use App\Http\Middleware\AutenticarToken;
 use App\Http\Middleware\Idempotencia;
 use App\Http\Middleware\LimitarPeticiones;
+use App\Http\Middleware\RegistrarLlamadaApi;
 use App\Http\Middleware\VerificarEstadoEmpresa;
+use App\Http\Middleware\VerificarPermiso;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -19,7 +21,9 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         // Alias de los middleware propios de la API para usarlos en las rutas.
         $middleware->alias([
-            'siat.apikey' => AutenticarApiKey::class,
+            'siat.registro' => RegistrarLlamadaApi::class,
+            'siat.token' => AutenticarToken::class,
+            'siat.permiso' => VerificarPermiso::class,
             'siat.produccion' => VerificarEstadoEmpresa::class,
             'siat.idempotencia' => Idempotencia::class,
             'siat.rate' => LimitarPeticiones::class,

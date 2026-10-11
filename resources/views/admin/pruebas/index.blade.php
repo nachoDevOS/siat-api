@@ -44,7 +44,8 @@
         <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
             <h2 style="margin-bottom:8px;">Porcentaje general: {{ $hechasTotal }}/{{ $esperadasTotal }} ({{ $porcentajeTotal }}%)</h2>
             <form method="POST" action="{{ route('admin.pruebas.limpiar', $empresa) }}" style="margin:0;"
-                  onsubmit="return confirm('Borra el conteo local de TODAS las etapas y los jobs en cola. Lo que ya registro el SIN no se deshace. ¿Continuar?');">
+                  data-titulo="Limpiar el conteo de todas las etapas" data-boton="Limpiar todo" data-peligro
+                  data-confirmar="Borra el conteo local de TODAS las etapas y los jobs en cola. Lo que ya registró el SIN no se deshace.">
                 @csrf
                 @method('DELETE')
                 <button class="btn rojo" type="submit">Limpiar todas</button>
@@ -115,7 +116,8 @@
                     </button>
                 </form>
                 <form method="POST" action="{{ route('admin.pruebas.limpiar', $empresa) }}" style="margin:0;"
-                      onsubmit="return confirm('Borra el conteo local de la etapa {{ $romanos[$numero] ?? $numero }} y sus jobs en cola. Lo que ya registro el SIN no se deshace. ¿Continuar?');">
+                      data-titulo="Limpiar la etapa {{ $romanos[$numero] ?? $numero }}" data-boton="Limpiar etapa" data-peligro
+                      data-confirmar="Borra el conteo local de la etapa {{ $romanos[$numero] ?? $numero }} y sus jobs en cola. Lo que ya registró el SIN no se deshace.">
                     @csrf
                     @method('DELETE')
                     <input type="hidden" name="etapa" value="{{ $numero }}">
@@ -171,10 +173,11 @@
                                     @if ($caso->tipo === 'solicitudCuis' && str_contains((string) data_get($ejecucion->respuesta, 'error'), 'ya estaba vigente'))
                                         <form method="POST" action="{{ route('admin.pruebas.cerrar-operaciones', [$empresa, $caso]) }}"
                                               style="margin:6px 0 0;"
-                                              onsubmit="return confirm('Cierra las operaciones del sistema en este punto de venta ante el SIN (piloto). Despues hay que volver a ejecutar la prueba. ¿Continuar?');">
+                                              data-titulo="Cerrar operaciones y pedir CUIS nuevo" data-boton="Cerrar y repetir" data-peligro
+                                              data-confirmar="Cierra las operaciones del sistema en este punto de venta ante el SIN y repite la prueba para obtener un CUIS nuevo (y su CUFD). Hacelo sin facturas pendientes en ese punto de venta.">
                                             @csrf
                                             <button class="btn contorno-rojo" type="submit" @disabled(! $puedeCorrer($caso))>
-                                                Cerrar operaciones en el PV {{ data_get($caso->payload_ejemplo, 'codigoPuntoVenta') }}
+                                                Cerrar operaciones y pedir CUIS nuevo (PV {{ data_get($caso->payload_ejemplo, 'codigoPuntoVenta') }})
                                             </button>
                                         </form>
                                     @endif

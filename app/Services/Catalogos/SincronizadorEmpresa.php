@@ -4,7 +4,6 @@ namespace App\Services\Catalogos;
 
 use App\Exceptions\SiatException;
 use App\Models\ActividadEconomica;
-use App\Models\Empresa;
 use App\Models\LeyendaFactura;
 use App\Models\ProductoServicio;
 use App\Models\PuntoVenta;

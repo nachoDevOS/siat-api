@@ -7,7 +7,10 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
-use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
+use Laravel\Sanctum\HasApiTokens;
+use Laravel\Sanctum\NewAccessToken;
 
 /**
  * Un cliente contribuyente del proveedor. Es la raiz del aislamiento
@@ -16,7 +19,7 @@ use Illuminate\Support\Facades\Cache;
 class Empresa extends Model
 {
     /** @use HasFactory<EmpresaFactory> */
-    use HasFactory;
+    use HasApiTokens, HasFactory;
 
     // Estados del ciclo de vida ante el SIN (seccion 12.3 del documento).
     // Se declaran como constantes para no repetir cadenas sueltas por el codigo.
@@ -48,35 +51,28 @@ class Empresa extends Model
     }
 
     /**
-     * El middleware cachea la empresa resuelta desde su API key. Si no se
-     * invalidara, una key revocada o una empresa sacada de PRODUCCION seguiria
-     * facturando hasta que expire el TTL.
+     * Emite un token de API de Sanctum para un sistema de ventas de esta
+     * empresa. El token en claro solo existe en el valor devuelto: Sanctum
+     * guarda su hash, asi que hay que mostrarlo una vez y no se recupera.
+     *
+     * @param  string  $perfil  clave de config('siat.api.perfiles').
+     * @param  list<string>  $ipsPermitidas  vacio = desde cualquier IP.
      */
-    protected static function booted(): void
+    public function emitirTokenApi(string $nombre, string $perfil, ?Carbon $venceEl = null, array $ipsPermitidas = []): NewAccessToken
     {
-        static::saved(fn (self $empresa) => $empresa->olvidarCacheApiKey());
-        static::deleted(fn (self $empresa) => $empresa->olvidarCacheApiKey());
-    }
+        $permisos = config("siat.api.perfiles.{$perfil}.permisos");
 
-    public static function claveCacheApiKey(string $hash): string
-    {
-        return "empresa.apikey.{$hash}";
-    }
-
-    /**
-     * Borra del cache tanto el hash actual como el anterior, por si la API key
-     * se acaba de rotar.
-     */
-    public function olvidarCacheApiKey(): void
-    {
-        $hashes = array_filter([
-            $this->api_key_hash,
-            $this->getOriginal('api_key_hash'),
-        ]);
-
-        foreach (array_unique($hashes) as $hash) {
-            Cache::forget(self::claveCacheApiKey($hash));
+        if (! is_array($permisos)) {
+            throw new \InvalidArgumentException("Perfil de token desconocido: '{$perfil}'.");
         }
+
+        $nuevo = $this->createToken($nombre, $permisos, $venceEl);
+
+        if ($ipsPermitidas !== []) {
+            $nuevo->accessToken->forceFill(['ips_permitidas' => array_values($ipsPermitidas)])->save();
+        }
+
+        return $nuevo;
     }
 
     /**
@@ -104,6 +100,66 @@ class Empresa extends Model
     public function estaEnProduccion(): bool
     {
         return $this->estado === self::ESTADO_PRODUCCION;
+    }
+
+    /**
+     * Deja a la empresa con UN token nuevo y revoca los que tuviera.
+     *
+     * Regla del proveedor: un token por empresa. El sistema de ventas del
+     * cliente lo usa para todas sus sucursales y puntos de venta (cada venta
+     * dice en cual se emite). Reemplazar en una transaccion garantiza que
+     * nunca queden dos vigentes ni ninguno a medias.
+     *
+     * @param  list<string>  $ipsPermitidas
+     */
+    public function reemplazarTokenApi(string $perfil, ?Carbon $venceEl = null, array $ipsPermitidas = []): NewAccessToken
+    {
+        return DB::transaction(function () use ($perfil, $venceEl, $ipsPermitidas) {
+            $this->tokens()->delete();
+
+            return $this->emitirTokenApi("Token de {$this->nombre_comercial}", $perfil, $venceEl, $ipsPermitidas);
+        });
+    }
+
+    /**
+     * Fecha en que vence el token delegado del SIN, o null si no se puede
+     * saber (sin token, o un token que no es un JWT con 'exp').
+     *
+     * El token es un JWT: su vencimiento viaja en el propio token, asi que se
+     * lee sin consultar al SIN. No se verifica la firma: solo interesa la
+     * fecha para avisar a tiempo, y la validez la decide el SIN en cada
+     * llamada. Cuando vence, TODA operacion del cliente falla por
+     * autenticacion y el error del SIN no lo dice claro.
+     */
+    public function vencimientoTokenDelegado(): ?Carbon
+    {
+        $partes = explode('.', (string) $this->token_delegado);
+
+        if (count($partes) !== 3) {
+            return null;
+        }
+
+        $carga = json_decode((string) base64_decode(strtr($partes[1], '-_', '+/'), true), true);
+        $exp = is_array($carga) ? ($carga['exp'] ?? null) : null;
+
+        return is_numeric($exp) ? Carbon::createFromTimestamp((int) $exp) : null;
+    }
+
+    /**
+     * Un punto de venta de la empresa con CUIS vigente, o null si no hay.
+     *
+     * Las operaciones de catalogo piden CUIS, sucursal y punto de venta, y el
+     * SIN valida que el CUIS sea de ESE punto de venta: por eso se devuelve el
+     * punto de venta entero y no un CUIS suelto. Cualquiera sirve, porque los
+     * catalogos dependen del NIT y no del punto de venta.
+     */
+    public function puntoVentaConCuisVigente(): ?PuntoVenta
+    {
+        return PuntoVenta::with('sucursal.empresa')
+            ->whereHas('sucursal', fn ($q) => $q->where('empresa_id', $this->id))
+            ->orderBy('id')
+            ->get()
+            ->first(fn (PuntoVenta $pv) => $pv->cuisVigente() !== null);
     }
 
     public function certificadoActivo(): HasOne

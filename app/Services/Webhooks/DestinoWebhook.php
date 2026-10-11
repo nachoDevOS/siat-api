@@ -92,11 +92,6 @@ class DestinoWebhook
         return ['motivo' => null, 'fijar' => "{$host}:{$puerto}:{$direcciones[0]}"];
     }
 
-    public function esAceptable(string $url): bool
-    {
-        return $this->motivoRechazo($url) === null;
-    }
-
     /**
      * Direcciones IP del host. Si el host ya es una IP literal, se devuelve tal
      * cual sin consultar DNS.

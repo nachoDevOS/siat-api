@@ -73,6 +73,17 @@
         .clave { background: #fffbeb; border: 1px solid #fcd34d; color: #92400e; padding: 12px 14px; border-radius: 10px;
                  margin-bottom: 18px; font-family: monospace; word-break: break-all; }
         .error { color: #dc2626; font-size: 13px; }
+        /* Dialogo nativo (<dialog>): decisiones con consecuencias, como forzar un CUIS. */
+        .dialogo { border: none; border-radius: 14px; padding: 22px; max-width: 520px; width: calc(100% - 32px);
+                   box-shadow: 0 20px 50px rgba(15,23,42,.25); }
+        .dialogo::backdrop { background: rgba(15,23,42,.45); }
+        .dialogo .opcion { border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 14px; margin-top: 10px; }
+        .dialogo .opcion p { font-size: 13px; color: #475569; margin: 4px 0 10px; }
+        .dialogo .opcion-peligro { border-color: #fecaca; background: #fff7f7; }
+        .dialogo .acciones { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+        .dialogo .mensaje { font-size: 14px; color: #334155; white-space: pre-line; margin: 0; }
+        .aviso-error { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; padding: 12px 14px;
+                       border-radius: 10px; margin-bottom: 18px; }
         /* Ficha de cliente a dos columnas: a la izquierda quien es (datos que
            casi no cambian), a la derecha que hay que hacer con el. El lateral
            queda fijo al hacer scroll porque la columna de acciones es larga. */
@@ -149,6 +160,17 @@
         .filtros { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
         .filtros .campo { margin: 0; } .filtros input, .filtros select { min-width: 190px; }
 
+        /* ---- Paginacion (vista pagination.panel) ---- */
+        .paginacion { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+                      flex-wrap: wrap; margin-top: 14px; font-size: 13px; }
+        .paginacion .resumen { color: var(--suave); }
+        .paginacion .paginas { display: flex; gap: 4px; flex-wrap: wrap; }
+        .paginacion .pag { min-width: 34px; padding: 6px 10px; border: 1px solid var(--borde); border-radius: 8px;
+                           text-align: center; text-decoration: none; color: var(--texto); background: #fff; }
+        .paginacion a.pag:hover { border-color: var(--primario); color: var(--primario); }
+        .paginacion .actual { background: var(--primario); border-color: var(--primario); color: #fff; font-weight: 600; }
+        .paginacion .deshab { color: #cbd5e1; cursor: default; }
+
         /* ---- Toggle de sidebar en movil (checkbox puro CSS) ---- */
         #menu { display: none; }
         @media (max-width: 860px) {
@@ -171,6 +193,9 @@
                 </a>
                 <a href="{{ route('admin.empresas.index') }}" class="{{ request()->routeIs('admin.empresas.*') ? 'activo' : '' }}">
                     <span class="ic">▤</span> Empresas
+                </a>
+                <a href="{{ route('admin.facturas.index') }}" class="{{ request()->routeIs('admin.facturas.*') ? 'activo' : '' }}">
+                    <span class="ic">▥</span> Facturas
                 </a>
                 <a href="{{ route('admin.monitor') }}" class="{{ request()->routeIs('admin.monitor') ? 'activo' : '' }}">
                     <span class="ic">◷</span> Monitor
@@ -205,12 +230,66 @@
                 @if (session('estado'))
                     <div class="aviso">{{ session('estado') }}</div>
                 @endif
-                @if (session('api_key'))
-                    <div class="clave">API key (guardela, no se vuelve a mostrar): {{ session('api_key') }}</div>
+                {{-- Los controladores avisan las fallas con ->with('error', ...):
+                     sin este bloque esos mensajes se perdian sin mostrarse. --}}
+                @if (session('error'))
+                    <div class="aviso-error">{{ session('error') }}</div>
+                @endif
+                @if (session('token_api'))
+                    <div class="clave">Token de API (copielo ahora, no se vuelve a mostrar): {{ session('token_api') }}</div>
                 @endif
                 @yield('contenido')
             </main>
         </div>
     </div>
+    {{-- Modal de confirmacion GLOBAL. Reemplaza al confirm() del navegador en
+         todo el panel: cualquier formulario con data-confirmar lo abre antes
+         de enviarse. Atributos:
+           data-confirmar  mensaje (obligatorio)
+           data-titulo     titulo (por defecto "Confirmar")
+           data-boton      texto del boton (por defecto "Confirmar")
+           data-peligro    boton en rojo, para lo irreversible --}}
+    <dialog id="modal-confirmar" class="dialogo">
+        <h2 id="modal-confirmar-titulo" style="margin-top:0;">Confirmar</h2>
+        <p id="modal-confirmar-mensaje" class="mensaje"></p>
+        <div class="acciones">
+            <button type="button" class="btn gris" id="modal-confirmar-cancelar">Cancelar</button>
+            <button type="button" class="btn" id="modal-confirmar-aceptar">Confirmar</button>
+        </div>
+    </dialog>
+    <script>
+        (function () {
+            const modal = document.getElementById('modal-confirmar');
+            const aceptar = document.getElementById('modal-confirmar-aceptar');
+            let pendiente = null;
+
+            document.addEventListener('submit', function (evento) {
+                const form = evento.target;
+
+                if (!form.dataset || !form.dataset.confirmar) {
+                    return;
+                }
+
+                evento.preventDefault();
+                pendiente = form;
+                document.getElementById('modal-confirmar-titulo').textContent = form.dataset.titulo || 'Confirmar';
+                document.getElementById('modal-confirmar-mensaje').textContent = form.dataset.confirmar;
+                aceptar.textContent = form.dataset.boton || 'Confirmar';
+                aceptar.className = 'btn' + ('peligro' in form.dataset ? ' rojo' : '');
+                modal.showModal();
+            });
+
+            // form.submit() no vuelve a disparar el evento submit: no hay bucle.
+            aceptar.addEventListener('click', function () {
+                modal.close();
+                if (pendiente) { pendiente.submit(); }
+            });
+
+            document.getElementById('modal-confirmar-cancelar').addEventListener('click', function () {
+                pendiente = null;
+                modal.close();
+            });
+        })();
+    </script>
 </body>
 </html>

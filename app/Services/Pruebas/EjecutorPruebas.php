@@ -276,9 +276,22 @@ class EjecutorPruebas
         }
 
         $local = $this->puntoVentaLocal($empresa, $codigoSucursal, $codigoPuntoVenta);
+        $cufdRenovado = false;
 
         if ($local !== null) {
-            $this->codigos->guardarCuis($local, $respuesta);
+            $cuis = $this->codigos->guardarCuis($local, $respuesta);
+
+            // Un CUIS nuevo deja al CUFD vigente atado al anterior, y el SIN
+            // rechaza con 913 las facturas de la etapa IV. Se pide uno atado
+            // al nuevo; si falla, la prueba de CUIS igual vale.
+            if ($cuis->wasRecentlyCreated && $leida->aceptada) {
+                try {
+                    $this->codigos->solicitarCufd($local);
+                    $cufdRenovado = true;
+                } catch (SiatException) {
+                    // Lo renueva la tarea horaria o la emision, al necesitarlo.
+                }
+            }
         }
 
         if (! $leida->aceptada) {
@@ -296,6 +309,7 @@ class EjecutorPruebas
             'cuis' => $codigo,
             'vigencia' => data_get($respuesta, 'RespuestaCuis.fechaVigencia'),
             'guardado_en_punto_venta_local' => $local !== null,
+            'cufd_renovado' => $cufdRenovado,
         ];
     }
 

@@ -96,14 +96,4 @@ class ValidadorFactura
 
         return $errores;
     }
-
-    /**
-     * Atajo booleano cuando solo interesa saber si es valida.
-     *
-     * @param  array<string, mixed>  $datos
-     */
-    public function esValida(array $datos): bool
-    {
-        return count($this->validar($datos)) === 0;
-    }
 }
