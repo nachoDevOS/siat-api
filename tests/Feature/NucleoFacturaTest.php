@@ -472,7 +472,8 @@ test('la factura publica se abre sin token con su enlace firmado', function () {
 
     abrirPublica($factura->urlPublica())
         ->assertOk()
-        ->assertSee('(Con Derecho a Crédito Fiscal)')
+        ->assertSee('Hoja carta')
+        ->assertSee('Ticket de 80 mm')
         ->assertSee($factura->urlPublica('pdf'), false)
         ->assertSee($factura->urlPublica('rollo'), false)
         ->assertSee('Verificar en el SIN');
@@ -500,8 +501,8 @@ test('el PDF carta y el ticket de 80 mm se descargan desde el enlace publico', f
 
     $rollo = abrirPublica($factura->urlPublica('rollo'))->assertOk()->assertHeader('Content-Type', 'application/pdf');
 
-    // 80 mm = 226.77 puntos de ancho.
-    expect($rollo->getContent())->toContain('226.77');
+    // El mismo ancho del ticket del SIN: 240 puntos.
+    expect($rollo->getContent())->toContain('[0.000 0.000 240.000');
 });
 
 test('una factura anulada se sigue viendo, marcada como anulada', function () {

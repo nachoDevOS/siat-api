@@ -8,6 +8,7 @@ use App\Jobs\VerificarEstadoFactura;
 use App\Models\Empresa;
 use App\Models\Factura;
 use App\Services\Factura\GeneradorPdf;
+use App\Services\Factura\GeneradorQr;
 use App\Services\Panel\EstadosVisuales;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -67,11 +68,15 @@ class FacturaController extends Controller
         ]);
     }
 
-    public function show(Factura $factura): View
+    public function show(Factura $factura, GeneradorQr $qr): View
     {
         $factura->load(['empresa', 'puntoVenta.sucursal', 'items', 'anulacion', 'cufd', 'paquete']);
 
-        return view('admin.facturas.show', ['factura' => $factura]);
+        return view('admin.facturas.show', [
+            'factura' => $factura,
+            // La misma URL que codifica el QR: consulta la factura en el SIN.
+            'urlVerificacion' => $qr->urlVerificacion($factura, GeneradorQr::FORMATO_CARTA),
+        ]);
     }
 
     /**

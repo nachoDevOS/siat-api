@@ -26,7 +26,8 @@ class GeneradorPdf
      */
     public function generarYGuardar(Factura $factura): string
     {
-        $pdf = Pdf::loadView('factura.pdf', $this->datos($factura, GeneradorQr::FORMATO_CARTA));
+        $pdf = Pdf::loadView('factura.pdf', $this->datos($factura, GeneradorQr::FORMATO_CARTA))
+            ->setPaper('letter');
 
         $ruta = "siat/pdf/{$factura->cuf}.pdf";
         Storage::disk('local')->put($ruta, $pdf->output());
@@ -35,7 +36,7 @@ class GeneradorPdf
     }
 
     /**
-     * PDF para impresora termica de ticket (rollo de 80 mm), el formato de
+     * PDF para impresora termica de ticket (rollo), el formato de
      * las cajas de ferreterias y restaurantes. No se guarda: es barato y se
      * genera al pedirlo.
      *
@@ -45,8 +46,8 @@ class GeneradorPdf
     public function rollo(Factura $factura): string
     {
         $datos = $this->datos($factura, GeneradorQr::FORMATO_ROLLO);
-        $ancho = 80 / 25.4 * 72; // 80 mm en puntos
-        $alto = 620 + 34 * $factura->items->count() + (filled($factura->leyenda) ? 40 : 0);
+        $ancho = 240; // el mismo ancho del ticket del SIN (unos 85 mm)
+        $alto = 579 + 35 * $factura->items->count() + (filled($factura->leyenda) ? 35 : 0);
 
         return Pdf::loadView('factura.rollo', $datos)
             ->setPaper([0, 0, $ancho, $alto])

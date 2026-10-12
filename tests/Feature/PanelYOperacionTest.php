@@ -82,14 +82,33 @@ test('la representacion grafica lleva todo lo que espera el SIN', function () {
         ->toContain('(Con Derecho a Crédito Fiscal)')
         ->toContain('CASA MATRIZ')
         ->toContain('Av. Arce 1')
-        ->toContain('NIT:</strong> 1023456028')
-        ->toContain('UNIDAD (SERVICIOS)')
+        ->toContain('1023456028')
+        ->toContain('Unidad (servicios)')
         ->toContain('MONTO A PAGAR Bs')
         ->toContain('IMPORTE BASE CRÉDITO FISCAL Bs')
-        ->toContain('Son: NOVENTA 00/100 BOLIVIANOS')
+        ->toContain('Son: Noventa 00/100 Bolivianos')
         ->toContain('Ley N° 453')
         ->toContain('Representación Gráfica de un Documento Fiscal Digital emitido en una modalidad de facturación en línea')
-        ->toContain('ESTA FACTURA CONTRIBUYE AL DESARROLLO DEL PAÍS');
+        ->toContain('ESTA FACTURA CONTRIBUYE AL DESARROLLO DEL PAÍS')
+        ->toContain('SIN VALOR LEGAL');
+});
+
+test('solo la factura de piloto lleva la marca SIN VALOR LEGAL, en carta y en ticket', function () {
+    $datos = fn (Factura $factura) => [
+        'factura' => $factura->fresh(['empresa', 'puntoVenta.sucursal', 'items']),
+        'qr' => 'data:image/svg+xml;base64,',
+        'urlVerificacion' => 'https://siat.impuestos.gob.bo/consulta/QR',
+        'montoLiteral' => 'DIEZ 00/100 BOLIVIANOS',
+        'unidades' => [],
+    ];
+
+    $piloto = Factura::factory()->for(Empresa::factory()->create())->create();
+    $produccion = Factura::factory()->for(Empresa::factory()->enProduccion()->create())->create();
+
+    expect(view('factura.pdf', $datos($piloto))->render())->toContain('SIN VALOR LEGAL')
+        ->and(view('factura.pdf', $datos($produccion))->render())->not->toContain('SIN VALOR LEGAL')
+        ->and(view('factura.rollo', $datos($piloto))->render())->toContain('SIN VALOR LEGAL')
+        ->and(view('factura.rollo', $datos($produccion))->render())->not->toContain('SIN VALOR LEGAL');
 });
 
 // --- E: facturas en el panel -------------------------------------------------------
@@ -411,4 +430,25 @@ test('buscar una factura puntual no queda limitado al mes', function () {
     $vieja = Factura::factory()->create(['cuf' => 'CUF-DEL-ANIO-PASADO', 'comprador_razon_social' => 'COMPRADOR VIEJO', 'fecha_emision' => now()->subYear()]);
 
     $this->get(route('admin.facturas.index', ['q' => 'CUF-DEL-ANIO-PASADO']))->assertSee('COMPRADOR VIEJO');
+});
+
+test('el detalle de una factura validada enlaza a su consulta en el SIAT', function () {
+    $this->actingAs(User::factory()->create());
+    $validada = Factura::factory()->create(['estado' => Factura::ESTADO_VALIDADA]);
+    $pendiente = Factura::factory()->create(['estado' => Factura::ESTADO_PENDIENTE]);
+
+    $this->get(route('admin.facturas.show', $validada))->assertOk()
+        ->assertSee('Verificar en SIAT')
+        ->assertSee('consulta/QR?nit='.$validada->empresa->nit.'&amp;cuf='.$validada->cuf.'&amp;numero='.$validada->numero_factura.'&amp;t=2', false);
+    $this->get(route('admin.facturas.show', $pendiente))->assertOk()->assertDontSee('Verificar en SIAT');
+});
+
+test('el PDF del detalle usa el enlace publico firmado de la factura', function () {
+    $this->actingAs(User::factory()->create());
+    $factura = Factura::factory()->create(['estado' => Factura::ESTADO_VALIDADA, 'xml_firmado' => '<factura/>']);
+
+    $this->get(route('admin.facturas.show', $factura))->assertOk()
+        ->assertSee(e($factura->urlPublica('pdf')), false)
+        ->assertSee('<svg class="icono"', false)
+        ->assertDontSee(route('admin.facturas.pdf', $factura));
 });

@@ -11,21 +11,31 @@
             </span>
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            @if ($factura->xml_firmado)
-                {{-- El mismo enlace publico que recibe el sistema de ventas. --}}
-                <a class="btn gris" href="{{ $factura->urlPublica() }}" target="_blank" rel="noopener">Vista publica</a>
-                <a class="btn gris" href="{{ $factura->urlPublica('rollo') }}" target="_blank" rel="noopener">Ticket 80 mm</a>
+            @if (in_array($factura->estado, [App\Models\Factura::ESTADO_VALIDADA, App\Models\Factura::ESTADO_ANULADA], true))
+                <a class="btn" href="{{ $urlVerificacion }}" target="_blank" rel="noopener" title="Consultar la factura en el portal del SIN">
+                    <x-icono nombre="escudo" />Verificar en SIAT
+                </a>
             @endif
-            <a class="btn gris" href="{{ route('admin.facturas.pdf', $factura) }}" target="_blank">PDF</a>
-            <a class="btn gris" href="{{ route('admin.facturas.xml', $factura) }}">XML firmado</a>
+            @if ($factura->xml_firmado)
+                {{-- Los mismos enlaces publicos que recibe el sistema de ventas. --}}
+                <a class="btn borde ticket" href="{{ $factura->urlPublica('rollo') }}" target="_blank" rel="noopener" title="Imprimir en impresora termica de 80 mm">
+                    <x-icono nombre="ticket" />Ticket 80 mm
+                </a>
+                <a class="btn borde pdf" href="{{ $factura->urlPublica('pdf') }}" target="_blank" rel="noopener" title="Representacion grafica en hoja carta">
+                    <x-icono nombre="pdf" />PDF carta
+                </a>
+            @endif
+            <a class="btn borde xml" href="{{ route('admin.facturas.xml', $factura) }}" title="Descargar el documento legal firmado">
+                <x-icono nombre="codigo" />XML firmado
+            </a>
             @if ($factura->estado === App\Models\Factura::ESTADO_PENDIENTE)
                 <form method="POST" action="{{ route('admin.facturas.reenviar', $factura) }}" style="margin:0;">
-                    @csrf <button class="btn" type="submit">Enviar al SIN ahora</button>
+                    @csrf <button class="btn" type="submit"><x-icono nombre="enviar" />Enviar al SIN ahora</button>
                 </form>
             @endif
             @if (in_array($factura->estado, [App\Models\Factura::ESTADO_RECIBIDA, App\Models\Factura::ESTADO_ENVIADA], true))
                 <form method="POST" action="{{ route('admin.facturas.verificar', $factura) }}" style="margin:0;">
-                    @csrf <button class="btn" type="submit">Verificar estado ahora</button>
+                    @csrf <button class="btn" type="submit"><x-icono nombre="refrescar" />Verificar estado ahora</button>
                 </form>
             @endif
         </div>

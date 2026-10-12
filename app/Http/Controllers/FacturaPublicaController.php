@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Factura;
 use App\Services\Factura\GeneradorPdf;
+use App\Services\Factura\GeneradorQr;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\View\View;
@@ -18,16 +19,22 @@ use Illuminate\View\View;
  */
 class FacturaPublicaController extends Controller
 {
-    public function __construct(private readonly GeneradorPdf $pdf) {}
+    public function __construct(
+        private readonly GeneradorPdf $pdf,
+        private readonly GeneradorQr $qr,
+    ) {}
 
     /**
-     * Pagina con la factura y los botones de descarga e impresion.
+     * Antes de imprimir se elige el formato: hoja carta o ticket de 80 mm.
+     * Cada uno se abre directo en el visor de PDF del navegador.
      */
     public function show(string $cuf): View
     {
         $factura = $this->buscar($cuf);
 
-        return view('factura.publica', $this->pdf->datos($factura) + [
+        return view('factura.publica', [
+            'factura' => $factura->load('empresa'),
+            'urlVerificacion' => $this->qr->urlVerificacion($factura),
             'urlPdf' => $factura->urlPublica('pdf'),
             'urlRollo' => $factura->urlPublica('rollo'),
         ]);

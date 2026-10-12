@@ -64,6 +64,15 @@
         .btn.gris { background: #64748b; } .btn.gris:hover { background: #475569; }
         .btn.rojo { background: #dc2626; } .btn.rojo:hover { background: #b91c1c; }
         .btn:disabled { background: #cbd5e1; cursor: not-allowed; }
+        .btn .icono { width: 16px; height: 16px; vertical-align: -3px; margin-right: 6px; }
+        /* Boton claro con icono de color: acciones secundarias (descargas). */
+        .btn.borde { background: var(--panel); color: var(--texto); border: 1px solid var(--borde);
+                     box-shadow: 0 1px 2px rgba(15,23,42,.05); transition: border-color .15s, transform .15s; }
+        .btn.borde:hover { background: var(--panel); border-color: #94a3b8; transform: translateY(-1px); }
+        .btn.borde .icono { color: var(--suave); }
+        .btn.borde.pdf .icono { color: #dc2626; }
+        .btn.borde.ticket .icono { color: #d97706; }
+        .btn.borde.xml .icono { color: #059669; }
         .campo { margin-bottom: 12px; } label { display: block; font-size: 13px; margin-bottom: 4px; color: #374151; }
         input, select { width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px;
                         background: #fff; }
