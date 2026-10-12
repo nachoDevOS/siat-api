@@ -55,7 +55,13 @@
                         </td>
                         <td><x-estado-empresa :estado="$empresa->estado" /></td>
                         <td><x-stepper :estado="$empresa->estado" compacto /></td>
-                        <td><a href="{{ route('admin.empresas.show', $empresa) }}">Ver ficha</a></td>
+                        <td style="white-space:nowrap; text-align:right;">
+                            {{-- Toda la historia del cliente, no solo el mes actual. --}}
+                            <a class="btn borde pdf" href="{{ route('admin.facturas.index', ['empresa' => $empresa->id, 'desde' => '', 'hasta' => '']) }}">
+                                <x-icono nombre="pdf" />Facturas ({{ $empresa->facturas_count }})
+                            </a>
+                            <a class="btn borde" href="{{ route('admin.empresas.show', $empresa) }}">Ver ficha</a>
+                        </td>
                     </tr>
                 @empty
                     <tr>

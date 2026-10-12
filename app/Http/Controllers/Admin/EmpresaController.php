@@ -47,6 +47,7 @@ class EmpresaController extends Controller
         $busqueda = trim((string) $request->query('q', ''));
 
         $empresas = Empresa::query()
+            ->withCount('facturas')
             ->when($estado !== '', fn ($q) => $q->where('estado', $estado))
             ->when($busqueda !== '', fn ($q) => $q->where(function ($sub) use ($busqueda) {
                 $sub->where('nombre_comercial', 'like', "%{$busqueda}%")

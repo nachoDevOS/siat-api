@@ -563,3 +563,17 @@ test('mientras el SIAT no confirma la anulacion la ficha consulta el estado y se
     $anulacion->update(['estado' => FacturaAnulada::ESTADO_CONFIRMADA]);
     $this->get(route('admin.facturas.show', $factura))->assertDontSee('Esperando que el SIAT confirme')->assertSee('Revertir anulacion');
 });
+
+test('cada cliente de la lista enlaza a todas sus facturas', function () {
+    $this->actingAs(User::factory()->create());
+    $empresa = Empresa::factory()->create();
+    Factura::factory()->for($empresa)->count(2)->create(['fecha_emision' => now()->subMonths(3)]);
+
+    $url = route('admin.facturas.index', ['empresa' => $empresa->id, 'desde' => '', 'hasta' => '']);
+
+    $this->get(route('admin.empresas.index'))->assertOk()
+        ->assertSee(e($url), false)
+        ->assertSee('Facturas (2)');
+    // Sin el limite del mes actual: aparecen tambien las de hace meses.
+    expect($this->get($url)->assertOk()->viewData('facturas')->total())->toBe(2);
+});

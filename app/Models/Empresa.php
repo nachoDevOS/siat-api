@@ -178,4 +178,9 @@ class Empresa extends Model
     {
         return $this->hasMany(Sucursal::class);
     }
+
+    public function facturas(): HasMany
+    {
+        return $this->hasMany(Factura::class);
+    }
 }
