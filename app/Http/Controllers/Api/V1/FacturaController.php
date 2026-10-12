@@ -8,10 +8,9 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\AnularFacturaRequest;
 use App\Http\Requests\EmitirFacturaRequest;
 use App\Http\Resources\FacturaResource;
-use App\Jobs\AnularFacturaEnSiat;
 use App\Models\Empresa;
 use App\Models\Factura;
-use App\Models\FacturaAnulada;
+use App\Services\Factura\AnuladorFactura;
 use App\Services\Factura\EmisorFactura;
 use App\Services\Factura\GeneradorPdf;
 use Illuminate\Http\JsonResponse;
@@ -26,18 +25,6 @@ use Symfony\Component\HttpFoundation\Response;
  */
 class FacturaController extends Controller
 {
-    /**
-     * Estados en los que el SIN ya conoce la factura y por lo tanto acepta su
-     * anulacion.
-     *
-     * @var list<string>
-     */
-    private const ESTADOS_ANULABLES = [
-        Factura::ESTADO_ENVIADA,
-        Factura::ESTADO_RECIBIDA,
-        Factura::ESTADO_VALIDADA,
-    ];
-
     /**
      * POST /api/v1/facturas — emite una factura y responde con el CUF.
      */
@@ -132,7 +119,7 @@ class FacturaController extends Controller
     /**
      * POST /api/v1/facturas/{cuf}/anular — anula una factura validada.
      */
-    public function anular(AnularFacturaRequest $request, string $cuf): JsonResponse
+    public function anular(AnularFacturaRequest $request, string $cuf, AnuladorFactura $anulador): JsonResponse
     {
         $factura = $this->buscar($request, $cuf);
 
@@ -145,34 +132,17 @@ class FacturaController extends Controller
             ]);
         }
 
-        // Solo se puede anular lo que el SIN ya conoce; una factura que todavia
-        // no viajo se corrige antes de enviarla, no se anula.
-        if (! in_array($factura->estado, self::ESTADOS_ANULABLES, true)) {
+        if (! $anulador->esAnulable($factura)) {
             return response()->json([
                 'exito' => false,
                 'error' => 'FACTURA_NO_ANULABLE',
-                'mensaje' => "Una factura en estado {$factura->estado} no se puede anular.",
+                'mensaje' => $anulador->yaSeRevirtio($factura)
+                    ? 'Esta factura ya se anulo y se revirtio una vez: el SIN no permite anularla de nuevo.'
+                    : "Una factura en estado {$factura->estado} no se puede anular.",
             ], Response::HTTP_CONFLICT);
         }
 
-        // Se registra la anulacion y se marca la factura de inmediato; la
-        // transmision al SIAT la hace AnularFacturaEnSiat en segundo plano.
-        // Se guarda el estado previo: si el SIN rechaza la anulacion, el job la
-        // devuelve ahi en vez de dejarla ANULADA de este lado y vigente del otro.
-        FacturaAnulada::updateOrCreate(
-            ['factura_id' => $factura->id],
-            [
-                'motivo' => $request->integer('motivo'),
-                'anulada_en' => now(),
-                'estado' => FacturaAnulada::ESTADO_PENDIENTE,
-                'estado_anterior' => $factura->estado,
-                'motivo_rechazo' => null,
-            ],
-        );
-
-        $factura->update(['estado' => Factura::ESTADO_ANULADA]);
-
-        AnularFacturaEnSiat::dispatch($factura->id);
+        $anulador->anular($factura, $request->integer('motivo'));
 
         return response()->json([
             'exito' => true,

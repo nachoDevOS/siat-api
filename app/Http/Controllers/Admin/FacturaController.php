@@ -2,14 +2,17 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Exceptions\SiatException;
 use App\Http\Controllers\Controller;
 use App\Jobs\EnviarFacturaAlSiat;
 use App\Jobs\VerificarEstadoFactura;
 use App\Models\Empresa;
 use App\Models\Factura;
+use App\Services\Factura\AnuladorFactura;
 use App\Services\Factura\GeneradorPdf;
 use App\Services\Factura\GeneradorQr;
 use App\Services\Panel\EstadosVisuales;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -68,7 +71,7 @@ class FacturaController extends Controller
         ]);
     }
 
-    public function show(Factura $factura, GeneradorQr $qr): View
+    public function show(Factura $factura, GeneradorQr $qr, AnuladorFactura $anulador): View
     {
         $factura->load(['empresa', 'puntoVenta.sucursal', 'items', 'anulacion', 'cufd', 'paquete']);
 
@@ -76,7 +79,64 @@ class FacturaController extends Controller
             'factura' => $factura,
             // La misma URL que codifica el QR: consulta la factura en el SIN.
             'urlVerificacion' => $qr->urlVerificacion($factura, GeneradorQr::FORMATO_CARTA),
+            'esAnulable' => $anulador->esAnulable($factura),
+            'esRevertible' => $anulador->esRevertible($factura),
+            'motivosAnulacion' => $anulador->motivos(),
         ]);
+    }
+
+    /**
+     * Estado actual de la factura y de su anulacion. Lo consulta la ficha
+     * mientras espera que el SIAT confirme, para recargarse sola.
+     */
+    public function estado(Factura $factura): JsonResponse
+    {
+        return response()->json([
+            'estado' => $factura->estado,
+            'anulacion' => $factura->anulacion?->estado,
+        ]);
+    }
+
+    /**
+     * Anula la factura con el motivo elegido. Igual que por la API: queda
+     * ANULADA al instante y el SIAT la confirma en segundo plano.
+     */
+    public function anular(Request $request, Factura $factura, AnuladorFactura $anulador): RedirectResponse
+    {
+        $motivos = array_keys($anulador->motivos());
+
+        $datos = $request->validate([
+            'motivo' => ['required', 'integer', Rule::in($motivos)],
+        ], ['motivo.in' => 'Elija un motivo del catalogo del SIN.']);
+
+        if (! $anulador->esAnulable($factura)) {
+            return back()->with('error', $anulador->yaSeRevirtio($factura)
+                ? 'Esta factura ya se anulo y se revirtio una vez: el SIN no permite anularla de nuevo.'
+                : "Una factura {$factura->estado} no se puede anular.");
+        }
+
+        $anulador->anular($factura, (int) $datos['motivo']);
+
+        return back()->with('estado', 'Factura anulada. El SIAT la confirma en unos segundos.');
+    }
+
+    /**
+     * Revierte una anulacion confirmada: la factura vuelve a ser valida. Se
+     * puede hacer una sola vez por factura.
+     */
+    public function revertir(Factura $factura, AnuladorFactura $anulador): RedirectResponse
+    {
+        if (! $anulador->esRevertible($factura)) {
+            return back()->with('error', 'Solo se revierte una anulacion que el SIN ya confirmo.');
+        }
+
+        try {
+            $anulador->revertir($factura);
+        } catch (SiatException $e) {
+            return back()->with('error', $e->getMessage());
+        }
+
+        return back()->with('estado', 'Anulacion revertida: la factura vuelve a estar vigente. Ya no se podra anular de nuevo.');
     }
 
     /**

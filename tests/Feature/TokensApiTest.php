@@ -2,6 +2,7 @@
 
 use App\Models\Empresa;
 use App\Models\Factura;
+use App\Models\FacturaAnulada;
 use App\Models\LogApi;
 use App\Models\PuntoVenta;
 use App\Models\Sucursal;
@@ -102,6 +103,22 @@ test('cada perfil solo llega a lo que sus permisos permiten', function (string $
     'consulta no emite' => ['consulta', 'POST', '/api/v1/facturas', false],
     'consulta lee catalogos' => ['consulta', 'GET', '/api/v1/catalogos/unidades_medida', true],
 ]);
+
+test('la API no anula de nuevo una factura cuya anulacion ya se revirtio', function () {
+    $empresa = Empresa::factory()->create();
+    $factura = Factura::factory()->for($empresa)->create(['estado' => Factura::ESTADO_VALIDADA]);
+    FacturaAnulada::create([
+        'factura_id' => $factura->id, 'motivo' => 1, 'anulada_en' => now(),
+        'estado' => FacturaAnulada::ESTADO_REVERTIDA, 'estado_anterior' => Factura::ESTADO_VALIDADA,
+    ]);
+
+    $this->withToken($empresa->emitirTokenApi('T', 'administracion')->plainTextToken)
+        ->postJson("/api/v1/facturas/{$factura->cuf}/anular", ['motivo' => 1])
+        ->assertConflict()
+        ->assertJsonPath('error', 'FACTURA_NO_ANULABLE');
+
+    expect($factura->fresh()->estado)->toBe(Factura::ESTADO_VALIDADA);
+});
 
 test('un perfil inexistente no emite token', function () {
     Empresa::factory()->create()->emitirTokenApi('T', 'superusuario');

@@ -1,13 +1,17 @@
 <?php
 
+use App\Jobs\AnularFacturaEnSiat;
 use App\Jobs\EnviarFacturaAlSiat;
+use App\Jobs\NotificarWebhook;
 use App\Jobs\RenovarCufd;
 use App\Jobs\VerificarEstadoFactura;
+use App\Models\Catalogo;
 use App\Models\Certificado;
 use App\Models\Cufd;
 use App\Models\Cuis;
 use App\Models\Empresa;
 use App\Models\Factura;
+use App\Models\FacturaAnulada;
 use App\Models\FacturaItem;
 use App\Models\LogApi;
 use App\Models\PuntoVenta;
@@ -20,6 +24,7 @@ use App\Services\Panel\PuntosVentaSiat;
 use App\Services\Panel\RequisitosEtapa;
 use App\Services\Siat\FabricaServicios;
 use App\Services\Siat\GestorCodigos;
+use App\Services\Siat\ServicioFacturacion;
 use App\Services\Siat\ServicioOperaciones;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Middleware\TrustProxies;
@@ -451,4 +456,110 @@ test('el PDF del detalle usa el enlace publico firmado de la factura', function 
         ->assertSee(e($factura->urlPublica('pdf')), false)
         ->assertSee('<svg class="icono"', false)
         ->assertDontSee(route('admin.facturas.pdf', $factura));
+});
+
+// --- Anular y revertir desde el panel ----------------------------------------------------
+
+/**
+ * Factura con su anulacion ya confirmada por el SIN.
+ */
+function facturaAnuladaConfirmada(): Factura
+{
+    $factura = Factura::factory()->create(['estado' => Factura::ESTADO_ANULADA]);
+    FacturaAnulada::create([
+        'factura_id' => $factura->id, 'motivo' => 1, 'anulada_en' => now(),
+        'estado' => FacturaAnulada::ESTADO_CONFIRMADA, 'estado_anterior' => Factura::ESTADO_VALIDADA,
+    ]);
+
+    return $factura;
+}
+
+/**
+ * El SIN responde a la reversion con la transaccion indicada.
+ */
+function sinRespondeReversion(bool $acepta): void
+{
+    $servicio = Mockery::mock(ServicioFacturacion::class);
+    $servicio->shouldReceive('revertirAnulacion')->once()->andReturn((object) ['RespuestaServicioFacturacion' => (object) (
+        $acepta
+            ? ['transaccion' => true, 'codigoEstado' => 907]
+            : ['transaccion' => false, 'mensajesList' => (object) ['codigo' => 1043, 'descripcion' => 'FACTURA NO ANULADA']]
+    )]);
+    test()->mock(FabricaServicios::class, fn ($mock) => $mock->shouldReceive('facturacion')->andReturn($servicio));
+}
+
+test('el panel anula una factura validada con un motivo del catalogo', function () {
+    Queue::fake();
+    $this->actingAs(User::factory()->create());
+    Catalogo::factory()->create(['tipo' => 'motivos_anulacion', 'codigo_clasificador' => '1', 'descripcion' => 'FACTURA MAL EMITIDA']);
+    $factura = Factura::factory()->create(['estado' => Factura::ESTADO_VALIDADA]);
+
+    $this->get(route('admin.facturas.show', $factura))->assertSee('FACTURA MAL EMITIDA')->assertSee('Anular factura');
+
+    $this->post(route('admin.facturas.anular', $factura), ['motivo' => 9])->assertSessionHasErrors('motivo');
+    expect($factura->fresh()->estado)->toBe(Factura::ESTADO_VALIDADA);
+
+    $this->post(route('admin.facturas.anular', $factura), ['motivo' => 1])->assertSessionHas('estado');
+
+    expect($factura->fresh()->estado)->toBe(Factura::ESTADO_ANULADA)
+        ->and($factura->anulacion->estado)->toBe(FacturaAnulada::ESTADO_PENDIENTE)
+        ->and($factura->anulacion->estado_anterior)->toBe(Factura::ESTADO_VALIDADA);
+    Queue::assertPushed(AnularFacturaEnSiat::class);
+});
+
+test('el panel revierte una anulacion confirmada y despues ya no deja anular de nuevo', function () {
+    Queue::fake();
+    $this->actingAs(User::factory()->create());
+    Catalogo::factory()->create(['tipo' => 'motivos_anulacion', 'codigo_clasificador' => '1', 'descripcion' => 'FACTURA MAL EMITIDA']);
+    $factura = facturaAnuladaConfirmada();
+    sinRespondeReversion(true);
+
+    $this->get(route('admin.facturas.show', $factura))->assertSee('Revertir anulacion')->assertDontSee('Anular factura');
+    $this->post(route('admin.facturas.revertir', $factura))->assertSessionHas('estado');
+
+    expect($factura->fresh()->estado)->toBe(Factura::ESTADO_VALIDADA)
+        ->and($factura->anulacion->fresh()->estado)->toBe(FacturaAnulada::ESTADO_REVERTIDA);
+    Queue::assertPushed(NotificarWebhook::class, fn ($job) => $job->evento === 'factura.anulacion_revertida');
+
+    // Una sola vez: ni el panel ni la API la vuelven a anular.
+    $this->get(route('admin.facturas.show', $factura))
+        ->assertDontSee('Anular factura')->assertDontSee('Revertir anulacion')->assertSee('ya se anulo y se revirtio una vez');
+    $this->post(route('admin.facturas.anular', $factura), ['motivo' => 1])->assertSessionHas('error');
+    expect($factura->fresh()->estado)->toBe(Factura::ESTADO_VALIDADA);
+    Queue::assertNotPushed(AnularFacturaEnSiat::class);
+});
+
+test('si el SIN rechaza la reversion la factura sigue anulada y se muestra el motivo', function () {
+    $this->actingAs(User::factory()->create());
+    $factura = facturaAnuladaConfirmada();
+    sinRespondeReversion(false);
+
+    $this->post(route('admin.facturas.revertir', $factura))->assertSessionHas('error', fn ($error) => str_contains($error, '[1043] FACTURA NO ANULADA'));
+
+    expect($factura->fresh()->estado)->toBe(Factura::ESTADO_ANULADA)
+        ->and($factura->anulacion->fresh()->estado)->toBe(FacturaAnulada::ESTADO_CONFIRMADA);
+});
+
+test('el panel muestra el descuento global y la gift card de la factura', function () {
+    $this->actingAs(User::factory()->create());
+    $factura = Factura::factory()->create(['descuento_global' => 3.5, 'gift_card' => 2]);
+
+    $this->get(route('admin.facturas.show', $factura))->assertSee('Descuento global / gift card')->assertSee('Bs 3.50 / Bs 2.00');
+});
+
+test('mientras el SIAT no confirma la anulacion la ficha consulta el estado y se recarga sola', function () {
+    $this->actingAs(User::factory()->create());
+    $factura = Factura::factory()->create(['estado' => Factura::ESTADO_ANULADA]);
+    $anulacion = FacturaAnulada::create([
+        'factura_id' => $factura->id, 'motivo' => 1, 'anulada_en' => now(),
+        'estado' => FacturaAnulada::ESTADO_PENDIENTE, 'estado_anterior' => Factura::ESTADO_VALIDADA,
+    ]);
+
+    $this->get(route('admin.facturas.show', $factura))
+        ->assertSee('Esperando que el SIAT confirme la anulacion')
+        ->assertSee(json_encode(route('admin.facturas.estado', $factura)), false);
+    $this->getJson(route('admin.facturas.estado', $factura))->assertExactJson(['estado' => 'ANULADA', 'anulacion' => 'PENDIENTE']);
+
+    $anulacion->update(['estado' => FacturaAnulada::ESTADO_CONFIRMADA]);
+    $this->get(route('admin.facturas.show', $factura))->assertDontSee('Esperando que el SIAT confirme')->assertSee('Revertir anulacion');
 });

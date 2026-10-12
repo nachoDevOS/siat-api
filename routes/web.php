@@ -89,6 +89,9 @@ Route::prefix('admin')->name('admin.')->middleware('auth')->group(function () {
     Route::get('facturas/{factura}/xml', [FacturaController::class, 'xml'])->name('facturas.xml');
     Route::post('facturas/{factura}/verificar', [FacturaController::class, 'verificar'])->name('facturas.verificar');
     Route::post('facturas/{factura}/reenviar', [FacturaController::class, 'reenviar'])->name('facturas.reenviar');
+    Route::get('facturas/{factura}/estado', [FacturaController::class, 'estado'])->name('facturas.estado');
+    Route::post('facturas/{factura}/anular', [FacturaController::class, 'anular'])->name('facturas.anular');
+    Route::post('facturas/{factura}/revertir', [FacturaController::class, 'revertir'])->name('facturas.revertir');
 
     // Avance de etapa del cliente ante el SIN (lo decide el SIN, aca se refleja).
     Route::post('empresas/{empresa}/estado', [EmpresaController::class, 'cambiarEstado'])

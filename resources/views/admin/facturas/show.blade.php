@@ -38,8 +38,82 @@
                     @csrf <button class="btn" type="submit"><x-icono nombre="refrescar" />Verificar estado ahora</button>
                 </form>
             @endif
+            @if ($esAnulable)
+                <button class="btn rojo" type="button" onclick="document.getElementById('dialogo-anular').showModal()">
+                    <x-icono nombre="anular" />Anular
+                </button>
+            @endif
+            @if ($esRevertible)
+                <form method="POST" action="{{ route('admin.facturas.revertir', $factura) }}" style="margin:0;"
+                      data-titulo="Revertir anulacion"
+                      data-confirmar="La factura vuelve a estar vigente ante el SIN.&#10;&#10;Solo se puede hacer UNA vez: despues de revertir, esta factura ya no se podra anular de nuevo."
+                      data-boton="Revertir anulacion">
+                    @csrf <button class="btn borde" type="submit"><x-icono nombre="revertir" />Revertir anulacion</button>
+                </form>
+            @endif
         </div>
     </div>
+
+    @if ($factura->anulacion?->estado === App\Models\FacturaAnulada::ESTADO_PENDIENTE)
+        {{-- La anulacion viaja al SIAT en segundo plano: la ficha pregunta cada
+             3 s y se recarga sola cuando el SIAT responde (aparece "Revertir"). --}}
+        <div class="aviso" id="esperando-siat" style="margin-top:16px;">
+            Esperando que el SIAT confirme la anulacion… la pagina se actualiza sola.
+        </div>
+        <script>
+            (function () {
+                const url = @json(route('admin.facturas.estado', $factura));
+                let intentos = 0;
+                const revisar = function () {
+                    intentos++;
+                    fetch(url, { headers: { 'Accept': 'application/json' } })
+                        .then(function (r) { return r.json(); })
+                        .then(function (datos) {
+                            if (datos.anulacion !== 'PENDIENTE') { location.reload(); return; }
+                            // Unos 2 minutos: si no responde, la cola esta parada o el SIAT caido.
+                            if (intentos < 40) { setTimeout(revisar, 3000); return; }
+                            document.getElementById('esperando-siat').textContent =
+                                'El SIAT todavia no confirma la anulacion. Revise que la cola este corriendo; se reintenta sola cada 15 minutos.';
+                        })
+                        .catch(function () { if (intentos < 40) { setTimeout(revisar, 3000); } });
+                };
+                setTimeout(revisar, 3000);
+            })();
+        </script>
+    @endif
+
+    @if ($factura->anulacion?->estado === App\Models\FacturaAnulada::ESTADO_REVERTIDA)
+        <div class="aviso" style="margin-top:16px;">
+            Esta factura ya se anulo y se revirtio una vez. El SIN no permite anularla de nuevo.
+        </div>
+    @endif
+
+    @if ($esAnulable)
+        {{-- El motivo es obligatorio para el SIN: sale de su catalogo. --}}
+        <dialog id="dialogo-anular" class="dialogo">
+            <form method="POST" action="{{ route('admin.facturas.anular', $factura) }}">
+                @csrf
+                <h2 style="margin-top:0;">Anular factura N° {{ $factura->numero_factura }}</h2>
+                <p class="mensaje">La factura deja de tener validez ante el SIN. Si fue un error se puede revertir, pero <strong>solo una vez</strong>.</p>
+                @if ($motivosAnulacion)
+                    <div class="campo" style="margin-top:14px;">
+                        <label for="motivo">Motivo</label>
+                        <select id="motivo" name="motivo" required>
+                            @foreach ($motivosAnulacion as $codigo => $descripcion)
+                                <option value="{{ $codigo }}">{{ $descripcion }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                @else
+                    <div class="aviso-error" style="margin-top:14px;">No hay motivos de anulacion: sincronice los catalogos del SIN primero.</div>
+                @endif
+                <div class="acciones">
+                    <button type="button" class="btn gris" onclick="this.closest('dialog').close()">Cancelar</button>
+                    <button type="submit" class="btn rojo" @disabled(! $motivosAnulacion)>Anular factura</button>
+                </div>
+            </form>
+        </dialog>
+    @endif
 
     @if ($factura->motivo_observacion)
         <div class="aviso-error" style="margin-top:16px;">
@@ -55,6 +129,7 @@
             <tr><th>Tipo de emision</th><td>{{ $factura->tipo_emision === App\Models\Factura::EMISION_CONTINGENCIA ? 'Fuera de linea (contingencia)' : 'En linea' }}</td></tr>
             <tr><th>Referencia externa</th><td>{{ $factura->referencia_externa ?? '—' }}</td></tr>
             <tr><th>Comprador</th><td>{{ $factura->comprador_razon_social }} · Doc. {{ $factura->comprador_tipo_documento }}: {{ $factura->comprador_numero_documento }}{{ $factura->comprador_complemento ? '-'.$factura->comprador_complemento : '' }}{{ $factura->codigo_excepcion ? ' · con excepcion de NIT' : '' }}</td></tr>
+            <tr><th>Descuento global / gift card</th><td>Bs {{ number_format((float) $factura->descuento_global, 2) }} / Bs {{ number_format((float) $factura->gift_card, 2) }}</td></tr>
             <tr><th>Total / sujeto a IVA</th><td>Bs {{ number_format((float) $factura->monto_total, 2) }} / Bs {{ number_format((float) $factura->monto_total_sujeto_iva, 2) }}</td></tr>
             <tr><th>CUFD usado</th><td>{{ $factura->cufd?->codigo ?? '—' }}</td></tr>
             <tr><th>Codigo de recepcion</th><td>{{ $factura->codigo_recepcion ?? '—' }}</td></tr>
