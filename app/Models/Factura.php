@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Facades\URL;
 
 /**
  * Una factura emitida. El XML firmado que guarda es el documento legal;
@@ -110,6 +111,28 @@ class Factura extends Model
     public function anulacion(): HasOne
     {
         return $this->hasOne(FacturaAnulada::class);
+    }
+
+    /**
+     * Enlace PUBLICO y firmado de la factura, para que el sistema de ventas lo
+     * abra o lo imprima sin token y el comprador la vea desde su telefono.
+     *
+     * La firma (HMAC con APP_KEY) es lo que impide adivinar facturas cambiando
+     * el CUF: sin ella responde 404. No vence, porque una factura se conserva.
+     * Va firmada sin el dominio (relative) para que valga igual detras de un
+     * proxy o con otro host.
+     *
+     * @param  'ver'|'pdf'|'rollo'  $tipo  pagina, PDF carta o PDF rollo 80 mm.
+     */
+    public function urlPublica(string $tipo = 'ver'): string
+    {
+        $ruta = match ($tipo) {
+            'pdf' => 'factura.publica.pdf',
+            'rollo' => 'factura.publica.rollo',
+            default => 'factura.publica',
+        };
+
+        return url(URL::signedRoute($ruta, ['cuf' => $this->cuf], absolute: false));
     }
 
     /**

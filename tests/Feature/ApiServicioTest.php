@@ -512,3 +512,127 @@ test('un error al forzar vuelve a la misma pantalla y se muestra en rojo', funct
         ->assertRedirect(route('admin.puntos-venta.codigos', $pv))
         ->assertSessionHas('error', fn (string $m) => str_contains($m, 'NO SE PUDO CERRAR'));
 });
+
+// --- Documentacion publica (/docs/api) ------------------------------------------------
+
+test('la documentacion publica se abre sin sesion y carga Redoc con la especificacion', function () {
+    $this->get('/docs/api')
+        ->assertOk()
+        ->assertSee('<redoc spec-url="'.route('docs.api.especificacion').'"', false)
+        ->assertSee(asset('vendor/redoc/redoc.standalone.js'), false)
+        ->assertSee('token de su empresa', false);
+
+    expect(file_exists(public_path('vendor/redoc/redoc.standalone.js')))->toBeTrue();
+});
+
+test('la especificacion publica apunta al servidor real de la instalacion', function () {
+    config(['app.url' => 'https://facturas.proveedor.bo']);
+
+    $respuesta = $this->get('/docs/api/openapi.yaml')
+        ->assertOk()
+        ->assertHeader('Content-Type', 'application/yaml; charset=utf-8');
+
+    $spec = Yaml::parse($respuesta->getContent());
+
+    expect($spec['servers'])->toBe([['url' => 'https://facturas.proveedor.bo/api/v1']])
+        ->and(array_keys($spec['paths']))->toContain('/facturas', '/estado', '/nit/{nit}/verificar')
+        ->and($spec['info']['description'])->toContain('# Primeros pasos');
+});
+
+test('la documentacion publica no expone nada privado', function () {
+    config(['siat.proveedor.nit' => '7633685015', 'siat.proveedor.codigo_sistema' => '22848EC6F66C9401C16F7']);
+    $empresa = Empresa::factory()->create();
+    $token = $empresa->emitirTokenApi('T', 'caja')->plainTextToken;
+
+    $contenido = $this->get('/docs/api')->getContent().$this->get('/docs/api/openapi.yaml')->getContent();
+
+    expect($contenido)
+        ->not->toContain('7633685015')
+        ->not->toContain('22848EC6F66C9401C16F7')
+        ->not->toContain(explode('|', $token)[1]);
+});
+
+// --- Coleccion de Postman / Thunder Client ------------------------------------------------
+
+test('la coleccion de Postman cubre todas las rutas de la API', function () {
+    $coleccion = json_decode(file_get_contents(base_path('docs/integracion/postman/coleccion.json')), true);
+
+    $enColeccion = collect($coleccion['item'])->flatMap(fn ($carpeta) => $carpeta['item'])
+        ->map(fn ($r) => $r['request']['method'].' '.preg_replace(
+            ['#\{\{base_url\}\}#', '#\?.*$#', '#/[0-9]{5,}/#', '#\{\{cuf\}\}#', '#\{\{sucursal\}\}/\{\{punto_venta\}\}#', '#/catalogos/\w+#'],
+            ['/api/v1', '', '/{nit}/', '{cuf}', '{sucursal}/{puntoVenta}', '/catalogos/{tipo}'],
+            $r['request']['url']['raw'],
+        ))
+        ->unique()->sort()->values()->all();
+
+    $reales = collect(Route::getRoutes()->getRoutes())
+        ->filter(fn ($ruta) => str_starts_with($ruta->uri(), 'api/v1/'))
+        ->map(fn ($ruta) => collect($ruta->methods())->reject(fn ($m) => $m === 'HEAD')->first().' /'.$ruta->uri())
+        ->reject(fn ($r) => $r === 'POST /api/v1/puntos-venta') // alta local: no es parte del flujo de prueba
+        ->sort()->values()->all();
+
+    expect($enColeccion)->toBe($reales);
+});
+
+test('cada peticion de la coleccion funciona de punta a punta, en orden', function () {
+    Queue::fake();
+    $pv = pv0SinCufd();
+    Cufd::factory()->create(['punto_venta_id' => $pv->id]);
+    $empresa = $pv->sucursal->empresa;
+    ProductoServicio::create(['empresa_id' => $empresa->id, 'codigo_actividad' => '620100', 'codigo_producto' => '83141', 'descripcion' => 'Martillo']);
+
+    // El SIN simulado solo para las dos llamadas que salen al SIAT.
+    $codigos = codigosDelSin();
+    $codigos->shouldReceive('verificarNit')->andReturn((object) ['RespuestaVerificarNit' => (object) ['transaccion' => true]]);
+    $codigos->shouldReceive('solicitarCufd')->andReturn(sinCufd('CUFD-EMERGENCIA'));
+
+    $variables = [
+        'base_url' => '/api/v1',
+        'token' => $empresa->emitirTokenApi('Postman', 'administracion')->plainTextToken,
+        'sucursal' => '0',
+        'punto_venta' => '0',
+        'venta_id' => 'VENTA-0001',
+        'cuf' => '',
+    ];
+
+    // Por referencia: el CUF se guarda a mitad de camino, como en Postman.
+    $sustituir = function (string $texto) use (&$variables): string {
+        return preg_replace_callback('/\{\{(\w+)\}\}/', fn ($m) => $variables[$m[1]], $texto);
+    };
+    $coleccion = json_decode(file_get_contents(base_path('docs/integracion/postman/coleccion.json')), true);
+
+    foreach (collect($coleccion['item'])->flatMap(fn ($c) => $c['item']) as $peticion) {
+        $r = $peticion['request'];
+        $cabeceras = collect($r['header'])->mapWithKeys(fn ($h) => [$h['key'] => $sustituir($h['value'])])->all();
+        $cabeceras['Authorization'] = 'Bearer '.$variables['token'];
+        $cuerpo = isset($r['body']) ? json_decode($sustituir($r['body']['raw']), true) : [];
+
+        app('auth')->forgetGuards();
+        $respuesta = $this->withHeaders($cabeceras)->json($r['method'], $sustituir($r['url']['raw']), $cuerpo);
+
+        expect($respuesta->status())->toBeLessThan(400, "{$peticion['name']} respondio {$respuesta->status()}: ".mb_substr($respuesta->getContent(), 0, 200));
+
+        // Lo mismo que hace el script de la coleccion: guardar el CUF. Y lo
+        // que hace el worker en segundos: enviarla y que el SIN la valide
+        // (una PENDIENTE no se puede anular, como avisa la guia).
+        if ($peticion['name'] === 'Emitir factura') {
+            $variables['cuf'] = $respuesta->json('factura.cuf');
+            Factura::where('cuf', $variables['cuf'])->update(['estado' => Factura::ESTADO_VALIDADA]);
+        }
+    }
+
+    expect($variables['cuf'])->not->toBe('');
+});
+
+test('la coleccion y el entorno se descargan desde /docs/api con la URL real', function () {
+    config(['app.url' => 'https://facturas.proveedor.bo']);
+
+    $this->get('/docs/api')
+        ->assertSee(route('docs.api.postman.coleccion'), false)
+        ->assertSee(route('docs.api.postman.entorno'), false);
+
+    $this->get(route('docs.api.postman.coleccion'))->assertOk()->assertJsonPath('info.schema', 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json');
+
+    $entorno = $this->get(route('docs.api.postman.entorno'))->assertOk()->json();
+    expect(collect($entorno['values'])->firstWhere('key', 'base_url')['value'])->toBe('https://facturas.proveedor.bo/api/v1');
+});

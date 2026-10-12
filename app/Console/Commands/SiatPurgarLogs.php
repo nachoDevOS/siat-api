@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\LogApi;
 use App\Models\LogSiat;
+use App\Models\Trabajo;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
@@ -50,6 +51,13 @@ class SiatPurgarLogs extends Command
         } while ($lote > 0);
 
         $this->info("Logs API borrados (anteriores a {$corteApi->toDateString()}): {$borradosApi}");
+
+        // Historial de trabajos: los exitosos solo sirven unos dias; los
+        // fallidos (y los que quedaron a medias) un mes, para investigarlos.
+        $trabajos = Trabajo::where('estado', Trabajo::EXITOSO)->where('updated_at', '<', now()->subDays(7))->delete()
+            + Trabajo::where('estado', '!=', Trabajo::EXITOSO)->where('updated_at', '<', now()->subDays(30))->delete();
+
+        $this->info("Trabajos borrados del historial: {$trabajos}");
 
         return self::SUCCESS;
     }

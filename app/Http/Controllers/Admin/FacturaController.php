@@ -39,6 +39,12 @@ class FacturaController extends Controller
 
         $q = trim((string) ($filtros['q'] ?? ''));
 
+        // Por defecto, este mes. Salvo al buscar una factura puntual (CUF,
+        // referencia o numero): esa tiene que aparecer sea del mes que sea.
+        if ($q === '') {
+            $filtros = $this->conMesActualPorDefecto($request, $filtros);
+        }
+
         $facturas = Factura::query()
             ->with(['empresa', 'puntoVenta.sucursal'])
             ->when($filtros['empresa'] ?? null, fn ($query, $id) => $query->where('empresa_id', $id))

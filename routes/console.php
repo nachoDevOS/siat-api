@@ -7,6 +7,8 @@ use App\Jobs\VerificarEstadoFactura;
 use App\Models\Empresa;
 use App\Models\Factura;
 use App\Models\FacturaAnulada;
+use App\Services\Trabajos\RegistroTrabajos;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schedule;
 
 /*
@@ -14,6 +16,13 @@ use Illuminate\Support\Facades\Schedule;
 | Tareas programadas (seccion 8.6 del documento maestro).
 |--------------------------------------------------------------------------
 */
+
+/*
+ * Cada minuto: latido del scheduler. La pantalla "Trabajos" y el Dashboard lo
+ * leen para avisar si el scheduler esta apagado (sin el, nada se renueva).
+ */
+Schedule::call(fn () => Cache::put(RegistroTrabajos::LATIDO_SCHEDULER, time(), now()->addDay()))
+    ->everyMinute()->name('latido-scheduler');
 
 /*
  * Cada 5 min: reintenta las facturas que quedaron pendientes de envio.

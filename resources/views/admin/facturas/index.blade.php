@@ -38,7 +38,9 @@
                 <input type="date" id="hasta" name="hasta" value="{{ $filtros['hasta'] ?? '' }}">
             </div>
             <button class="btn" type="submit">Filtrar</button>
-            <a class="btn gris" href="{{ route('admin.facturas.index') }}">Limpiar</a>
+            {{-- Por defecto se ve el mes actual; "Ver todo" manda las fechas vacias. --}}
+            <a class="btn gris" href="{{ route('admin.facturas.index') }}">Este mes</a>
+            <a class="btn gris" href="{{ route('admin.facturas.index', ['desde' => '', 'hasta' => '']) }}">Ver todo</a>
         </form>
     </div>
 

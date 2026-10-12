@@ -9,6 +9,8 @@ use App\Models\Factura;
 use App\Models\LogSiat;
 use App\Models\PuntoVenta;
 use App\Models\Sucursal;
+use App\Models\Trabajo;
+use App\Services\Trabajos\RegistroTrabajos;
 use Illuminate\View\View;
 
 /**
@@ -32,7 +34,16 @@ class DashboardController extends Controller
             ? (int) round($peticionesExitosas / $totalPeticiones * 100)
             : 0;
 
+        // Trabajos de la cola en las ultimas 24 h (sin el piloto).
+        $trabajos24h = Trabajo::where('cola', '!=', 'piloto')
+            ->where('updated_at', '>=', now()->subDay())
+            ->selectRaw('estado, count(*) as total')
+            ->groupBy('estado')
+            ->pluck('total', 'estado');
+
         return view('admin.dashboard.index', [
+            'procesos' => RegistroTrabajos::estadoProcesos(),
+            'trabajos24h' => $trabajos24h,
             'totalEmpresas' => Empresa::count(),
             'empresasProduccion' => Empresa::where('codigo_ambiente', 1)->count(),
             'empresasPiloto' => Empresa::where('codigo_ambiente', 2)->count(),

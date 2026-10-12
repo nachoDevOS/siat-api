@@ -194,30 +194,10 @@ sistemas de venta del cliente nunca ven ni manejan estos códigos.
 
 ### Paso 6 — Correr el piloto
 
-Pasá el cliente a **EN_PRUEBAS** y andá a `/admin/empresas/{id}/pruebas`.
-
-Son 17 pasos. Los podés correr todos seguidos o de a uno para reintentar el que falló.
-
-```
- 1  Verificar comunicacion              10  Registrar punto de venta
- 2  Verificar el NIT del contribuyente  11  Emitir factura contado - efectivo
- 3  Sincronizar fecha y hora del SIN    12  Emitir factura con descuento
- 4  Solicitar CUIS                      13  Emitir factura a NIT de empresa
- 5  Solicitar CUFD                      14  Anular una factura
- 6  Sincronizar catalogos globales      15  Registrar evento significativo
- 7  Sincronizar actividades del NIT     16  Emitir en contingencia + paquete
- 8  Sincronizar productos homologados   17  Marcar cliente PILOTO_APROBADO
- 9  Sincronizar leyendas de factura
-```
-
-- **1 a 10** — estructurales, se ejecutan enteros. Los pasos de CUIS y CUFD **guardan** el
-  código: los siguientes lo necesitan vigente.
-- **11 a 16** — emiten documentos reales. Los datos que llevan (qué venta, qué motivo, qué
-  código de evento) **los define la especificación que el SIN genera por contribuyente**:
-  se cargan en `payload_ejemplo` desde el panel y no se inventan. Si falta, el paso falla
-  diciendo exactamente qué cargar.
-- **17** — solo verifica que los 16 anteriores estén en EXITOSO. **No cambia el estado**:
-  quien aprueba el piloto es el SIN.
+Pasá el cliente a **EN_PRUEBAS** y andá a **Pruebas piloto** (botón en la cabecera de la ficha,
+`/admin/empresas/{id}/pruebas`). El panel muestra las etapas tal como las lista el portal del SIN;
+cómo correrlas y el estado de cada una está en [Piloto ante el SIN](#11-piloto-ante-el-sin), al
+final de esta guía.
 
 ### Paso 7 — Producción
 
@@ -389,5 +369,124 @@ por ambiente
 
 ---
 
-**Ver también:** [ANALISIS-SISTEMA.md](ANALISIS-SISTEMA.md) — arquitectura, modelo de datos
-y estado de la implementación.
+**Ver también:** [TECNICO.md](TECNICO.md) — arquitectura, contrato con el SIN y base de datos ·
+[INSTALACION-Y-DESPLIEGUE.md](INSTALACION-Y-DESPLIEGUE.md) — levantar y mantener el servidor.
+
+---
+
+## 11. Piloto ante el SIN
+
+Cómo se corren las pruebas que el SIN exige para autorizar el sistema (*Oficina Virtual → Seguimiento de Autorización de Sistemas → Listado de Pruebas*) y en qué punto está cada etapa.
+
+---
+
+### Dónde y cómo
+
+Panel → **Empresas → (empresa) → Pruebas** (`/admin/empresas/{id}/pruebas`).
+
+- Cada etapa muestra sus pruebas con los parámetros del portal, las **esperadas** y las
+  **correctas** (solo cuentan las respuestas con `transaccion = true`, o 908 en emisiones).
+- **Correr prueba**: ejecuta una llamada en el momento (útil para depurar).
+- **Completar**: encola solo lo que le falta a esa prueba.
+- **Correr etapa**: hasta 10 llamadas van en el request; por encima, todo va a la cola
+  (`EjecutarCasoPrueba`).
+- **Limpiar conteo**: borra las ejecuciones **locales** (y sus jobs en cola) para volver a contar.
+  No deshace nada ante el SIN ni borra facturas, CUIS o CUFD.
+- **Cerrar operaciones**: aparece junto a un error de CUIS; llama `cierreOperacionesSistema` para
+  que el SIN acepte emitir un CUIS nuevo.
+
+Requisitos para correr: token delegado cargado (todas) y certificado `.p12` activo (solo las que
+firman: IV, VI, VIII). Un autofirmado sirve **solo** en piloto.
+
+> ⚠️ Las etapas largas corren en la cola `piloto`: el worker tiene que estar levantado **con las
+> tres colas** y reiniciado después de cada cambio de código:
+>
+> ```bash
+> php artisan queue:work --queue=facturas,default,piloto
+> ```
+>
+> Sin `--queue` solo atiende `default`: las pruebas quedarían encoladas sin correr.
+
+Las pruebas viven en `casos_prueba` (sembradas por `CasosPruebaSeeder`, con `etapa` y
+`pruebas_esperadas`) y la lógica en `app/Services/Pruebas/EjecutorPruebas.php`.
+
+---
+
+### Etapas
+
+Todas sobre la casa matriz (sucursal 0) con los puntos de venta **1** (registrado por API) y
+**0** (implícito).
+
+| Etapa | Qué pide el portal | Esperadas | Tipo de prueba | Estado |
+|---|---|---|---|---|
+| I | CUIS por punto de venta | 1 por PV | `solicitudCuis` | ✅ Hecha |
+| II | Cada catálogo 50 veces por PV (18 catálogos) | 50 c/u | `sincronizacionCatalogo` | ✅ Hecha |
+| III | 100 CUFD por PV | 100 c/u | `solicitudCufd` | ✅ Hecha |
+| IV | 125 facturas compra-venta en línea por PV | 125 c/u | `emisionIndividual` | ⏳ Falta el `.p12` (passphrase) |
+| V | 7 motivos de evento significativo × 5 por PV | 5 c/u | `eventoSignificativo` | ✅ Hecha |
+| VI | Por motivo: 10 paquetes de 500 facturas (PV 1) y 10 de < 500 (PV 0); validar los 70 de cada PV | 10 / 70 | `paqueteContingencia`, `validacionPaquete` | ⏳ Siguiente, con CAFC |
+| VII | Anular 125 facturas por PV (motivo FACTURA MAL EMITIDA) | 125 c/u | `anulacionEtapa` | ⏳ Depende de IV |
+| VIII | 115 facturas firmadas por PV | 115 c/u | `emisionIndividual` | ⏳ Falta el `.p12` |
+| XI | Revertir 125 anulaciones por PV | 125 c/u | `reversionAnulacion` | ⏳ Depende de VII |
+
+Además siguen sembrados los **17 pasos del flujo original** (`etapa = null`): comunicación,
+fecha/hora, NIT, CUIS, CUFD, catálogos, registro de PV, emisión, anulación, evento, paquete y
+cierre. Los dos flujos están vivos.
+
+---
+
+### Notas por etapa
+
+#### I — CUIS
+Si ya existe un CUIS vigente, el SIN responde 980 con el mismo código: **no cuenta** como prueba,
+pero el código se guarda. Junto al error aparece **Cerrar operaciones y pedir CUIS nuevo**: en un
+solo clic cierra las operaciones del sistema en ese punto de venta (con el CUIS que el SIN tiene
+vigente), repite la prueba —ahora el SIN entrega uno nuevo y cuenta— y pide un CUFD atado al
+CUIS nuevo, para que las facturas de la etapa IV no vuelvan con 913.
+
+Si el punto de venta del portal (p. ej. el PV 1) no está cargado en la ficha, la etapa lo crea
+sola en la sucursal correspondiente y guarda ahí su CUIS y su CUFD. Las etapas II, III y IV hacen
+lo mismo: si al punto de venta le falta el CUIS, lo piden al SIN antes de correr (980 = el mismo
+CUIS vigente, se guarda igual). Solo fallan si la sucursal no está en la ficha o si el SIN no
+entrega CUIS, mostrando su motivo.
+
+#### II — Catálogos
+Usa el CUIS del punto de venta de cada prueba. Un rechazo (`transaccion = false`) queda FALLIDO
+con su motivo; antes se veía como "sincronizado: 0".
+
+#### III — CUFD
+Cada solicitud devuelve un CUFD nuevo atado al CUIS con el que se pidió.
+
+#### IV y VIII — Emisión
+Emite con `EmisorFactura` (mismo código que producción) sin encolar el envío, y envía en el
+momento para leer la respuesta del SIN. Es la etapa que confirma si la firma XML-DSig alcanza o
+hace falta XAdES-BES (ver [TECNICO.md → Firma digital](TECNICO.md#firma-digital)).
+
+#### V — Eventos
+Cada evento lleva el CUFD vigente y un `cufdEvento` distinto; el rango de fechas se calcula a
+partir de la emisión del CUFD del evento.
+
+#### VI — Paquetes (próxima)
+- Los motivos **5, 6 y 7** corresponden a facturación manual y requieren **CAFC**, que ya se
+  solicitó al SIN.
+- Antes de correrla hay que:
+  1. Volver a incorporar el CAFC (tabla, código por punto de venta y `<cafc>` en el XML y en el
+     paquete). La migración `2026_09_14_..._eliminar_cafc_fuera_de_alcance_electronica` lo había
+     quitado por considerarlo fuera de alcance.
+  2. Resolver los problemas de contingencia de producción (ver
+     [TECNICO.md → Pendientes](TECNICO.md#pendientes)); el generador del piloto
+     (`GeneradorPaquetePrueba`) ya emite con `tipo_emision = 2` y CUF coherente.
+  3. Contemplar el límite de 500 facturas por paquete.
+
+#### VII y XI — Anulación y reversión
+Anulan las facturas validadas en la etapa IV y luego revierten esas anulaciones
+(`reversionAnulacionFactura`, sin motivo según el WSDL del piloto).
+
+---
+
+### Al terminar
+
+1. Todas las pruebas en sus esperadas → el checklist de la ficha marca el requisito.
+2. El SIN aprueba en el portal → en el panel, cambiar el estado a `PILOTO_APROBADO`.
+3. Cargar el certificado de la entidad certificadora, pasar el ambiente a 1 y el estado a
+   `PRODUCCION` (ver [ALTA-DE-CLIENTE.md](ALTA-DE-CLIENTE.md) paso 7).

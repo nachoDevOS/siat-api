@@ -288,7 +288,11 @@ class GestorCodigos
         }
 
         try {
-            return Carbon::parse((string) $declarada);
+            // Siempre en hora de Bolivia. Hoy el SIN la manda con -04:00, pero
+            // si llegara en UTC (...Z) se guardaria la hora UTC tal cual: un
+            // CUFD figuraria vigente 4 horas de mas y las facturas emitidas
+            // con el ya vencido saldrian rechazadas.
+            return Carbon::parse((string) $declarada)->setTimezone(config('app.timezone'));
         } catch (\Throwable) {
             // Un formato inesperado no puede tumbar la solicitud entera.
             return $respaldo;

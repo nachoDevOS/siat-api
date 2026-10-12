@@ -1,18 +1,118 @@
 openapi: 3.0.3
 info:
-  title: siat-api — API REST v1
+  title: API de facturación electrónica — v1
   version: "1.0.0"
   description: |
-    Facturación electrónica en línea ante el SIAT (Bolivia), documento sector 1 — Factura Compra Venta.
+    Facturación electrónica en línea ante el SIAT (Bolivia), **documento sector 1 — Factura Compra
+    Venta**.
 
-    El sistema de ventas solo manda la venta en JSON: esta API calcula el CUF, arma y firma el XML,
-    lo envía al SIN y maneja sola los códigos CUIS y CUFD.
+    # Cómo funciona
 
-    **Autenticación:** `Authorization: Bearer {token}`. Cada token pertenece a una empresa, tiene un
-    perfil de permisos y se crea desde el panel del proveedor. Cada operación indica el permiso que
-    exige en `x-permiso`.
+    | Su sistema de ventas | Esta API |
+    |---|---|
+    | Registra la venta y manda el JSON | Calcula el CUF, arma y firma el XML, lo envía al SIN |
+    | Imprime la factura con el CUF recibido | Pide y renueva **sola** el CUIS y el CUFD |
+    | (Opcional) verifica el NIT antes de vender | Reintenta, verifica el estado y avisa por webhook |
 
-    Guía completa: `API.md`, en esta misma carpeta.
+    Usted no necesita SOAP, certificados ni códigos del SIN.
+
+    # Autenticación
+
+    Todas las llamadas llevan el **token de su empresa**. **No se obtiene por la API:** lo genera el
+    sistema de facturación (su proveedor) desde su panel y se lo entrega a usted.
+
+    ```http
+    Authorization: Bearer 12|siat_4f8a...c91e
+    ```
+
+    - Hay **un token por empresa**: su sistema lo usa para todas sus sucursales y cajas (cada venta
+      indica `sucursal` y `punto_venta`).
+    - Se lo entrega el proveedor **una sola vez**. Si se pierde o se filtra, pida que lo
+      **regeneren**: el anterior deja de funcionar al instante.
+    - Guárdelo como un secreto (variable de entorno), nunca en el código ni en el navegador.
+    - Cada operación indica el permiso que exige (`x-permiso`). Perfiles: *Administración* (todo),
+      *Caja / POS* (vende y consulta, no anula), *Solo consulta*.
+
+    **Límites:** 60 peticiones por minuto por token y 120 por empresa. Al superarlos: `429` con
+    cabecera `Retry-After`.
+
+    # Primeros pasos
+
+    1. **Probar la conexión:** `GET /estado` debe responder `"puede_facturar": true`.
+    2. **Cargar referencias** (una vez al día): `GET /sucursales`, `GET /catalogos/productos`,
+       `GET /catalogos/unidades_medida`, `GET /catalogos/tipos_metodo_pago`.
+    3. **(Opcional) verificar el NIT** del comprador: `GET /nit/{nit}/verificar` → mande su
+       `codigo_excepcion` en la venta.
+    4. **Emitir:** `POST /facturas` con `X-Idempotency-Key`. Guarde el `cuf` e **imprima ya**
+       abriendo `url_publica_rollo` (ticket 80 mm) o `url_publica_pdf` (hoja): la factura es válida
+       desde ese momento y **no tiene que armarla usted**.
+    5. **Recibir el resultado:** por webhook (recomendado) o consultando `GET /facturas/{cuf}`.
+
+    Para probar sin facturar de verdad, pida al proveedor una **empresa de pruebas** (ambiente piloto).
+
+    # Imprimir y compartir la factura
+
+    La API arma la factura completa. Cada factura trae tres **enlaces públicos firmados** que se
+    abren **sin token**:
+
+    | Campo | Qué abre |
+    |---|---|
+    | `url_publica` | Página con la factura y botones (descargar, imprimir, verificar en el SIN). Para mostrarla o **mandársela al comprador** |
+    | `url_publica_pdf` | PDF tamaño carta |
+    | `url_publica_rollo` | PDF para **impresora térmica de 80 mm** (ticket de caja) |
+
+    Están firmados (nadie puede ver otra factura cambiando el CUF) y no vencen.
+
+    # Idempotencia
+
+    Mande en cada emisión `X-Idempotency-Key` con el id único de su venta (o `referencia_externa` en
+    el cuerpo). Repetir la petición con la misma clave devuelve la factura ya emitida: **no se
+    duplica**. Ante un timeout, reintente siempre con la misma clave. Para encontrar la venta después:
+    `GET /facturas?referencia_externa=...`.
+
+    # Webhooks
+
+    Si su empresa tiene una URL configurada, le avisamos por `POST`:
+
+    | Evento | Cuándo |
+    |---|---|
+    | `factura.validada` | El SIN validó la factura |
+    | `factura.observada` | El SIN la rechazó (`motivo` dice por qué) |
+    | `factura.anulada` | El SIN confirmó la anulación |
+    | `factura.anulacion_rechazada` | El SIN rechazó la anulación; la factura sigue vigente |
+
+    ```json
+    {"evento":"factura.validada","cuf":"4A1B...","referencia_externa":"VENTA-000123","estado":"VALIDADA","codigo_recepcion":"1234567","motivo":null,"emitido_en":"2026-10-11T10:16:03-04:00"}
+    ```
+
+    Cabeceras: `X-Siat-Evento` y `X-Siat-Signature: sha256=...`, el HMAC-SHA256 del **cuerpo crudo**
+    con el secreto de webhook de su empresa. Verifíquela antes de parsear el JSON:
+
+    ```php
+    $cuerpo = file_get_contents('php://input');
+    $esperada = 'sha256='.hash_hmac('sha256', $cuerpo, $secreto);
+    if (! hash_equals($esperada, $_SERVER['HTTP_X_SIAT_SIGNATURE'] ?? '')) { http_response_code(401); exit; }
+    ```
+
+    Responda `2xx`; si no, se reintenta 5 veces. Puede llegar más de una vez: deduplique por `cuf` + `evento`.
+
+    # Estados de una factura
+
+    | Estado | Significa |
+    |---|---|
+    | `PENDIENTE` | Emitida y válida, viajando al SIN |
+    | `RECIBIDA` | El SIN la recibió y la está validando |
+    | `ENVIADA` | Viajó en un paquete de contingencia |
+    | `VALIDADA` | Aceptada por el SIN (estado final normal) |
+    | `OBSERVADA` | Rechazada por el SIN: el porqué viene en `motivo_observacion` |
+    | `CONTINGENCIA` | Emitida sin conexión con el SIN; válida, se enviará cuando vuelva |
+    | `ANULADA` | Anulada |
+
+    # Errores
+
+    Todas las respuestas de error traen `{"exito": false, "error": "CODIGO", "mensaje": "..."}`. Los
+    códigos posibles están en el esquema `Error` y en cada operación.
+
 servers:
   - url: https://{dominio}/api/v1
     variables:
@@ -420,7 +520,15 @@ components:
     bearer:
       type: http
       scheme: bearer
-      description: "Token de Sanctum, con el formato `12|siat_...`"
+      description: |
+        **Token de su empresa**, con el formato `12|siat_...`, en la cabecera
+        `Authorization: Bearer 12|siat_...` de **todas** las llamadas.
+
+        **El token NO se obtiene por esta API:** lo genera el **sistema de facturación (su
+        proveedor)** desde su panel de administración y se lo entrega a usted **una sola vez**, por
+        un canal seguro, junto con sus códigos de sucursal y punto de venta. Es **uno por empresa**
+        y sirve para todas sus sucursales y cajas. Si se pierde o se filtra, pida al proveedor que lo
+        **regenere**: el anterior deja de funcionar al instante.
 
   parameters:
     Sucursal:
@@ -564,6 +672,9 @@ components:
         leyenda: { type: string, nullable: true }
         total: { type: number }
         referencia_externa: { type: string, nullable: true }
+        url_publica: { type: string, format: uri, description: "Página pública de la factura (sin token, enlace firmado). Para mostrarla o compartirla con el comprador" }
+        url_publica_pdf: { type: string, format: uri, description: "PDF tamaño carta (sin token)" }
+        url_publica_rollo: { type: string, format: uri, description: "PDF para impresora térmica de 80 mm (sin token)" }
         url_verificacion: { type: string, format: uri }
         url_pdf: { type: string, format: uri }
         url_xml: { type: string, format: uri }

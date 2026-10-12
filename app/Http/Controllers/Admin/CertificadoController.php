@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Exceptions\SiatException;
 use App\Http\Controllers\Controller;
+use App\Models\Certificado;
 use App\Models\Empresa;
 use App\Services\Factura\GeneradorCertificadoPrueba;
 use Illuminate\Http\RedirectResponse;
@@ -107,12 +108,6 @@ class CertificadoController extends Controller
      */
     private function vencimientoDe(array $almacen): ?Carbon
     {
-        $datos = openssl_x509_parse((string) ($almacen['cert'] ?? ''));
-
-        if ($datos === false || ! isset($datos['validTo_time_t'])) {
-            return null;
-        }
-
-        return Carbon::createFromTimestamp($datos['validTo_time_t']);
+        return Certificado::vencimientoDeX509((string) ($almacen['cert'] ?? ''));
     }
 }

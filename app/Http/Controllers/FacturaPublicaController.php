@@ -1,0 +1,76 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Factura;
+use App\Services\Factura\GeneradorPdf;
+use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\View\View;
+
+/**
+ * Factura PUBLICA: lo que abre el sistema de ventas para mostrar o imprimir
+ * una factura, y lo que se le comparte al comprador. La API arma todo; el
+ * sistema externo no tiene que construir nada ni mandar su token.
+ *
+ * Toda ruta exige el enlace firmado (Factura::urlPublica): sin firma valida
+ * responde 404 y no se puede recorrer facturas cambiando el CUF.
+ */
+class FacturaPublicaController extends Controller
+{
+    public function __construct(private readonly GeneradorPdf $pdf) {}
+
+    /**
+     * Pagina con la factura y los botones de descarga e impresion.
+     */
+    public function show(string $cuf): View
+    {
+        $factura = $this->buscar($cuf);
+
+        return view('factura.publica', $this->pdf->datos($factura) + [
+            'urlPdf' => $factura->urlPublica('pdf'),
+            'urlRollo' => $factura->urlPublica('rollo'),
+        ]);
+    }
+
+    /**
+     * PDF tamano carta (el mismo que se guarda al enviar la factura).
+     */
+    public function pdf(string $cuf): Response
+    {
+        $factura = $this->buscar($cuf);
+
+        if (blank($factura->ruta_pdf) || ! Storage::disk('local')->exists($factura->ruta_pdf)) {
+            $factura->update(['ruta_pdf' => $this->pdf->generarYGuardar($factura)]);
+        }
+
+        return $this->enLinea(Storage::disk('local')->get($factura->ruta_pdf), "factura-{$factura->numero_factura}.pdf");
+    }
+
+    /**
+     * PDF para impresora termica de ticket (80 mm).
+     */
+    public function rollo(string $cuf): Response
+    {
+        $factura = $this->buscar($cuf);
+
+        return $this->enLinea($this->pdf->rollo($factura), "factura-{$factura->numero_factura}-rollo.pdf");
+    }
+
+    private function buscar(string $cuf): Factura
+    {
+        // Sin XML firmado no hay documento que mostrar.
+        return Factura::where('cuf', $cuf)->whereNotNull('xml_firmado')->firstOrFail();
+    }
+
+    /**
+     * 'inline': se abre en el visor del navegador, listo para imprimir.
+     */
+    private function enLinea(string $contenido, string $nombre): Response
+    {
+        return response($contenido, 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => "inline; filename=\"{$nombre}\"",
+        ]);
+    }
+}

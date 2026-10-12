@@ -1,0 +1,534 @@
+{
+  "info": {
+    "name": "Facturación electrónica SIAT — API v1",
+    "description": "Peticiones listas para probar la API, en el orden en que se usan.\n\nANTES DE EMPEZAR — el token: lo genera y le entrega el SISTEMA DE FACTURACIÓN (su proveedor) desde su panel de administración. No existe un endpoint para obtenerlo: péguelo en la variable token del entorno.\n\n1. Importe también el entorno (entorno.json) y selecciónelo.\n2. Complete en el entorno: base_url, token, sucursal y punto_venta (se los entrega el proveedor).\n3. Ejecute las carpetas en orden: 1 → 7.\n\nGuía completa: API.md, sección 7 · Documentación: /docs/api",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "1. Probar la conexión",
+      "item": [
+        {
+          "name": "¿Puedo facturar? (estado)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/estado",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "estado"
+              ]
+            },
+            "description": "Primera llamada. Debe responder 200 con \"puede_facturar\": true.\n\n- 401 = el token está mal copiado o fue revocado.\n- puede_facturar false = la empresa todavía no está en producción: avise al proveedor.\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Datos de referencia",
+      "item": [
+        {
+          "name": "Sucursales y puntos de venta",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/sucursales",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sucursales"
+              ]
+            },
+            "description": "Sus códigos de sucursal y punto de venta. Copie los que va a usar a las variables sucursal y punto_venta del entorno.\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno)."
+          }
+        },
+        {
+          "name": "Productos homologados de su NIT",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/catalogos/productos",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "catalogos",
+                "productos"
+              ]
+            },
+            "description": "Los únicos codigo_producto_sin que acepta la emisión. Asocie cada producto de su sistema a uno de estos códigos.\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno)."
+          }
+        },
+        {
+          "name": "Unidades de medida",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/catalogos/unidades_medida",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "catalogos",
+                "unidades_medida"
+              ]
+            },
+            "description": "Para items.*.unidad_medida.\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno)."
+          }
+        },
+        {
+          "name": "Métodos de pago",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/catalogos/tipos_metodo_pago",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "catalogos",
+                "tipos_metodo_pago"
+              ]
+            },
+            "description": "Para metodo_pago.\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno)."
+          }
+        },
+        {
+          "name": "Tipos de documento de identidad",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/catalogos/tipos_documento_identidad",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "catalogos",
+                "tipos_documento_identidad"
+              ]
+            },
+            "description": "Para comprador.tipo_documento (1 = CI, 5 = NIT…).\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno)."
+          }
+        },
+        {
+          "name": "Motivos de anulación",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/catalogos/motivos_anulacion",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "catalogos",
+                "motivos_anulacion"
+              ]
+            },
+            "description": "Para el campo motivo al anular.\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno)."
+          }
+        },
+        {
+          "name": "Puntos de venta (detalle)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/puntos-venta",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "puntos-venta"
+              ]
+            },
+            "description": "Puntos de venta activos, con si están registrados en el SIN y si tienen CUFD vigente.\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Verificar NIT (opcional)",
+      "item": [
+        {
+          "name": "Verificar un NIT",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/nit/1023456028/verificar",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "nit",
+                "1023456028",
+                "verificar"
+              ]
+            },
+            "description": "Use esto antes de facturar a un comprador con NIT (tipo_documento 5).\nMande en la venta el codigo_excepcion que devuelve: 0 si el NIT es válido, 1 si no.\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Emitir factura",
+      "item": [
+        {
+          "name": "Emitir factura",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Idempotency-Key",
+                "value": "{{venta_id}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/facturas",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "facturas"
+              ]
+            },
+            "description": "Emite la factura. Responde 201 con el CUF (202 si se emitió en contingencia).\n\nIMPORTANTE — idempotencia: la cabecera X-Idempotency-Key lleva el id único de SU venta (variable venta_id).\n- Para una venta NUEVA cambie venta_id en el entorno (VENTA-0002, VENTA-0003…).\n- Si repite con el mismo venta_id, recibe LA MISMA factura: no se duplica.\n\nCambie codigo_producto_sin y unidad_medida por valores de sus catálogos (carpeta 2).\nAl responder, el CUF se guarda solo en la variable cuf.\n\nLa respuesta trae url_publica, url_publica_pdf y url_publica_rollo: ábralos en el navegador (sin token). Su sistema imprime la factura con esos enlaces; no tiene que armarla.\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sucursal\": {{sucursal}},\n  \"punto_venta\": {{punto_venta}},\n  \"comprador\": {\n    \"tipo_documento\": 1,\n    \"numero_documento\": \"4567891\",\n    \"razon_social\": \"JUAN PEREZ\",\n    \"email\": \"juan.perez@correo.bo\"\n  },\n  \"metodo_pago\": 1,\n  \"items\": [\n    {\n      \"codigo_producto_sin\": 83141,\n      \"codigo_interno\": \"MART-001\",\n      \"descripcion\": \"Martillo de carpintero 16 oz\",\n      \"cantidad\": 2,\n      \"unidad_medida\": 58,\n      \"precio_unitario\": 45.5,\n      \"descuento\": 1.0\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Guarda el CUF de la factura emitida para usarlo en las peticiones siguientes.",
+                  "if (pm.response.code === 201 || pm.response.code === 202) {",
+                  "    pm.environment.set('cuf', pm.response.json().factura.cuf);",
+                  "    console.log('CUF guardado en la variable {{cuf}}');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5. Consultar facturas",
+      "item": [
+        {
+          "name": "Estado de la factura emitida",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/facturas/{{cuf}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "facturas",
+                "{{cuf}}"
+              ]
+            },
+            "description": "Usa el CUF guardado al emitir. Estados: PENDIENTE → RECIBIDA → VALIDADA (u OBSERVADA, con el motivo en motivo_observacion).\n\nLa respuesta trae url_publica, url_publica_pdf y url_publica_rollo: ábralos en el navegador (sin token). Su sistema imprime la factura con esos enlaces; no tiene que armarla.\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno)."
+          }
+        },
+        {
+          "name": "Descargar PDF",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/facturas/{{cuf}}/pdf",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "facturas",
+                "{{cuf}}",
+                "pdf"
+              ]
+            },
+            "description": "La factura imprimible. En Postman: Send and Download.\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno)."
+          }
+        },
+        {
+          "name": "Descargar XML firmado",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/facturas/{{cuf}}/xml",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "facturas",
+                "{{cuf}}",
+                "xml"
+              ]
+            },
+            "description": "El documento legal que recibió el SIN.\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno)."
+          }
+        },
+        {
+          "name": "Buscar por su id de venta",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/facturas?referencia_externa={{venta_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "facturas"
+              ],
+              "query": [
+                {
+                  "key": "referencia_externa",
+                  "value": "{{venta_id}}",
+                  "description": "Su id de venta (el mismo de X-Idempotency-Key)"
+                }
+              ]
+            },
+            "description": "Para encontrar una venta después de un corte de red sin respuesta.\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno)."
+          }
+        },
+        {
+          "name": "Listar facturas",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/facturas?desde=2026-10-01&estado=VALIDADA",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "facturas"
+              ],
+              "query": [
+                {
+                  "key": "desde",
+                  "value": "2026-10-01",
+                  "description": "Fecha AAAA-MM-DD"
+                },
+                {
+                  "key": "estado",
+                  "value": "VALIDADA",
+                  "description": "Opcional"
+                }
+              ]
+            },
+            "description": "Lista paginada (50 por página). Filtros opcionales: desde, hasta, estado, sucursal + punto_venta, referencia_externa, page.\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Anular (perfil Administración)",
+      "item": [
+        {
+          "name": "Anular la factura emitida",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/facturas/{{cuf}}/anular",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "facturas",
+                "{{cuf}}",
+                "anular"
+              ]
+            },
+            "description": "Anula la factura del CUF guardado. motivo sale del catálogo motivos_anulacion.\n\nANTES: ejecute \"Estado de la factura emitida\" y confirme que ya NO está PENDIENTE (debe estar RECIBIDA o VALIDADA). Una factura PENDIENTE todavía no llegó al SIN y responde 409 FACTURA_NO_ANULABLE: espere unos segundos y reintente.\n\nSi el SIN rechaza la anulación, la factura vuelve a su estado anterior y llega el webhook factura.anulacion_rechazada.\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"motivo\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Códigos del SIN (solo consulta / emergencia)",
+      "item": [
+        {
+          "name": "Vigencia de CUIS y CUFD",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/puntos-venta/{{sucursal}}/{{punto_venta}}/codigos",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "puntos-venta",
+                "{{sucursal}}",
+                "{{punto_venta}}",
+                "codigos"
+              ]
+            },
+            "description": "La API maneja CUIS y CUFD sola. Esto solo muestra si están vigentes (nunca los códigos).\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno)."
+          }
+        },
+        {
+          "name": "Forzar CUFD nuevo (emergencia)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/puntos-venta/{{sucursal}}/{{punto_venta}}/cufd",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "puntos-venta",
+                "{{sucursal}}",
+                "{{punto_venta}}",
+                "cufd"
+              ]
+            },
+            "description": "Normalmente NO hace falta. Máximo 3 por hora. Requiere perfil Administración.\n\n🔑 Autenticación: Authorization: Bearer {{token}}. El token NO se obtiene por la API: lo genera el sistema de facturación (su proveedor) desde su panel y se lo entrega a usted una sola vez. Es uno por empresa y ya está configurado en la colección (variable token del entorno)."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -275,7 +275,11 @@ class EjecutorPruebas
             throw new SiatException('El SIN no devolvio CUIS: '.$leida->motivo());
         }
 
-        $local = $this->puntoVentaLocal($empresa, $codigoSucursal, $codigoPuntoVenta);
+        // Si el SIN entrego un CUIS, el punto de venta existe alla: se
+        // configura aca si faltaba, para que las etapas siguientes tengan su
+        // CUIS guardado. Antes quedaba sin guardar y la etapa II fallaba con
+        // "no tiene CUIS vigente guardado".
+        $local = $this->configurarPuntoVentaLocal($empresa, $codigoSucursal, $codigoPuntoVenta);
         $cufdRenovado = false;
 
         if ($local !== null) {
@@ -335,14 +339,7 @@ class EjecutorPruebas
             throw new SiatException("La prueba '{$caso->nombre}' no indica la operacion del catalogo en su payload.");
         }
 
-        $cuis = $this->puntoVentaLocal($empresa, $codigoSucursal, $codigoPuntoVenta)?->cuisVigente();
-
-        if ($cuis === null) {
-            throw new SiatException(
-                "El punto de venta {$codigoPuntoVenta} de la sucursal {$codigoSucursal} no tiene CUIS vigente guardado: ".
-                'configuralo en la ficha o corre la etapa I.',
-            );
-        }
+        $cuis = $this->puntoVentaConCuis($empresa, $codigoSucursal, $codigoPuntoVenta)->cuisVigente();
 
         $respuesta = $this->fabrica->sincronizacion($empresa)
             ->parametrica($operacion, $cuis->codigo, $codigoSucursal, $codigoPuntoVenta);
@@ -375,15 +372,8 @@ class EjecutorPruebas
     private function solicitarCufdDeEtapa(Empresa $empresa, CasoPrueba $caso): array
     {
         [$codigoSucursal, $codigoPuntoVenta] = $this->codigosDePrueba($caso);
-        $local = $this->puntoVentaLocal($empresa, $codigoSucursal, $codigoPuntoVenta);
-        $cuis = $local?->cuisVigente();
-
-        if ($cuis === null) {
-            throw new SiatException(
-                "El punto de venta {$codigoPuntoVenta} de la sucursal {$codigoSucursal} no tiene CUIS vigente guardado: ".
-                'configuralo en la ficha o corre la etapa I.',
-            );
-        }
+        $local = $this->puntoVentaConCuis($empresa, $codigoSucursal, $codigoPuntoVenta);
+        $cuis = $local->cuisVigente();
 
         $respuesta = $this->fabrica->codigos($empresa)->solicitarCufd($local, $cuis->codigo);
         $leida = RespuestaSiat::desde($respuesta, 'RespuestaCufd');
@@ -427,15 +417,8 @@ class EjecutorPruebas
     private function emitirFacturaDeEtapa(Empresa $empresa, CasoPrueba $caso): array
     {
         [$codigoSucursal, $codigoPuntoVenta] = $this->codigosDePrueba($caso);
-        $local = $this->puntoVentaLocal($empresa, $codigoSucursal, $codigoPuntoVenta);
-        $cuis = $local?->cuisVigente();
-
-        if ($cuis === null) {
-            throw new SiatException(
-                "El punto de venta {$codigoPuntoVenta} de la sucursal {$codigoSucursal} no tiene CUIS vigente guardado: ".
-                'configuralo en la ficha o corre la etapa I.',
-            );
-        }
+        $local = $this->puntoVentaConCuis($empresa, $codigoSucursal, $codigoPuntoVenta);
+        $cuis = $local->cuisVigente();
 
         $this->asegurarCatalogos($empresa, $local);
 
@@ -1137,6 +1120,68 @@ class EjecutorPruebas
         $parametros = $this->payloadDe($caso, 'codigoSucursal y codigoPuntoVenta');
 
         return [(int) ($parametros['codigoSucursal'] ?? 0), (int) ($parametros['codigoPuntoVenta'] ?? 0)];
+    }
+
+    /**
+     * Punto de venta local de una prueba con su CUIS vigente guardado,
+     * configurandolo y pidiendo el CUIS si hace falta.
+     *
+     * Las etapas II, III y IV necesitan el CUIS del punto de venta del portal.
+     * Si la etapa I se corrio antes de que existiera el punto de venta local
+     * (o el CUIS vencio), se le pide al SIN: con uno vigente devuelve el mismo
+     * (980), que sirve igual para operar. El punto de venta local se crea solo
+     * cuando el SIN entrego el CUIS, o sea cuando existe alla.
+     *
+     * @throws SiatException si el SIN no entrega CUIS o la sucursal no esta cargada.
+     */
+    private function puntoVentaConCuis(Empresa $empresa, int $codigoSucursal, int $codigoPuntoVenta): PuntoVenta
+    {
+        $local = $this->puntoVentaLocal($empresa, $codigoSucursal, $codigoPuntoVenta);
+
+        if ($local?->cuisVigente() !== null) {
+            return $local;
+        }
+
+        $respuesta = $this->fabrica->codigos($empresa)->solicitarCuisPara($codigoSucursal, $codigoPuntoVenta);
+
+        if (blank(data_get($respuesta, 'RespuestaCuis.codigo'))) {
+            throw new SiatException(
+                "El punto de venta {$codigoPuntoVenta} de la sucursal {$codigoSucursal} no tiene CUIS y el SIN no entregó uno: "
+                .RespuestaSiat::desde($respuesta, 'RespuestaCuis')->motivo(),
+            );
+        }
+
+        $local ??= $this->configurarPuntoVentaLocal($empresa, $codigoSucursal, $codigoPuntoVenta)
+            ?? throw new SiatException("La sucursal {$codigoSucursal} no está cargada en la ficha: agrégala antes de correr el piloto.");
+
+        $this->codigos->guardarCuis($local, $respuesta);
+
+        return $local;
+    }
+
+    /**
+     * El punto de venta local de la prueba; si falta y su sucursal esta
+     * cargada, se crea marcado como registrado en el SIN (igual que "Configurar
+     * aca" en la ficha). Null si la sucursal no esta cargada.
+     */
+    private function configurarPuntoVentaLocal(Empresa $empresa, int $codigoSucursal, int $codigoPuntoVenta): ?PuntoVenta
+    {
+        $local = $this->puntoVentaLocal($empresa, $codigoSucursal, $codigoPuntoVenta);
+
+        if ($local !== null) {
+            return $local;
+        }
+
+        $sucursal = $empresa->sucursales()->where('codigo_sucursal', $codigoSucursal)->first();
+
+        return $sucursal?->puntosVenta()->create([
+            'codigo_punto_venta' => $codigoPuntoVenta,
+            'nombre' => "Punto de venta {$codigoPuntoVenta}",
+            'tipo_punto_venta' => 1,
+            'siguiente_factura' => 1,
+            'activo' => true,
+            'registrado_en_siat' => now(),
+        ]);
     }
 
     private function puntoVentaLocal(Empresa $empresa, int $codigoSucursal, int $codigoPuntoVenta): ?PuntoVenta

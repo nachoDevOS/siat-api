@@ -26,22 +26,54 @@ class GeneradorPdf
      */
     public function generarYGuardar(Factura $factura): string
     {
-        $factura->loadMissing(['items', 'empresa', 'puntoVenta.sucursal']);
-
-        $pdf = Pdf::loadView('factura.pdf', [
-            'factura' => $factura,
-            'qr' => $this->qr->dataUri($factura),
-            'urlVerificacion' => $this->qr->urlVerificacion($factura),
-            // "Son: ..." de la representacion grafica: sobre lo que se paga.
-            'montoLiteral' => $this->letras->bolivianos((float) $factura->monto_total - (float) $factura->gift_card),
-            // Nombre de cada unidad de medida del catalogo del SIN; si no esta
-            // sincronizado, la vista muestra el codigo.
-            'unidades' => Catalogo::deTipo('unidades_medida')->pluck('descripcion', 'codigo_clasificador')->all(),
-        ]);
+        $pdf = Pdf::loadView('factura.pdf', $this->datos($factura, GeneradorQr::FORMATO_CARTA));
 
         $ruta = "siat/pdf/{$factura->cuf}.pdf";
         Storage::disk('local')->put($ruta, $pdf->output());
 
         return $ruta;
+    }
+
+    /**
+     * PDF para impresora termica de ticket (rollo de 80 mm), el formato de
+     * las cajas de ferreterias y restaurantes. No se guarda: es barato y se
+     * genera al pedirlo.
+     *
+     * dompdf necesita un alto fijo: se calcula por la cantidad de items para
+     * que el ticket no salga cortado ni con un metro de papel en blanco.
+     */
+    public function rollo(Factura $factura): string
+    {
+        $datos = $this->datos($factura, GeneradorQr::FORMATO_ROLLO);
+        $ancho = 80 / 25.4 * 72; // 80 mm en puntos
+        $alto = 620 + 34 * $factura->items->count() + (filled($factura->leyenda) ? 40 : 0);
+
+        return Pdf::loadView('factura.rollo', $datos)
+            ->setPaper([0, 0, $ancho, $alto])
+            ->output();
+    }
+
+    /**
+     * Todo lo que necesita una representacion grafica, ya resuelto: la usan
+     * el PDF carta, el rollo y la vista publica de la factura.
+     *
+     * @param  int  $formato  GeneradorQr::FORMATO_ROLLO o FORMATO_CARTA (va
+     *                        en el QR como parametro 't').
+     * @return array<string, mixed>
+     */
+    public function datos(Factura $factura, int $formato = GeneradorQr::FORMATO_CARTA): array
+    {
+        $factura->loadMissing(['items', 'empresa', 'puntoVenta.sucursal']);
+
+        return [
+            'factura' => $factura,
+            'qr' => $this->qr->dataUri($factura, 150, $formato),
+            'urlVerificacion' => $this->qr->urlVerificacion($factura, $formato),
+            // "Son: ..." de la representacion grafica: sobre lo que se paga.
+            'montoLiteral' => $this->letras->bolivianos((float) $factura->monto_total - (float) $factura->gift_card),
+            // Nombre de cada unidad de medida del catalogo del SIN; si no esta
+            // sincronizado, la vista muestra el codigo.
+            'unidades' => Catalogo::deTipo('unidades_medida')->pluck('descripcion', 'codigo_clasificador')->all(),
+        ];
     }
 }

@@ -25,6 +25,24 @@
         .vacio { color: var(--suave); font-size: 14px; padding: 8px 0; }
     </style>
 
+    {{-- Procesos y cola: lo primero que hay que mirar. Si el worker o el
+         scheduler estan apagados, nada llega al SIN ni se renueva. --}}
+    <div class="tarjeta" style="margin-bottom:16px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+            <div style="display:flex; flex-direction:column; gap:6px; font-size:13px;">
+                <x-semaforo :color="$procesos['worker']['activo'] ? 'verde' : 'rojo'" :texto="$procesos['worker']['texto']" />
+                <x-semaforo :color="$procesos['scheduler']['activo'] ? 'verde' : 'rojo'" :texto="$procesos['scheduler']['texto']" />
+            </div>
+            <div style="font-size:13px;">
+                Últimas 24 h:
+                <x-badge color="verde" :texto="($trabajos24h[App\Models\Trabajo::EXITOSO] ?? 0).' exitosos'" />
+                <x-badge color="ambar" :texto="($trabajos24h[App\Models\Trabajo::REINTENTANDO] ?? 0).' reintentando'" />
+                <x-badge color="rojo" :texto="($trabajos24h[App\Models\Trabajo::FALLIDO] ?? 0).' fallidos'" />
+                <a href="{{ route('admin.trabajos.index') }}" style="margin-left:6px;">Ver trabajos →</a>
+            </div>
+        </div>
+    </div>
+
     {{-- ---- Tarjetas de indicadores ---- --}}
     <div class="stats">
         <div class="stat">

@@ -108,7 +108,8 @@ test('la etapa I pide un CUIS por cada punto de venta del portal, sin certificad
     // Siempre con los codigos del portal, este o no el punto de venta en local.
     $codigos->shouldReceive('solicitarCuisPara')->once()->with(0, 1)->andReturn(respuestaCuis('CUIS-PV1'));
     $codigos->shouldReceive('solicitarCuisPara')->once()->with(0, 0)->andReturn(respuestaCuis('CUIS-PV0'));
-    // CUIS nuevo en el PV 0 local: se pide tambien un CUFD atado a el.
+    // Cada CUIS nuevo trae su CUFD atado a el.
+    $codigos->shouldReceive('solicitarCufd')->once()->with(Mockery::any(), 'CUIS-PV1')->andReturn(respuestaCufd('CUFD-PV1'));
     $codigos->shouldReceive('solicitarCufd')->once()->with(Mockery::any(), 'CUIS-PV0')->andReturn(respuestaCufd('CUFD-PV0'));
     codigosSimulados($codigos);
 
@@ -118,12 +119,18 @@ test('la etapa I pide un CUIS por cada punto de venta del portal, sin certificad
 
     expect(EjecucionPrueba::where('estado', EjecucionPrueba::ESTADO_EXITOSO)->count())->toBe(2);
 
-    // Solo el PV 0 esta en local: su CUIS quedo guardado con la vigencia del SIN,
-    // y su CUFD quedo atado a ese CUIS nuevo.
-    $cuis = Cuis::sole();
-    expect($cuis->codigo)->toBe('CUIS-PV0')
-        ->and($cuis->fecha_vigencia->year)->toBe(2027)
-        ->and(Cufd::sole()->cuis_id)->toBe($cuis->id);
+    // El PV 1 no estaba en local: se configuro solo. Cada CUIS quedo guardado
+    // con la vigencia del SIN y con su CUFD atado.
+    $pv1 = PuntoVenta::where('codigo_punto_venta', 1)->sole();
+    expect($pv1->sucursal->codigo_sucursal)->toBe(0)
+        ->and($pv1->registrado_en_siat)->not->toBeNull();
+
+    foreach (['CUIS-PV0' => 0, 'CUIS-PV1' => 1] as $codigo => $puntoVenta) {
+        $cuis = Cuis::where('codigo', $codigo)->sole();
+        expect($cuis->puntoVenta->codigo_punto_venta)->toBe($puntoVenta)
+            ->and($cuis->fecha_vigencia->year)->toBe(2027)
+            ->and(Cufd::where('cuis_id', $cuis->id)->count())->toBe(1);
+    }
 });
 
 test('reejecutar una etapa completa no vuelve a llamar al SIN', function () {
@@ -131,7 +138,7 @@ test('reejecutar una etapa completa no vuelve a llamar al SIN', function () {
 
     $codigos = Mockery::mock(ServicioCodigos::class);
     $codigos->shouldReceive('solicitarCuisPara')->twice()->andReturn(respuestaCuis('CUIS-PV1'), respuestaCuis('CUIS-PV0'));
-    $codigos->shouldReceive('solicitarCufd')->once()->andReturn(respuestaCufd('CUFD-PV0'));
+    $codigos->shouldReceive('solicitarCufd')->twice()->andReturn(respuestaCufd('CUFD-PV1'), respuestaCufd('CUFD-PV0'));
     codigosSimulados($codigos);
 
     $this->post(route('admin.pruebas.etapa', [$empresa, 1]));
@@ -343,17 +350,44 @@ test('una prueba de catalogo usa el CUIS del punto de venta de la prueba y cuent
         ->and($ejecucion->respuesta['registros'])->toBe(3);
 });
 
-test('sin CUIS guardado para ese punto de venta la prueba de catalogo falla sin llamar al SIN', function () {
+test('sin el punto de venta en local la prueba de catalogo lo configura y pide su CUIS al SIN', function () {
     $empresa = empresaDeEtapaUno(); // el PV 1 no existe en local
     $caso = CasoPrueba::where('etapa', 2)->where('orden', 1)->sole();
 
+    $codigos = Mockery::mock(ServicioCodigos::class);
+    // El SIN ya le habia dado CUIS en la etapa I: lo devuelve con 980.
+    $codigos->shouldReceive('solicitarCuisPara')->once()->with(0, 1)->andReturn(respuestaCuisYaVigente('CUIS-PV1'));
+
     $sincronizacion = Mockery::mock(ServicioSincronizacion::class);
-    $sincronizacion->shouldNotReceive('parametrica');
-    sincronizacionSimulada($sincronizacion);
+    $sincronizacion->shouldReceive('parametrica')->andReturn(catalogoAceptado());
+
+    test()->mock(FabricaServicios::class, function ($mock) use ($codigos, $sincronizacion) {
+        $mock->shouldReceive('codigos')->andReturn($codigos);
+        $mock->shouldReceive('sincronizacion')->andReturn($sincronizacion);
+    });
 
     $this->post(route('admin.pruebas.caso', [$empresa, $caso]));
 
-    expect(EjecucionPrueba::sole()->respuesta['error'])->toContain('no tiene CUIS vigente');
+    expect(EjecucionPrueba::sole()->estado)->toBe(EjecucionPrueba::ESTADO_EXITOSO)
+        ->and(PuntoVenta::where('codigo_punto_venta', 1)->sole()->cuisVigente()?->codigo)->toBe('CUIS-PV1');
+});
+
+test('si el SIN no entrega CUIS la prueba falla con su motivo', function () {
+    $empresa = empresaDeEtapaUno();
+    $caso = CasoPrueba::where('etapa', 3)->where('orden', 1)->sole();
+
+    $codigos = Mockery::mock(ServicioCodigos::class);
+    $codigos->shouldReceive('solicitarCuisPara')->once()->andReturn((object) ['RespuestaCuis' => (object) [
+        'transaccion' => false,
+        'mensajesList' => (object) ['codigo' => 2, 'descripcion' => 'PUNTO DE VENTA INEXISTENTE'],
+    ]]);
+    $codigos->shouldNotReceive('solicitarCufd');
+    codigosSimulados($codigos);
+
+    $this->post(route('admin.pruebas.caso', [$empresa, $caso]));
+
+    expect(EjecucionPrueba::sole()->respuesta['error'])->toContain('PUNTO DE VENTA INEXISTENTE')
+        ->and(PuntoVenta::where('codigo_punto_venta', 1)->exists())->toBeFalse();
 });
 
 test('un catalogo rechazado por el SIN queda FALLIDO con su motivo', function () {
@@ -474,17 +508,19 @@ test('un CUFD con transaccion false no cuenta como prueba', function () {
     expect(EjecucionPrueba::sole()->estado)->toBe(EjecucionPrueba::ESTADO_FALLIDO);
 });
 
-test('sin CUIS guardado la prueba de CUFD falla sin llamar al SIN', function () {
+test('sin CUIS guardado la prueba de CUFD lo pide primero y ata el CUFD a ese CUIS', function () {
     $empresa = empresaDeEtapaUno();
     $caso = CasoPrueba::where('etapa', 3)->where('orden', 1)->sole();
 
     $codigos = Mockery::mock(ServicioCodigos::class);
-    $codigos->shouldNotReceive('solicitarCufd');
+    $codigos->shouldReceive('solicitarCuisPara')->once()->with(0, 1)->andReturn(respuestaCuisYaVigente('CUIS-PV1'));
+    $codigos->shouldReceive('solicitarCufd')->once()->with(Mockery::any(), 'CUIS-PV1')->andReturn(respuestaCufd('CUFD-1'));
     codigosSimulados($codigos);
 
     $this->post(route('admin.pruebas.caso', [$empresa, $caso]));
 
-    expect(EjecucionPrueba::sole()->respuesta['error'])->toContain('no tiene CUIS vigente');
+    expect(EjecucionPrueba::sole()->estado)->toBe(EjecucionPrueba::ESTADO_EXITOSO)
+        ->and(Cufd::sole()->cuis->codigo)->toBe('CUIS-PV1');
 });
 
 test('la etapa III va a la cola: 200 llamadas', function () {

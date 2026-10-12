@@ -47,7 +47,7 @@
                 </select>
             </div>
             <label style="display:flex; gap:6px; align-items:center; margin:0;">
-                <input type="checkbox" name="errores" value="1" style="width:auto;" @checked($soloErrores)> Solo errores
+                <input type="checkbox" name="errores" value="1" style="width:auto; min-width:0;" @checked($soloErrores)> Solo errores
             </label>
             <button class="btn" type="submit">Filtrar</button>
         </form>

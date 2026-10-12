@@ -1,6 +1,7 @@
 <?php
 
 use App\Jobs\EnviarFacturaAlSiat;
+use App\Jobs\RenovarCufd;
 use App\Jobs\VerificarEstadoFactura;
 use App\Models\Certificado;
 use App\Models\Cufd;
@@ -11,18 +12,22 @@ use App\Models\FacturaItem;
 use App\Models\LogApi;
 use App\Models\PuntoVenta;
 use App\Models\Sucursal;
+use App\Models\Trabajo;
 use App\Models\User;
 use App\Providers\AppServiceProvider;
 use App\Services\Factura\MontoEnLetras;
 use App\Services\Panel\PuntosVentaSiat;
 use App\Services\Panel\RequisitosEtapa;
 use App\Services\Siat\FabricaServicios;
+use App\Services\Siat\GestorCodigos;
 use App\Services\Siat\ServicioOperaciones;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Middleware\TrustProxies;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
 
@@ -327,4 +332,83 @@ test('ninguna vista usa el confirm() del navegador', function () {
         ->all();
 
     expect($conConfirm)->toBe([]);
+});
+
+test('el vencimiento del token delegado se muestra en hora de Bolivia, no en UTC', function () {
+    // 22:30 en La Paz ya es el dia siguiente en UTC.
+    $this->travelTo(Carbon::parse('2026-10-11 22:30:00', 'America/La_Paz'));
+    $vence = Carbon::parse('2026-10-20 22:30:00', 'America/La_Paz');
+
+    $empresa = Empresa::factory()->make(['token_delegado' => jwtQueVence($vence)]);
+
+    expect($empresa->vencimientoTokenDelegado()->format('d/m/Y H:i'))->toBe('20/10/2026 22:30');
+});
+
+test('la vigencia que manda el SIN se guarda en hora de Bolivia aunque venga en UTC', function () {
+    $empresa = Empresa::factory()->create();
+    $sucursal = Sucursal::factory()->for($empresa)->create(['codigo_sucursal' => 0]);
+    $pv = PuntoVenta::factory()->for($sucursal)->create(['codigo_punto_venta' => 0]);
+
+    $cuis = app(GestorCodigos::class)->guardarCuis($pv, (object) ['RespuestaCuis' => (object) [
+        'codigo' => 'CUIS-UTC', 'transaccion' => true, 'fechaVigencia' => '2027-10-07T14:00:00.000Z',
+    ]]);
+
+    // 14:00 UTC = 10:00 en La Paz.
+    expect($cuis->fresh()->fecha_vigencia->format('Y-m-d H:i'))->toBe('2027-10-07 10:00');
+});
+
+test('el vencimiento de un certificado se toma en hora de Bolivia', function () {
+    // El mismo instante del X509, pero expresado en hora de La Paz.
+    $clave = openssl_pkey_new(['private_key_bits' => 2048, 'config' => config('siat.openssl_config')]);
+    $csr = openssl_csr_new(['commonName' => 'prueba'], $clave, ['config' => config('siat.openssl_config')]);
+    $x509 = openssl_csr_sign($csr, null, $clave, 1, ['config' => config('siat.openssl_config')]);
+    openssl_x509_export($x509, $pem);
+    $vence = Certificado::vencimientoDeX509($pem);
+
+    expect($vence->getTimezone()->getName())->toBe('America/La_Paz')
+        ->and($vence->getTimestamp())->toBe(openssl_x509_parse($pem)['validTo_time_t']);
+});
+
+test('la migracion corrige el vencimiento de los certificados ya guardados', function () {
+    $certificado = Certificado::factory()->firmable()->create(['vence_el' => '2000-01-01']);
+    $real = $certificado->vencimientoDelP12();
+
+    (require database_path('migrations/2026_10_11_200456_recalcular_vencimiento_de_certificados.php'))->up();
+
+    expect($real)->not->toBeNull()
+        ->and($certificado->fresh()->vence_el->toDateString())->toBe($real->toDateString());
+});
+
+// --- Filtro por defecto: este mes --------------------------------------------------
+
+test('facturas y trabajos muestran por defecto el mes actual, y "Ver todo" la historia completa', function () {
+    $this->actingAs(User::factory()->create());
+    $this->travelTo(Carbon::parse('2026-10-15 10:00', 'America/La_Paz'));
+
+    Factura::factory()->create(['comprador_razon_social' => 'COMPRADOR DE OCTUBRE', 'fecha_emision' => '2026-10-05 09:00']);
+    Factura::factory()->create(['comprador_razon_social' => 'COMPRADOR DE SEPTIEMBRE', 'fecha_emision' => '2026-09-20 09:00']);
+
+    $this->get(route('admin.facturas.index'))
+        ->assertSee('COMPRADOR DE OCTUBRE')
+        ->assertDontSee('COMPRADOR DE SEPTIEMBRE')
+        ->assertSee('value="2026-10-01"', false)
+        ->assertSee('value="2026-10-15"', false);
+
+    $this->get(route('admin.facturas.index', ['desde' => '', 'hasta' => '']))
+        ->assertSee('COMPRADOR DE OCTUBRE')
+        ->assertSee('COMPRADOR DE SEPTIEMBRE');
+
+    $nueva = Trabajo::create(['uuid' => (string) Str::uuid(), 'clase' => RenovarCufd::class, 'estado' => 'EXITOSO']);
+    $vieja = Trabajo::create(['uuid' => (string) Str::uuid(), 'clase' => RenovarCufd::class, 'estado' => 'FALLIDO']);
+    $vieja->forceFill(['created_at' => '2026-09-10 08:00'])->saveQuietly();
+
+    $this->get(route('admin.trabajos.index'))->assertSee('Todos 1')->assertSee('Fallido 0');
+    $this->get(route('admin.trabajos.index', ['desde' => '', 'hasta' => '']))->assertSee('Todos 2')->assertSee('Fallido 1');
+});
+
+test('buscar una factura puntual no queda limitado al mes', function () {
+    $this->actingAs(User::factory()->create());
+    $vieja = Factura::factory()->create(['cuf' => 'CUF-DEL-ANIO-PASADO', 'comprador_razon_social' => 'COMPRADOR VIEJO', 'fecha_emision' => now()->subYear()]);
+
+    $this->get(route('admin.facturas.index', ['q' => 'CUF-DEL-ANIO-PASADO']))->assertSee('COMPRADOR VIEJO');
 });

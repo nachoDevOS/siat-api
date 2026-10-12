@@ -14,10 +14,37 @@ use App\Http\Controllers\Admin\PruebaPilotoController;
 use App\Http\Controllers\Admin\PuntoVentaController;
 use App\Http\Controllers\Admin\SucursalController;
 use App\Http\Controllers\Admin\TokenApiController;
+use App\Http\Controllers\Admin\TrabajoController;
 use App\Http\Controllers\Auth\LoginController;
+use App\Http\Controllers\DocumentacionApiController;
+use App\Http\Controllers\FacturaPublicaController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', fn () => redirect()->route('admin.dashboard'));
+
+/*
+|--------------------------------------------------------------------------
+| Factura publica (enlace firmado): la abre el sistema de ventas para
+| mostrarla o imprimirla, y se le comparte al comprador. Sin firma valida
+| responde 404 (ver bootstrap/app.php).
+|--------------------------------------------------------------------------
+*/
+Route::middleware('signed:relative')->group(function () {
+    Route::get('factura/{cuf}', [FacturaPublicaController::class, 'show'])->name('factura.publica');
+    Route::get('factura/{cuf}/pdf', [FacturaPublicaController::class, 'pdf'])->name('factura.publica.pdf');
+    Route::get('factura/{cuf}/rollo', [FacturaPublicaController::class, 'rollo'])->name('factura.publica.rollo');
+});
+
+/*
+|--------------------------------------------------------------------------
+| Documentacion publica de la API para los sistemas que se integran.
+|--------------------------------------------------------------------------
+| Sin sesion a proposito: describe el contrato y nada privado.
+*/
+Route::get('docs/api', [DocumentacionApiController::class, 'index'])->name('docs.api');
+Route::get('docs/api/openapi.yaml', [DocumentacionApiController::class, 'especificacion'])->name('docs.api.especificacion');
+Route::get('docs/api/postman/coleccion.json', [DocumentacionApiController::class, 'coleccionPostman'])->name('docs.api.postman.coleccion');
+Route::get('docs/api/postman/entorno.json', [DocumentacionApiController::class, 'entornoPostman'])->name('docs.api.postman.entorno');
 
 /*
 |--------------------------------------------------------------------------
@@ -48,6 +75,12 @@ Route::prefix('admin')->name('admin.')->middleware('auth')->group(function () {
     Route::get('configuracion', [ConfiguracionController::class, 'index'])->name('configuracion');
 
     Route::resource('empresas', EmpresaController::class);
+
+    // Historial de la cola: todos los trabajos, exitosos y fallidos.
+    Route::get('trabajos', [TrabajoController::class, 'index'])->name('trabajos.index');
+    Route::post('trabajos/reintentar-todos', [TrabajoController::class, 'reintentarTodos'])->name('trabajos.reintentar-todos');
+    Route::post('trabajos/{trabajo}/reintentar', [TrabajoController::class, 'reintentar'])->name('trabajos.reintentar');
+    Route::delete('trabajos/{trabajo}', [TrabajoController::class, 'descartar'])->name('trabajos.descartar');
 
     // Facturas de todos los clientes, para soporte.
     Route::get('facturas', [FacturaController::class, 'index'])->name('facturas.index');

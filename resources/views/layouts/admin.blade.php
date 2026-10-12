@@ -82,6 +82,8 @@
         .dialogo .opcion-peligro { border-color: #fecaca; background: #fff7f7; }
         .dialogo .acciones { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
         .dialogo .mensaje { font-size: 14px; color: #334155; white-space: pre-line; margin: 0; }
+        .globo { margin-left: auto; background: #dc2626; color: #fff; font-size: 11px; font-weight: 700;
+                 min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; display: inline-grid; place-items: center; }
         .aviso-error { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; padding: 12px 14px;
                        border-radius: 10px; margin-bottom: 18px; }
         /* Ficha de cliente a dos columnas: a la izquierda quien es (datos que
@@ -179,6 +181,7 @@
             .topbar .abrir { display: block; }
         }
     </style>
+    @stack('cabecera')
 </head>
 <body>
     <input type="checkbox" id="menu">
@@ -197,6 +200,15 @@
                 <a href="{{ route('admin.facturas.index') }}" class="{{ request()->routeIs('admin.facturas.*') ? 'activo' : '' }}">
                     <span class="ic">▥</span> Facturas
                 </a>
+                {{-- Globo rojo con los fallidos (sin el piloto, igual que la
+                     pantalla por defecto): un fallido no puede pasar desapercibido. --}}
+                @php($fallidos = App\Models\Trabajo::where('estado', App\Models\Trabajo::FALLIDO)->where('cola', '!=', 'piloto')->count())
+                <a href="{{ route('admin.trabajos.index') }}" class="{{ request()->routeIs('admin.trabajos.*') ? 'activo' : '' }}">
+                    <span class="ic">⚙</span> Trabajos
+                    @if ($fallidos > 0)
+                        <span class="globo" title="{{ $fallidos }} trabajo(s) fallido(s)">{{ $fallidos }}</span>
+                    @endif
+                </a>
                 <a href="{{ route('admin.monitor') }}" class="{{ request()->routeIs('admin.monitor') ? 'activo' : '' }}">
                     <span class="ic">◷</span> Monitor
                 </a>
@@ -206,6 +218,10 @@
             <nav>
                 <a href="{{ route('admin.api') }}" class="{{ request()->routeIs('admin.api') ? 'activo' : '' }}">
                     <span class="ic">⚡</span> Administrar API
+                </a>
+                {{-- Publica: es la que se le comparte a los clientes. --}}
+                <a href="{{ route('docs.api') }}" target="_blank" rel="noopener">
+                    <span class="ic">▣</span> Documentacion API ↗
                 </a>
                 <a href="{{ route('admin.configuracion') }}" class="{{ request()->routeIs('admin.configuracion') ? 'activo' : '' }}">
                     <span class="ic">⚙</span> Configuracion

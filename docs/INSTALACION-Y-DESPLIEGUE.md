@@ -1,7 +1,7 @@
-# Operación — instalación, configuración y mantenimiento
+# Instalación y despliegue
 
-> Para quien instala, despliega y mantiene el servidor. Para dar de alta un cliente ver
-> [ALTA-DE-CLIENTE.md](ALTA-DE-CLIENTE.md).
+> Para quien instala, levanta, despliega y mantiene el servidor de **siat-api**. Dar de alta un
+> cliente: [ALTA-DE-CLIENTE.md](ALTA-DE-CLIENTE.md). Cómo está construido: [TECNICO.md](TECNICO.md).
 
 ---
 
@@ -12,7 +12,34 @@
 | PHP | 8.3+ con `soap`, `openssl`, `dom`, `bcmath`, `gd`, `zlib`, `pdo_mysql` |
 | MySQL | 8.x (base `siat_api`) |
 | Composer | 2.x |
+| Node / npm | **No hace falta**: el panel y las páginas públicas no tienen build de frontend |
 | Zona horaria | **`America/La_Paz`** — en UTC el SIN rechaza por `fechaEnvio` (código 935) y el CUF sale mal |
+
+### Levantar el sistema: los 3 procesos
+
+El sistema **no funciona solo con el servidor web**. Siempre tienen que estar corriendo estos
+tres procesos a la vez:
+
+| # | Comando (desarrollo) | Qué es | Qué hace | Si no está corriendo |
+|---|---|---|---|---|
+| 1 | `php artisan serve` | **Servidor web** | Recibe las peticiones: la API, el panel `/admin`, `/docs/api` y las facturas públicas | No se puede entrar a nada |
+| 2 | `php artisan queue:work --queue=facturas,default,piloto` | **Worker** (el trabajador) | Hace en segundo plano lo lento: **envía las facturas al SIN**, verifica si quedaron validadas, anula, manda los paquetes, avisa por webhook, renueva el CUFD y corre el piloto | La API entrega el CUF pero **la factura nunca llega al SIN**: queda en `PENDIENTE` |
+| 3 | `php artisan schedule:work` | **Scheduler** (el reloj) | Cada minuto revisa si toca una tarea y la lanza: reintentar pendientes, verificar enviadas, renovar CUFD y CUIS, sincronizar catálogos, avisar vencimientos, limpiar logs | El CUFD vence y nadie lo renueva; nada se reintenta ni se avisa |
+
+En producción no se usan a mano: el **2** lo mantiene vivo **Supervisor** y el **3** lo reemplaza
+un **cron** (ver [sección 4](#4-procesos-que-deben-estar-corriendo)).
+
+**¿Por qué `--queue=facturas,default,piloto`?** El trabajo se reparte en tres colas por urgencia y
+el worker las atiende **en ese orden**: primero `facturas` (ventas reales), cuando esa está vacía
+`default` (webhooks, códigos, catálogos) y por último `piloto` (pruebas, que pueden ser mil). Así
+una venta nunca espera detrás de las pruebas del piloto. **Sin `--queue` solo atiende `default`:
+las facturas no se enviarían.**
+
+**¿Están corriendo?** El panel lo dice: Dashboard y **Trabajos** muestran 🟢/🔴 para el worker y el
+scheduler (cada uno deja un "latido"; si es viejo, está apagado), y cuántos trabajos esperan.
+
+> ⚠️ Después de **cada cambio de código** reinicie el worker (Ctrl+C y volver a lanzarlo, o
+> `php artisan queue:restart`): un worker viejo sigue ejecutando el código anterior.
 
 ---
 
@@ -53,6 +80,7 @@ Cambie la contraseña del administrador apenas instale.
 | `SIAT_WEBHOOK_SECRET` | — | Secreto maestro; de él se deriva el secreto de cada empresa. **Sin él los webhooks salen sin firmar.** Cambiarlo cambia el secreto de todos los clientes |
 | `SIAT_WEBHOOK_PERMITIR_PRIVADOS` | `false` | `true` solo en desarrollo (permite `http://localhost`) |
 | `SIAT_WEBHOOK_TIMEOUT` | `10` | Segundos por intento de webhook |
+| `APP_URL` | — | URL pública del servidor. La documentación `/docs/api` la usa como servidor de la API: debe ser la real |
 | `TRUSTED_PROXIES` | — | IPs de los proxies de confianza (`*` = cualquiera) |
 | `SIAT_RATE_LIMIT_TOKEN` | `60` | Peticiones por minuto por token |
 | `SIAT_RATE_LIMIT` | `120` | Peticiones por minuto por empresa |
@@ -98,8 +126,12 @@ El sistema **no funciona solo con el servidor web**. Hacen falta tres procesos:
 
 Supervisor:
 
+Archivo `/etc/supervisor/conf.d/siat-worker.conf`:
+
 ```ini
 [program:siat-worker]
+; process_name es obligatorio con numprocs > 1: sin el, Supervisor no arranca.
+process_name=%(program_name)s_%(process_num)02d
 command=php /var/www/siat-api/artisan queue:work --queue=facturas,default,piloto --sleep=3 --tries=1 --max-time=3600
 numprocs=2
 autostart=true
@@ -110,7 +142,17 @@ redirect_stderr=true
 stdout_logfile=/var/www/siat-api/storage/logs/worker.log
 ```
 
-`--tries=1` porque cada job declara sus propios intentos y backoff.
+Activarlo y verlo:
+
+```bash
+sudo supervisorctl reread
+sudo supervisorctl update
+sudo supervisorctl start "siat-worker:*"
+sudo supervisorctl status          # debe decir RUNNING en los dos procesos
+```
+
+`--tries=1` porque cada job declara sus propios intentos y backoff. `--max-time=3600` recicla el
+proceso cada hora (evita fugas de memoria); Supervisor lo vuelve a levantar solo.
 
 **Colas por prioridad.** El worker atiende en ese orden y solo pasa a la siguiente cuando la
 anterior está vacía:
@@ -124,13 +166,52 @@ anterior está vacía:
 > ⚠️ Un `queue:work` **sin `--queue`** solo atiende `default`: las facturas no se enviarían.
 > Si querés aislar del todo el piloto, levantá un worker aparte con `--queue=piloto`.
 
-Cron:
+Cron (con `sudo crontab -u www-data -e`, el mismo usuario que el worker):
 
 ```cron
 * * * * * cd /var/www/siat-api && php artisan schedule:run >> /dev/null 2>&1
 ```
 
-Despliegue típico:
+Verificar que el scheduler ve sus tareas: `php artisan schedule:list`.
+
+### Primera puesta en producción — lista de verificación
+
+**`.env`**
+
+- [ ] `APP_ENV=production` y `APP_DEBUG=false` (con `true` se muestran datos internos en los errores)
+- [ ] `APP_URL=https://su-dominio` — con ella se arman los **enlaces públicos de las facturas** y la
+      documentación `/docs/api`
+- [ ] `APP_KEY` generada **y respaldada fuera del servidor**: cifra token delegado, `.p12` y
+      passphrases, y **firma los enlaces públicos** de las facturas. Si cambia, todo eso se pierde
+- [ ] `APP_TIMEZONE=America/La_Paz`
+- [ ] `DB_*` de la base de producción
+- [ ] `SIAT_WEBHOOK_SECRET` con un valor largo y aleatorio (`openssl rand -hex 32`)
+- [ ] `SIAT_WSDL_CACHE=1` (cachea el WSDL en disco)
+- [ ] `TRUSTED_PROXIES` si hay un proxy o balanceador delante
+- [ ] `SIAT_URL_PRODUCCION` y `SIAT_QR_URL_PRODUCCION` confirmadas con el SIN
+
+**Servidor**
+
+- [ ] HTTPS activo (la API y los webhooks lo exigen)
+- [ ] `storage/` y `bootstrap/cache/` con escritura para el usuario del servidor web
+- [ ] Worker en Supervisor con `--queue=facturas,default,piloto` → `supervisorctl status` en RUNNING
+- [ ] Cron del scheduler → `php artisan schedule:list` muestra las tareas
+- [ ] `php artisan migrate --force` y `php artisan db:seed --force` (solo la primera vez)
+- [ ] **Cambiar la contraseña del administrador** (el seeder la deja en `password`):
+
+```bash
+php artisan tinker --execute 'App\Models\User::where("email","admin@admin.com")->first()->update(["email" => "su-correo@dominio.bo", "password" => bcrypt("UNA-CONTRASENA-LARGA")]);'
+```
+
+**Comprobación final**
+
+```bash
+curl -s https://su-dominio/up                     # 200: la app responde
+curl -s https://su-dominio/api/v1/estado          # 401: la API exige token (correcto)
+curl -s -o /dev/null -w '%{http_code}' https://su-dominio/docs/api   # 200
+```
+
+### Despliegue de una versión nueva
 
 ```bash
 php artisan down
@@ -165,7 +246,10 @@ Ver lo programado: `php artisan schedule:list`. Probar una tarea:
 
 | Dónde | Qué mirar |
 |---|---|
-| Panel → **Facturas** | Buscar por CUF, referencia o número; ver estado, motivo de observación y anulación; descargar PDF/XML; **enviar** una PENDIENTE o **verificar** una RECIBIDA sin esperar a la tarea programada |
+| **`/factura/{cuf}?signature=…`** (público) | Factura con enlace firmado: página, PDF carta (`/pdf`) y ticket 80 mm (`/rollo`). En el panel, detalle de la factura → *Vista pública* / *Ticket 80 mm*. Sin firma válida: 404 |
+| **`/docs/api`** (público) | Documentación de la API para los clientes, con Redoc sobre `docs/integracion/openapi.yaml`. Redoc está guardado en `public/vendor/redoc/` (v2.5.3, MIT): no depende de un CDN |
+| Panel → **Trabajos** | **Todo lo que hizo la cola**: pestañas Todos · En cola · En proceso · Exitosos · Reintentando · Fallidos (con contador), filtros por tipo, empresa y fecha (**por defecto, el mes actual**; *Ver todo* quita las fechas), el error de cada fallido, **Reintentar** / **Descartar** / *Reintentar todos*, y el semáforo del worker y del scheduler. Se actualiza cada 10 s. El piloto va oculto salvo *Mostrar piloto*. El menú muestra un globo rojo con los fallidos |
+| Panel → **Facturas** | Por defecto muestra **el mes actual** (*Ver todo* quita las fechas; una búsqueda por CUF, referencia o número busca en toda la historia). Buscar por CUF, referencia o número; ver estado, motivo de observación y anulación; descargar PDF/XML; **enviar** una PENDIENTE o **verificar** una RECIBIDA sin esperar a la tarea programada |
 | Panel → **Monitor** | Facturas por estado, últimas peticiones SOAP y **últimas llamadas a la API** (filtrables por empresa y solo errores) |
 | Ficha de la empresa | Vencimiento del certificado y del **token delegado** (ámbar a 30 días, rojo vencido) |
 | Empresa → **Acceso API** | Datos de conexión para el cliente, su token (generar / regenerar / revocar, último uso), webhook y su secreto, últimas llamadas de esa empresa |
@@ -173,7 +257,7 @@ Ver lo programado: `php artisan schedule:list`. Probar una tarea:
 | Panel → **Configuración** | Valores efectivos (sin abrir el `.env`) |
 | `logs_siat` | XML enviado/recibido de cada llamada, duración, error |
 | `storage/logs/laravel.log` | Rechazos del SIN (`El SIN rechazo...`), PDFs fallidos, webhooks descartados, anulaciones pendientes |
-| `failed_jobs` | `php artisan queue:failed` · reintentar con `php artisan queue:retry {id}` |
+| `failed_jobs` | Mejor desde **Trabajos** (reintentar / descartar). Por consola: `php artisan queue:failed`, `php artisan queue:retry {uuid}` |
 
 Consultas útiles:
 
@@ -195,6 +279,8 @@ SELECT created_at, servicio, operacion, mensaje_error FROM logs_siat WHERE exito
 
 | Síntoma | Causa probable | Solución |
 |---|---|---|
+| **Trabajos** muestra 🔴 *Worker APAGADO* | El worker no corre | `php artisan queue:work --queue=facturas,default,piloto` (o `supervisorctl status`) |
+| **Trabajos** muestra 🔴 *Scheduler APAGADO* | Falta `schedule:work` o el cron | Levantarlo; el latido aparece al minuto |
 | Las facturas quedan en `PENDIENTE` | Worker apagado, o levantado sin `--queue=facturas,...` | Levantar `queue:work --queue=facturas,default,piloto` |
 | `422` "el certificado digital de la empresa venció" | Certificado vencido | Cargar el nuevo `.p12` en la ficha de la empresa |
 | Nada se reintenta ni se renueva | Scheduler apagado | Cron / `schedule:work` |

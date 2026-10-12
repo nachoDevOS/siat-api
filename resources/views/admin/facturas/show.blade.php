@@ -11,6 +11,11 @@
             </span>
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            @if ($factura->xml_firmado)
+                {{-- El mismo enlace publico que recibe el sistema de ventas. --}}
+                <a class="btn gris" href="{{ $factura->urlPublica() }}" target="_blank" rel="noopener">Vista publica</a>
+                <a class="btn gris" href="{{ $factura->urlPublica('rollo') }}" target="_blank" rel="noopener">Ticket 80 mm</a>
+            @endif
             <a class="btn gris" href="{{ route('admin.facturas.pdf', $factura) }}" target="_blank">PDF</a>
             <a class="btn gris" href="{{ route('admin.facturas.xml', $factura) }}">XML firmado</a>
             @if ($factura->estado === App\Models\Factura::ESTADO_PENDIENTE)

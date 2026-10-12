@@ -17,6 +17,7 @@
         <h2>Base de la API</h2>
         <div class="baseurl">{{ $baseUrl }}v1</div>
         <p class="sub" style="color:var(--suave); font-size:13px; margin:10px 0 0;">
+            Documentacion publica para los clientes: <a href="{{ route('docs.api') }}" target="_blank" rel="noopener">{{ route('docs.api') }}</a>.
             Toda peticion exige <code>Authorization: Bearer {token}</code>. Los tokens se crean en la
             ficha de cada empresa, por perfil de permisos. La emision de facturas ademas requiere la
             empresa en <strong>Produccion</strong> e idempotencia.

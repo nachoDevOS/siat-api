@@ -6,7 +6,14 @@
 
 Base: `https://{dominio-del-proveedor}/api/v1`
 
-Especificación OpenAPI 3 para importar en Postman / Insomnia: [openapi.yaml](openapi.yaml).
+| En esta carpeta | Qué es |
+|---|---|
+| **API.md** (este archivo) | Guía de integración, referencia de cada endpoint y cómo probar con Postman |
+| [openapi.yaml](openapi.yaml) | Especificación OpenAPI 3 (Postman, Insomnia, generadores de clientes) |
+| [postman/](postman/) | `coleccion.json` (las 18 peticiones en orden) y `entorno.json` (sus variables) |
+
+La misma documentación, navegable y con buscador: **`https://{dominio}/docs/api`** (desde ahí también
+se descargan la colección, el entorno y el OpenAPI, ya apuntando al servidor correcto).
 
 **Qué hace su sistema y qué hace esta API**
 
@@ -19,6 +26,10 @@ Especificación OpenAPI 3 para importar en Postman / Insomnia: [openapi.yaml](op
 ---
 
 ## 0. Integración paso a paso
+
+> ¿Prefiere probar con clics antes de programar? Vaya a la sección
+> [7. Probar con Postman o Thunder Client](#7-probar-con-postman-o-thunder-client): importa una
+> colección con todas las peticiones listas.
 
 ### Lo que le entrega el proveedor
 
@@ -89,8 +100,9 @@ curl -s -X POST "$SIAT_API_URL/facturas" \
   }'
 ```
 
-Guarde el `cuf` de la respuesta junto a su venta e **imprima ya**: la factura es válida desde
-ese momento. Si hay un corte de red, repita la misma petición con la misma `X-Idempotency-Key`:
+Guarde el `cuf` de la respuesta junto a su venta e **imprima ya** abriendo `url_publica_rollo`
+(ticket 80 mm) o `url_publica_pdf` (hoja): la factura es válida desde ese momento y **no tiene que
+armarla usted**. Si hay un corte de red, repita la misma petición con la misma `X-Idempotency-Key`:
 no se duplica.
 
 ### Paso 6 — Recibir el resultado
@@ -130,6 +142,8 @@ los datos de esa empresa.
 Authorization: Bearer 12|siat_4f8a...c91e
 ```
 
+- **El token no se obtiene por la API:** lo genera el **sistema de facturación (su proveedor)**
+  desde su panel de administración y se lo entrega a usted. No existe un endpoint de login.
 - Su empresa tiene **un solo token**, que su sistema usa para todas sus sucursales y puntos de
   venta (cada venta indica en cuál se emite con `sucursal` y `punto_venta`).
 - El proveedor se lo entrega **una sola vez**: no se puede recuperar. Si se pierde o se filtra,
@@ -415,6 +429,9 @@ Content-Type: application/json
     "total": 90.0,
     "referencia_externa": "VENTA-000123",
     "url_verificacion": "https://siat.impuestos.gob.bo/consulta/QR?nit=...&cuf=...&numero=128&t=2",
+    "url_publica": "https://{dominio}/factura/4A1B9C...F3E2?signature=a8f3...",
+    "url_publica_pdf": "https://{dominio}/factura/4A1B9C...F3E2/pdf?signature=...",
+    "url_publica_rollo": "https://{dominio}/factura/4A1B9C...F3E2/rollo?signature=...",
     "url_pdf": "https://{dominio}/api/v1/facturas/4A1B9C...F3E2/pdf",
     "url_xml": "https://{dominio}/api/v1/facturas/4A1B9C...F3E2/xml"
   }
@@ -458,6 +475,20 @@ Parámetros opcionales:
 ### 2.7 `GET /facturas/{cuf}`
 
 Devuelve `{ "exito": true, "factura": { ... } }` con la misma forma que la emisión.
+
+### Imprimir y compartir la factura (su sistema NO la arma)
+
+La API ya arma la factura completa. En la respuesta de la emisión (y de `GET /facturas/{cuf}`)
+vienen tres **enlaces públicos** que se abren **sin token**:
+
+| Campo | Qué abre | Para qué |
+|---|---|---|
+| `url_publica` | Página con la factura, botones de descarga, impresión y verificación en el SIN | Mostrarla en pantalla o **mandársela al comprador** (WhatsApp, correo) |
+| `url_publica_pdf` | PDF tamaño carta | Imprimir en hoja o archivar |
+| `url_publica_rollo` | PDF para **impresora térmica de 80 mm** | Imprimir el ticket en caja |
+
+Su sistema solo abre o manda a imprimir uno de esos enlaces. Están **firmados**: nadie puede ver
+otra factura cambiando el CUF (responde 404). No vencen. También llegan en el webhook (`url_publica`).
 
 ### 2.8 `GET /facturas/{cuf}/pdf` y `/xml`
 
@@ -554,7 +585,7 @@ Content-Type: application/json
 X-Siat-Evento: factura.validada
 X-Siat-Signature: sha256=5d41402abc4b2a76b9719d911017c592...
 
-{"evento":"factura.validada","cuf":"4A1B...","referencia_externa":"VENTA-000123","estado":"VALIDADA","codigo_recepcion":"1234567","motivo":null,"emitido_en":"2026-10-11T10:16:03-04:00"}
+{"evento":"factura.validada","cuf":"4A1B...","referencia_externa":"VENTA-000123","estado":"VALIDADA","codigo_recepcion":"1234567","url_publica":"https://{dominio}/factura/4A1B...?signature=...","motivo":null,"emitido_en":"2026-10-11T10:16:03-04:00"}
 ```
 
 - `motivo` trae el porqué en `factura.observada` (ej. `"[1001] HASH INVALIDO"`) y en
@@ -603,3 +634,164 @@ const valida = crypto.timingSafeEqual(Buffer.from(esperada), Buffer.from(req.get
 5. Use los catálogos de la API para unidades de medida, métodos de pago y documentos.
 6. Use solo productos homologados (`GET /catalogos/productos`).
 7. Ante `OBSERVADA` u `anulacion_rechazada`, contacte al proveedor: el motivo queda registrado.
+
+---
+
+## 7. Probar con Postman o Thunder Client
+
+Para probar la API **antes de programar nada**: en 10 minutos va a haber emitido, consultado y
+descargado una factura haciendo clic. Necesita:
+
+- los dos archivos de [`postman/`](postman/) — `coleccion.json` (las **18 peticiones**, ordenadas y
+  con ejemplos) y `entorno.json` (sus **variables**). También se descargan, ya apuntando al
+  servidor, desde `https://{dominio}/docs/api` → **Colección Postman** y **Entorno**;
+- los datos que le entregó el proveedor: **URL base**, **token**, **código de sucursal** y
+  **código de punto de venta**.
+
+### Paso 1 — Instalar la herramienta (elija una)
+
+| Herramienta | Cómo |
+|---|---|
+| **Postman** | Descárguelo de <https://www.postman.com/downloads/> e instálelo |
+| **Thunder Client** | En Visual Studio Code: *Extensiones* → busque **Thunder Client** → *Instalar*. Aparece un rayo ⚡ en la barra izquierda |
+
+---
+
+### Paso 2 — Importar los dos archivos
+
+**Postman**
+1. Botón **Import** (arriba a la izquierda).
+2. Arrastre `coleccion.json` **y** `entorno.json` a la ventana → **Import**.
+3. Arriba a la derecha, en el selector de entornos, elija **"Facturación SIAT — mi empresa"**.
+
+**Thunder Client**
+1. Pestaña **Collections** → menú `≡` → **Import** → elija `coleccion.json`.
+2. Pestaña **Env** → menú `≡` → **Import** → elija `entorno.json`.
+3. En la colección, menú `…` → **Settings** → **Environment** → elija **"Facturación SIAT — mi empresa"**.
+
+---
+
+### Paso 3 — Completar sus variables (una sola vez)
+
+Abra el entorno y reemplace los valores:
+
+| Variable | Qué poner | Ejemplo |
+|---|---|---|
+| `base_url` | La URL base que le dio el proveedor, **terminada en `/api/v1`** | `https://facturas.proveedor.bo/api/v1` |
+| `token` | El token que le entregó el **sistema de facturación** (su proveedor), **completo, con el número y la barra**. No se obtiene por la API | `12\|siat_4f8a...c91e` |
+| `sucursal` | Su código de sucursal (0 = casa matriz) | `0` |
+| `punto_venta` | Su código de punto de venta | `0` |
+| `venta_id` | El id de **su** venta. Cámbielo para cada venta nueva | `VENTA-0001` |
+| `cuf` | **Déjelo vacío**: se llena solo al emitir | |
+
+**Guarde** el entorno (Ctrl+S en Postman, botón *Save* en Thunder).
+
+> No hace falta configurar la autenticación en cada petición: la colección ya manda
+> `Authorization: Bearer {{token}}` en todas.
+
+---
+
+### Paso 4 — Ejecutar las peticiones en orden
+
+Abra cada petición y presione **Send**. Las carpetas están numeradas en el orden correcto.
+
+#### 1. Probar la conexión
+**¿Puedo facturar? (estado)** → debe responder **200** con:
+
+```json
+{ "exito": true, "puede_facturar": true }
+```
+
+| Si ve… | Significa | Qué hacer |
+|---|---|---|
+| `401 TOKEN_INVALIDO` | Token mal copiado o revocado | Revise que esté completo (incluye `12\|`) |
+| `"puede_facturar": false` | Su empresa aún no está habilitada | Avise al proveedor |
+| Error de conexión | `base_url` mal escrita | Revise que termine en `/api/v1` |
+
+#### 2. Datos de referencia
+Ejecútelas una por una y **mire las respuestas**: de ahí salen los códigos que va a usar.
+
+- **Sucursales y puntos de venta** → confirme sus códigos y póngalos en `sucursal` y `punto_venta`.
+- **Productos homologados de su NIT** → anote un `codigo` de producto: lo necesita para emitir.
+- **Unidades de medida**, **Métodos de pago**, **Tipos de documento** → los códigos de los campos de la venta.
+
+#### 3. Verificar NIT (opcional)
+Cambie el NIT de la URL por el de un comprador real. La respuesta trae `codigo_excepcion` (0 o 1)
+para poner en la venta si el comprador da NIT.
+
+#### 4. Emitir factura
+1. Abra **Emitir factura** → pestaña **Body**.
+2. Cambie `codigo_producto_sin` por un código de **sus productos** (carpeta 2) y, si hace falta,
+   `unidad_medida`.
+3. **Send**. Debe responder **201**:
+
+```json
+{
+  "exito": true,
+  "factura": { "cuf": "4A1B9C...F3E2", "numero_factura": 1, "estado": "PENDIENTE", "total": 90.0, ... }
+}
+```
+
+En la respuesta vienen **`url_publica`**, **`url_publica_pdf`** y **`url_publica_rollo`**:
+cópielos al navegador y verá la factura lista, con su PDF y su ticket de 80 mm, **sin token**. Así
+es como su sistema la imprime o se la manda al comprador: no tiene que armarla.
+
+El **CUF se guarda solo** en la variable `cuf` (en Postman; en Thunder Client, si no se guarda,
+cópielo de la respuesta y péguelo en la variable `cuf`).
+
+**Pruebe la idempotencia:** presione **Send otra vez** sin cambiar nada. Recibe **la misma factura**
+(mismo CUF y número): no se creó otra. Para emitir una venta **nueva**, cambie `venta_id` en el
+entorno (`VENTA-0002`).
+
+| Si ve… | Significa |
+|---|---|
+| `422` con `errors` | Un campo con formato inválido: el mensaje dice cuál |
+| `422 FACTURA_INVALIDA` + `detalles` | Regla de negocio: producto no homologado, descuento mayor al importe, etc. |
+| `403 EMPRESA_NO_HABILITADA` | Su empresa todavía no puede emitir |
+| `503 SIAT_NO_DISPONIBLE` | El SIN no responde: reintente en unos minutos |
+
+#### 5. Consultar facturas
+- **Estado de la factura emitida** → vuelva a ejecutarla al rato: pasa de `PENDIENTE` a `VALIDADA`.
+  Si sale `OBSERVADA`, el motivo está en `motivo_observacion`.
+- **Descargar PDF** → en Postman use **Send and Download** (flecha junto a *Send*).
+- **Descargar XML firmado** → el documento legal.
+- **Buscar por su id de venta** → encuentra la factura con su `venta_id`, útil si se cortó la red.
+
+#### 6. Anular (solo si su token es de perfil *Administración*)
+**Antes**, ejecute **Estado de la factura emitida** y confirme que ya **no** está `PENDIENTE`
+(debe decir `RECIBIDA` o `VALIDADA`). Una factura `PENDIENTE` todavía no llegó al SIN y no se puede
+anular: responde `409 FACTURA_NO_ANULABLE`. Espere unos segundos y vuelva a mirar.
+
+**Anular la factura emitida** → `{"motivo": 1}`. Responde 200 y la anulación se confirma con el SIN
+en segundo plano. Con un token de perfil *Caja / POS* responde `403 PERMISO_INSUFICIENTE`: es lo
+esperado.
+
+#### 7. Códigos del SIN
+Solo para mirar: la API maneja el CUIS y el CUFD sola. **Forzar CUFD nuevo** es una emergencia;
+no la use en pruebas normales.
+
+---
+
+### Paso 5 — Pasar a su sistema
+
+Cada petición de la colección es exactamente lo que su sistema tiene que hacer:
+
+| En Postman | En su código |
+|---|---|
+| `{{base_url}}` | La URL base, en su configuración |
+| `Authorization: Bearer {{token}}` | El token, en una variable de entorno secreta del **servidor** |
+| `X-Idempotency-Key: {{venta_id}}` | El id único de la venta en su sistema |
+| El cuerpo de **Emitir factura** | El JSON que arma con los datos de la venta |
+
+En Postman, el botón **`</>`** (*Code*) a la derecha muestra cualquier petición ya escrita en
+PHP, JavaScript, Python, C#, Java y más: cópiela como punto de partida.
+
+Referencia completa de cada campo y error: secciones 1 a 6 de esta guía o `https://{dominio}/docs/api`.
+
+---
+
+## Soporte
+
+Ante una factura `OBSERVADA` (rechazada por el SIN), el motivo viene en `motivo_observacion` y en
+el webhook. Si necesita ayuda, envíe al proveedor el **CUF** o su **referencia externa** de la venta:
+con eso la ubicamos.

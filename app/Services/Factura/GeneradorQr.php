@@ -17,10 +17,18 @@ use SimpleSoftwareIO\QrCode\Facades\QrCode;
  */
 class GeneradorQr
 {
+    /** Parametro 't' del QR del SIN: tamano de la representacion grafica. */
+    public const FORMATO_ROLLO = 1;
+
+    public const FORMATO_CARTA = 2;
+
     /**
      * URL que codifica el QR: identifica la factura para su verificacion.
+     *
+     * @param  int|null  $formato  FORMATO_ROLLO o FORMATO_CARTA; por defecto,
+     *                             el configurado (siat.qr.tamanio).
      */
-    public function urlVerificacion(Factura $factura): string
+    public function urlVerificacion(Factura $factura, ?int $formato = null): string
     {
         $empresa = $factura->empresa;
 
@@ -31,7 +39,7 @@ class GeneradorQr
             'nit' => $empresa->nit,
             'cuf' => $factura->cuf,
             'numero' => $factura->numero_factura,
-            't' => config('siat.qr.tamanio'),
+            't' => $formato ?? config('siat.qr.tamanio'),
         ]);
 
         return $base.'?'.$parametros;
@@ -41,19 +49,19 @@ class GeneradorQr
      * Devuelve el QR como SVG (no necesita imagick, solo GD) para incrustarlo
      * en el PDF o servirlo por la API.
      */
-    public function svg(Factura $factura, int $tamanio = 150): string
+    public function svg(Factura $factura, int $tamanio = 150, ?int $formato = null): string
     {
         return (string) QrCode::format('svg')
             ->size($tamanio)
             ->margin(1)
-            ->generate($this->urlVerificacion($factura));
+            ->generate($this->urlVerificacion($factura, $formato));
     }
 
     /**
      * QR como data URI listo para un atributo src de <img>.
      */
-    public function dataUri(Factura $factura, int $tamanio = 150): string
+    public function dataUri(Factura $factura, int $tamanio = 150, ?int $formato = null): string
     {
-        return 'data:image/svg+xml;base64,'.base64_encode($this->svg($factura, $tamanio));
+        return 'data:image/svg+xml;base64,'.base64_encode($this->svg($factura, $tamanio, $formato));
     }
 }

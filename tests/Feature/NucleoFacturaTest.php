@@ -26,6 +26,8 @@ use App\Services\Siat\SiatClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Testing\TestResponse;
 
 uses(RefreshDatabase::class);
 
@@ -452,4 +454,76 @@ test('un certificado vale hasta el final del dia en que vence', function () {
     expect($hoy->estaVencido())->toBeFalse()
         ->and($ayer->estaVencido())->toBeTrue()
         ->and($sinFecha->estaVencido())->toBeFalse();
+});
+
+// --- Factura publica (enlace firmado) ------------------------------------------------
+
+/**
+ * Pide una URL publica de la factura pasando por la app (ruta + query firmada).
+ */
+function abrirPublica(string $url): TestResponse
+{
+    return test()->get(parse_url($url, PHP_URL_PATH).'?'.parse_url($url, PHP_URL_QUERY));
+}
+
+test('la factura publica se abre sin token con su enlace firmado', function () {
+    $factura = facturaParaXml();
+    $factura->update(['xml_firmado' => '<f/>']);
+
+    abrirPublica($factura->urlPublica())
+        ->assertOk()
+        ->assertSee('(Con Derecho a Crédito Fiscal)')
+        ->assertSee($factura->urlPublica('pdf'), false)
+        ->assertSee($factura->urlPublica('rollo'), false)
+        ->assertSee('Verificar en el SIN');
+});
+
+test('sin firma, con firma falsa o con la firma de otra factura responde 404', function () {
+    $factura = facturaParaXml();
+    $factura->update(['xml_firmado' => '<f/>']);
+    $otra = Factura::factory()->create(['xml_firmado' => '<f/>']);
+
+    $this->get("/factura/{$factura->cuf}")->assertNotFound();
+    $this->get("/factura/{$factura->cuf}?signature=falsa")->assertNotFound();
+
+    // La firma de una factura no abre otra: no se pueden recorrer cambiando el CUF.
+    $firmaAjena = parse_url($otra->urlPublica(), PHP_URL_QUERY);
+    $this->get("/factura/{$factura->cuf}?{$firmaAjena}")->assertNotFound();
+});
+
+test('el PDF carta y el ticket de 80 mm se descargan desde el enlace publico', function () {
+    $factura = facturaParaXml();
+    $factura->update(['xml_firmado' => '<f/>']);
+    Storage::fake('local');
+
+    abrirPublica($factura->urlPublica('pdf'))->assertOk()->assertHeader('Content-Type', 'application/pdf');
+
+    $rollo = abrirPublica($factura->urlPublica('rollo'))->assertOk()->assertHeader('Content-Type', 'application/pdf');
+
+    // 80 mm = 226.77 puntos de ancho.
+    expect($rollo->getContent())->toContain('226.77');
+});
+
+test('una factura anulada se sigue viendo, marcada como anulada', function () {
+    $factura = facturaParaXml();
+    $factura->update(['xml_firmado' => '<f/>', 'estado' => Factura::ESTADO_ANULADA]);
+
+    abrirPublica($factura->urlPublica())->assertOk()->assertSee('FACTURA ANULADA');
+});
+
+test('la API y el webhook entregan los enlaces publicos', function () {
+    config(['siat.webhooks.permitir_destinos_privados' => true]);
+    Http::fake();
+    $empresa = Empresa::factory()->create(['webhook_url' => 'http://localhost/hook']);
+    $factura = Factura::factory()->for($empresa)->create(['xml_firmado' => '<f/>']);
+
+    $this->withToken($empresa->emitirTokenApi('T', 'caja')->plainTextToken)
+        ->getJson("/api/v1/facturas/{$factura->cuf}")
+        ->assertJsonPath('factura.url_publica', $factura->urlPublica())
+        ->assertJsonPath('factura.url_publica_pdf', $factura->urlPublica('pdf'))
+        ->assertJsonPath('factura.url_publica_rollo', $factura->urlPublica('rollo'));
+
+    app()->call([new NotificarWebhook($factura->id, 'factura.validada'), 'handle']);
+
+    Http::assertSent(fn ($request) => $request['url_publica'] === $factura->urlPublica());
 });

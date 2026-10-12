@@ -142,7 +142,9 @@ class Empresa extends Model
         $carga = json_decode((string) base64_decode(strtr($partes[1], '-_', '+/'), true), true);
         $exp = is_array($carga) ? ($carga['exp'] ?? null) : null;
 
-        return is_numeric($exp) ? Carbon::createFromTimestamp((int) $exp) : null;
+        // En la zona horaria de la app: createFromTimestamp devuelve UTC, y
+        // entre las 20:00 y las 24:00 de Bolivia la ficha mostraba un dia mas.
+        return is_numeric($exp) ? Carbon::createFromTimestamp((int) $exp, config('app.timezone')) : null;
     }
 
     /**

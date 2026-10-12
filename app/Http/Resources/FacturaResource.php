@@ -33,6 +33,12 @@ class FacturaResource extends JsonResource
             'total' => (float) $this->monto_total,
             'referencia_externa' => $this->referencia_externa,
             'url_verificacion' => app(GeneradorQr::class)->urlVerificacion($this->resource),
+            // Enlaces PUBLICOS firmados: se abren sin token. Es lo que el
+            // sistema de ventas muestra o imprime, y lo que se le comparte al
+            // comprador. La API arma todo.
+            'url_publica' => $this->resource->urlPublica(),
+            'url_publica_pdf' => $this->resource->urlPublica('pdf'),
+            'url_publica_rollo' => $this->resource->urlPublica('rollo'),
             'url_pdf' => url("/api/v1/facturas/{$this->cuf}/pdf"),
             'url_xml' => url("/api/v1/facturas/{$this->cuf}/xml"),
         ];

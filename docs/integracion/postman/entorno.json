@@ -1,0 +1,42 @@
+{
+  "name": "Facturación SIAT — mi empresa",
+  "values": [
+    {
+      "key": "base_url",
+      "value": "https://SU-DOMINIO/api/v1",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "token",
+      "value": "PEGUE-AQUI-EL-TOKEN-QUE-LE-ENTREGO-EL-PROVEEDOR",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "sucursal",
+      "value": "0",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "punto_venta",
+      "value": "0",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "venta_id",
+      "value": "VENTA-0001",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "cuf",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    }
+  ],
+  "_postman_variable_scope": "environment"
+}
