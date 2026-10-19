@@ -20,9 +20,26 @@
             <div style="display:flex; gap:8px; align-items:center;">
                 <x-estado-empresa :estado="$empresa->estado" />
                 <span style="font-size:13px; color:var(--suave);">NIT {{ $empresa->nit }}</span>
+                @if ($empresa->esSandbox())
+                    <span class="pill" title="Emite contra el SIAT piloto: sin validez fiscal">PILOTO · sin validez fiscal</span>
+                @endif
+                @if ($empresa->sandboxDe)
+                    <a style="font-size:13px;" href="{{ route('admin.empresas.show', $empresa->sandboxDe) }}">Sandbox de {{ $empresa->sandboxDe->nombre_comercial }}</a>
+                @elseif ($empresa->sandbox)
+                    <a style="font-size:13px;" href="{{ route('admin.empresas.show', $empresa->sandbox) }}">Ver su sandbox</a>
+                @endif
             </div>
         </div>
-        <div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            {{-- Copia en el piloto para que el sistema de ventas del cliente
+                 pruebe sin tocar sus facturas reales. --}}
+            @if (! $empresa->esSandbox() && ! $empresa->sandbox)
+                <form method="POST" action="{{ route('admin.empresas.sandbox', $empresa) }}"
+                      data-confirmar="Se crea una copia de esta empresa en el ambiente PILOTO (sin validez fiscal), con sus sucursales, el punto de venta 0 y un certificado de prueba.&#10;&#10;Despues hay que pegarle el token delegado del piloto del SIN y generar su token de API."
+                      data-titulo="Crear sandbox" data-boton="Crear sandbox">
+                    @csrf <button class="btn gris" type="submit">Crear sandbox</button>
+                </form>
+            @endif
             <a class="btn gris" href="{{ route('admin.empresas.api', $empresa) }}">Acceso API</a>
             <a class="btn gris" href="{{ route('admin.pruebas.show', $empresa) }}">Pruebas piloto</a>
             <a class="btn gris" href="{{ route('admin.empresas.edit', $empresa) }}">Editar</a>
@@ -119,6 +136,51 @@
                     <div class="campo"><label>Passphrase</label><input type="password" name="passphrase" required></div>
                     <div class="campo"><label>Vence el</label><input type="date" name="vence_el"></div>
                     <button class="btn" type="submit">Cargar certificado</button>
+                </form>
+            </details>
+        </div>
+
+        {{-- ---- CAFC: facturas manuales de contingencia ---- --}}
+        <div class="tarjeta">
+            <h2>CAFC (contingencia manual)</h2>
+            <p style="margin-top:0; font-size:13px; color:var(--suave);">
+                Lo entrega el SIN para el NIT de la empresa. Solo se usa en los eventos 5, 6 y 7
+                (falla de software, falla de hardware, corte de energía), cuando se factura a mano.
+            </p>
+
+            @if ($cafc === null)
+                <p><x-semaforo color="ambar" texto="sin CAFC: no se puede facturar a mano en los eventos 5, 6 y 7" /></p>
+            @else
+                <table>
+                    <tr><th>Código</th><td><span class="clave">{{ $cafc->codigo }}</span></td></tr>
+                    <tr><th>Rango</th><td>{{ $cafc->numero_inicio }} al {{ $cafc->numero_fin }}</td></tr>
+                    <tr><th>Último usado</th><td>{{ $cafc->ultimo_numero ?? '—' }}</td></tr>
+                    <tr>
+                        <th>Disponibles</th>
+                        <td>
+                            <x-semaforo :color="$cafc->estaAgotado() ? 'rojo' : ($cafc->disponibles() <= 50 ? 'ambar' : 'verde')"
+                                        :texto="$cafc->estaAgotado() ? 'agotado: pedi uno nuevo al SIN' : $cafc->disponibles().' números'" />
+                        </td>
+                    </tr>
+                </table>
+            @endif
+
+            <details @if ($cafc === null) open @endif style="margin-top:10px;">
+                <summary style="cursor:pointer; font-size:13px;">
+                    {{ $cafc === null ? 'Cargar CAFC' : 'Reemplazar CAFC' }}
+                </summary>
+                <form method="POST" action="{{ route('admin.empresas.cafcs.store', $empresa) }}" style="margin-top:10px;"
+                      @if ($cafc !== null)
+                          data-titulo="Reemplazar CAFC" data-boton="Reemplazar"
+                          data-confirmar="El CAFC {{ $cafc->codigo }} deja de usarse y queda como historial."
+                      @endif>
+                    @csrf
+                    <div class="campo"><label>Código CAFC</label><input name="codigo" value="{{ old('codigo') }}" maxlength="50" required></div>
+                    <div style="display:flex; gap:10px;">
+                        <div class="campo" style="flex:1;"><label>Rango desde</label><input type="number" name="numero_inicio" value="{{ old('numero_inicio', 1) }}" min="1" required></div>
+                        <div class="campo" style="flex:1;"><label>Rango hasta</label><input type="number" name="numero_fin" value="{{ old('numero_fin') }}" min="1" required></div>
+                    </div>
+                    <button class="btn" type="submit">Guardar CAFC</button>
                 </form>
             </details>
         </div>

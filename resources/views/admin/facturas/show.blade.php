@@ -1,10 +1,11 @@
 @extends('layouts.admin')
-@section('titulo', 'Factura '.$factura->numero_factura)
+@php($documento = $factura->esNotaCreditoDebito() ? 'Nota credito-debito' : 'Factura')
+@section('titulo', $documento.' '.$factura->numero_factura)
 
 @section('contenido')
     <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
         <div>
-            <h1 style="margin:0 0 6px;">Factura N° {{ $factura->numero_factura }}</h1>
+            <h1 style="margin:0 0 6px;">{{ $documento }} N° {{ $factura->numero_factura }}</h1>
             <x-estado-factura :estado="$factura->estado" />
             <span style="font-size:13px; color:var(--suave);">
                 {{ $factura->empresa->nombre_comercial }} · Suc. {{ $factura->puntoVenta->sucursal->codigo_sucursal }} / PV {{ $factura->puntoVenta->codigo_punto_venta }}
@@ -124,6 +125,10 @@
     <div class="tarjeta" style="margin-top:16px;">
         <h2>Datos</h2>
         <table>
+            @if ($factura->facturaOrigen)
+                <tr><th style="width:220px;">Factura que ajusta</th><td><a href="{{ route('admin.facturas.show', $factura->facturaOrigen) }}">Factura N° {{ $factura->facturaOrigen->numero_factura }}</a> · Bs {{ number_format((float) $factura->facturaOrigen->monto_total, 2) }}</td></tr>
+                <tr><th>Devuelto / credito fiscal (13%)</th><td>Bs {{ number_format((float) $factura->subtotal, 2) }} / Bs {{ number_format((float) $factura->monto_efectivo_credito_debito, 2) }}</td></tr>
+            @endif
             <tr><th style="width:220px;">CUF</th><td style="font-family:monospace; word-break:break-all;">{{ $factura->cuf }}</td></tr>
             <tr><th>Fecha de emision</th><td>{{ $factura->fecha_emision?->format('d/m/Y H:i:s') }}</td></tr>
             <tr><th>Tipo de emision</th><td>{{ $factura->tipo_emision === App\Models\Factura::EMISION_CONTINGENCIA ? 'Fuera de linea (contingencia)' : 'En linea' }}</td></tr>
@@ -139,7 +144,7 @@
                 <tr><th>Paquete de contingencia</th><td>#{{ $factura->paquete->id }} · {{ $factura->paquete->estado }}</td></tr>
             @endif
             @if ($factura->anulacion)
-                <tr><th>Anulacion</th><td>{{ $factura->anulacion->estado }} · motivo {{ $factura->anulacion->motivo }} · {{ $factura->anulacion->anulada_en?->format('d/m/Y H:i') }}{{ $factura->anulacion->motivo_rechazo ? ' · rechazo: '.$factura->anulacion->motivo_rechazo : '' }}</td></tr>
+                <tr><th>Anulacion</th><td>{{ $factura->anulacion->estado }}{{ $factura->anulacion->esAdministrativa() ? ' · ADMINISTRATIVA, resolucion '.$factura->anulacion->numero_resolucion : '' }} · motivo {{ $factura->anulacion->motivo }} · {{ $factura->anulacion->anulada_en?->format('d/m/Y H:i') }}{{ $factura->anulacion->motivo_rechazo ? ' · rechazo: '.$factura->anulacion->motivo_rechazo : '' }}</td></tr>
             @endif
         </table>
     </div>
@@ -147,10 +152,13 @@
     <div class="tarjeta">
         <h2>Detalle</h2>
         <table>
-            <thead><tr><th>Producto SIN</th><th>Actividad</th><th>Descripcion</th><th>Cantidad</th><th>P. unitario</th><th>Descuento</th><th>Subtotal</th></tr></thead>
+            <thead><tr>@if ($factura->esNotaCreditoDebito())<th>Item</th>@endif<th>Producto SIN</th><th>Actividad</th><th>Descripcion</th><th>Cantidad</th><th>P. unitario</th><th>Descuento</th><th>Subtotal</th></tr></thead>
             <tbody>
                 @foreach ($factura->items as $item)
                     <tr>
+                        @if ($factura->esNotaCreditoDebito())
+                            <td>{{ $item->esDevuelto() ? 'Devuelto' : 'Original' }}</td>
+                        @endif
                         <td>{{ $item->codigo_producto_sin }}</td>
                         <td>{{ $item->codigo_actividad ?? '—' }}</td>
                         <td>{{ $item->descripcion }}</td>
@@ -163,6 +171,26 @@
             </tbody>
         </table>
     </div>
+
+    @if ($factura->notas->isNotEmpty())
+        <div class="tarjeta">
+            <h2>Notas de credito-debito</h2>
+            <table>
+                <thead><tr><th>Nota N°</th><th>Fecha</th><th>Estado</th><th>Devuelto</th><th>Credito fiscal</th></tr></thead>
+                <tbody>
+                    @foreach ($factura->notas as $nota)
+                        <tr>
+                            <td><a href="{{ route('admin.facturas.show', $nota) }}">{{ $nota->numero_factura }}</a></td>
+                            <td>{{ $nota->fecha_emision?->format('d/m/Y H:i') }}</td>
+                            <td><x-estado-factura :estado="$nota->estado" /></td>
+                            <td>Bs {{ number_format((float) $nota->subtotal, 2) }}</td>
+                            <td>Bs {{ number_format((float) $nota->monto_efectivo_credito_debito, 2) }}</td>
+                        </tr>
+                    @endforeach
+                </tbody>
+            </table>
+        </div>
+    @endif
 
     <p><a href="{{ route('admin.facturas.index') }}">← Volver a facturas</a></p>
 @endsection

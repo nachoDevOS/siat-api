@@ -8,6 +8,12 @@ use App\Models\Factura;
  * Servicio ServicioFacturacionCompraVenta: recepcion, anulacion, verificacion
  * de estado y envio de paquetes de contingencia.
  *
+ * Las notas de credito-debito van por ServicioFacturacionDocumentoAjuste, con
+ * las mismas cuatro operaciones individuales pero otros nombres. Cada metodo
+ * mira el documento y elige servicio, operacion y envoltorio (ver
+ * operacion()), asi los jobs de envio, verificacion y anulacion sirven igual
+ * para facturas y notas.
+ *
  * El XML firmado se envia comprimido en GZIP y acompanado de su hash SHA-256,
  * como exige el SIN.
  *
@@ -39,9 +45,7 @@ class ServicioFacturacion extends ServicioBase
             (string) $factura->xml_firmado,
         );
 
-        return $this->invocar('compra_venta', 'recepcionFactura', [
-            'SolicitudServicioRecepcionFactura' => $solicitud,
-        ]);
+        return $this->invocarPara($factura, 'recepcion', $solicitud);
     }
 
     /**
@@ -52,9 +56,7 @@ class ServicioFacturacion extends ServicioBase
         $solicitud = $this->cabeceraDeFactura($factura, $cufd, $cuis);
         $solicitud['cuf'] = $factura->cuf;
 
-        return $this->invocar('compra_venta', 'verificacionEstadoFactura', [
-            'SolicitudServicioVerificacionEstadoFactura' => $solicitud,
-        ]);
+        return $this->invocarPara($factura, 'verificacion', $solicitud);
     }
 
     /**
@@ -69,9 +71,7 @@ class ServicioFacturacion extends ServicioBase
         $solicitud['cuf'] = $factura->cuf;
         $solicitud['codigoMotivo'] = $motivo;
 
-        return $this->invocar('compra_venta', 'anulacionFactura', [
-            'SolicitudServicioAnulacionFactura' => $solicitud,
-        ]);
+        return $this->invocarPara($factura, 'anulacion', $solicitud);
     }
 
     /**
@@ -86,9 +86,7 @@ class ServicioFacturacion extends ServicioBase
         $solicitud = $this->cabeceraDeFactura($factura, $cufd, $cuis);
         $solicitud['cuf'] = $factura->cuf;
 
-        return $this->invocar('compra_venta', 'reversionAnulacionFactura', [
-            'SolicitudServicioReversionAnulacionFactura' => $solicitud,
-        ]);
+        return $this->invocarPara($factura, 'reversion', $solicitud);
     }
 
     /**
@@ -105,6 +103,41 @@ class ServicioFacturacion extends ServicioBase
 
         return $this->invocar('compra_venta', 'recepcionPaqueteFactura', [
             'SolicitudServicioRecepcionPaquete' => $solicitud,
+        ]);
+    }
+
+    /**
+     * Envia un paquete de emision masiva (recepcionMasivaFactura).
+     *
+     * VERIFICADO CONTRA EL WSDL DEL PILOTO /sfd (2026-10-18): struct
+     * solicitudRecepcionMasiva = solicitudRecepcionFactura + cantidadFacturas,
+     * envoltorio SolicitudServicioRecepcionMasiva.
+     *
+     * @param  array<string, mixed>  $datosPaquete
+     */
+    public function recepcionarMasiva(array $datosPaquete, string $archivoPaquete): mixed
+    {
+        $solicitud = array_merge($this->solicitudBase(), $datosPaquete);
+        $solicitud['fechaEnvio'] = now()->format('Y-m-d\TH:i:s.v');
+
+        [$solicitud['archivo'], $solicitud['hashArchivo']] = $this->comprimirYHashear($archivoPaquete);
+
+        return $this->invocar('compra_venta', 'recepcionMasivaFactura', [
+            'SolicitudServicioRecepcionMasiva' => $solicitud,
+        ]);
+    }
+
+    /**
+     * Resultado de un paquete de emision masiva ya recibido
+     * (validacionRecepcionMasivaFactura, struct solicitudValidacionRecepcion =
+     * base + codigoRecepcion). VERIFICADO contra el WSDL del piloto.
+     *
+     * @param  array<string, mixed>  $datos
+     */
+    public function validarRecepcionMasiva(array $datos): mixed
+    {
+        return $this->invocar('compra_venta', 'validacionRecepcionMasivaFactura', [
+            'SolicitudServicioValidacionRecepcionMasiva' => array_merge($this->solicitudBase(), $datos),
         ]);
     }
 
@@ -126,6 +159,48 @@ class ServicioFacturacion extends ServicioBase
     }
 
     /**
+     * Servicio, operacion y envoltorio SOAP de cada operacion individual.
+     *
+     * VERIFICADOS contra los WSDL del piloto /sfd: compra-venta (2026-10-07)
+     * y documento de ajuste (2026-10-18). El de ajuste hereda la misma struct
+     * base 'solicitudRecepcion' y responde RespuestaServicioFacturacion, asi
+     * que solo cambian los nombres.
+     *
+     * @var array<string, array{0: string, 1: string}>
+     */
+    private const OPERACIONES = [
+        'recepcion' => ['recepcionFactura', 'SolicitudServicioRecepcionFactura'],
+        'verificacion' => ['verificacionEstadoFactura', 'SolicitudServicioVerificacionEstadoFactura'],
+        'anulacion' => ['anulacionFactura', 'SolicitudServicioAnulacionFactura'],
+        'reversion' => ['reversionAnulacionFactura', 'SolicitudServicioReversionAnulacionFactura'],
+    ];
+
+    private const OPERACIONES_AJUSTE = [
+        'recepcion' => ['recepcionDocumentoAjuste', 'SolicitudServicioRecepcionDocumentoAjuste'],
+        'verificacion' => ['verificacionEstadoDocumentoAjuste', 'SolicitudServicioVerificacionEstadoDocumentoAjuste'],
+        'anulacion' => ['anulacionDocumentoAjuste', 'SolicitudServicioAnulacionDocumentoAjuste'],
+        'reversion' => ['reversionAnulacionDocumentoAjuste', 'SolicitudServicioReversionAnulacionDocumentoAjuste'],
+    ];
+
+    /**
+     * Invoca la operacion que corresponde al documento: una factura va a
+     * compra-venta y una nota de credito-debito al servicio de ajuste.
+     *
+     * @param  'recepcion'|'verificacion'|'anulacion'|'reversion'  $operacion
+     * @param  array<string, mixed>  $solicitud
+     */
+    private function invocarPara(Factura $factura, string $operacion, array $solicitud): mixed
+    {
+        [$servicio, $operaciones] = $factura->esNotaCreditoDebito()
+            ? ['documento_ajuste', self::OPERACIONES_AJUSTE]
+            : ['compra_venta', self::OPERACIONES];
+
+        [$nombre, $envoltorio] = $operaciones[$operacion];
+
+        return $this->invocar($servicio, $nombre, [$envoltorio => $solicitud]);
+    }
+
+    /**
      * Campos de la struct base 'solicitudRecepcion' del WSDL, que heredan la
      * recepcion, la anulacion y la verificacion de estado.
      *
@@ -143,7 +218,7 @@ class ServicioFacturacion extends ServicioBase
         $solicitud['codigoPuntoVenta'] = $factura->puntoVenta->codigo_punto_venta;
         $solicitud['codigoDocumentoSector'] = $factura->codigo_documento_sector;
         $solicitud['codigoEmision'] = $factura->tipo_emision;
-        $solicitud['tipoFacturaDocumento'] = config('siat.codigos.tipo_factura_documento');
+        $solicitud['tipoFacturaDocumento'] = $factura->tipoFacturaDocumento();
         $solicitud['cufd'] = $cufd;
         $solicitud['cuis'] = $cuis;
 

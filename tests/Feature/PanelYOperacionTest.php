@@ -5,6 +5,7 @@ use App\Jobs\EnviarFacturaAlSiat;
 use App\Jobs\NotificarWebhook;
 use App\Jobs\RenovarCufd;
 use App\Jobs\VerificarEstadoFactura;
+use App\Models\Cafc;
 use App\Models\Catalogo;
 use App\Models\Certificado;
 use App\Models\Cufd;
@@ -576,4 +577,76 @@ test('cada cliente de la lista enlaza a todas sus facturas', function () {
         ->assertSee('Facturas (2)');
     // Sin el limite del mes actual: aparecen tambien las de hace meses.
     expect($this->get($url)->assertOk()->viewData('facturas')->total())->toBe(2);
+});
+
+// --- CAFC por empresa -----------------------------------------------------------------
+
+test('el panel carga el CAFC de la empresa y lo muestra con su rango', function () {
+    $this->actingAs(User::factory()->create());
+    $empresa = Empresa::factory()->create();
+
+    $this->get(route('admin.empresas.show', $empresa))->assertSee('sin CAFC');
+
+    $this->post(route('admin.empresas.cafcs.store', $empresa), [
+        'codigo' => '101486bc6731e', 'numero_inicio' => 1, 'numero_fin' => 1000,
+    ])->assertRedirect(route('admin.empresas.show', $empresa))->assertSessionHas('estado');
+
+    $cafc = $empresa->fresh()->cafcActivo;
+    expect($cafc->codigo)->toBe('101486BC6731E')
+        ->and($cafc->disponibles())->toBe(1000)
+        ->and($cafc->usados())->toBe(0);
+
+    $this->get(route('admin.empresas.show', $empresa))
+        ->assertSee('101486BC6731E')
+        ->assertSee('1 al 1000')
+        ->assertSee('1000 números');
+});
+
+test('cargar otro CAFC desactiva el anterior y no toca los de otra empresa', function () {
+    $this->actingAs(User::factory()->create());
+    $empresa = Empresa::factory()->create();
+    $anterior = Cafc::factory()->for($empresa)->create(['codigo' => 'VIEJO1']);
+    $ajeno = Cafc::factory()->create();
+
+    $this->post(route('admin.empresas.cafcs.store', $empresa), [
+        'codigo' => 'NUEVO1', 'numero_inicio' => 1001, 'numero_fin' => 2000,
+    ]);
+
+    expect($anterior->fresh()->activo)->toBeFalse()
+        ->and($ajeno->fresh()->activo)->toBeTrue()
+        ->and($empresa->fresh()->cafcActivo->codigo)->toBe('NUEVO1');
+});
+
+test('el CAFC se valida: rango invertido, codigo repetido o con simbolos', function (array $datos, string $campo) {
+    $this->actingAs(User::factory()->create());
+    $empresa = Empresa::factory()->create();
+    Cafc::factory()->for($empresa)->create(['codigo' => 'REPETIDO1']);
+
+    $this->from(route('admin.empresas.show', $empresa))
+        ->post(route('admin.empresas.cafcs.store', $empresa), $datos + ['codigo' => 'OTRO1', 'numero_inicio' => 1, 'numero_fin' => 10])
+        ->assertSessionHasErrors($campo);
+
+    expect($empresa->cafcs()->count())->toBe(1);
+})->with([
+    'rango invertido' => [['numero_inicio' => 10, 'numero_fin' => 5], 'numero_fin'],
+    'repetido' => [['codigo' => 'REPETIDO1'], 'codigo'],
+    'con simbolos' => [['codigo' => '1014-86'], 'codigo'],
+]);
+
+test('los errores de validacion se muestran en el panel', function () {
+    $this->actingAs(User::factory()->create());
+    $empresa = Empresa::factory()->create();
+
+    $this->from(route('admin.empresas.show', $empresa))
+        ->followingRedirects()
+        ->post(route('admin.empresas.cafcs.store', $empresa), ['codigo' => 'X1', 'numero_inicio' => 10, 'numero_fin' => 5])
+        ->assertSee('El fin del rango no puede ser menor que el inicio.');
+});
+
+test('un CAFC con el rango consumido se ve agotado', function () {
+    $cafc = Cafc::factory()->make(['numero_inicio' => 1, 'numero_fin' => 1000, 'ultimo_numero' => 1000]);
+
+    expect($cafc->usados())->toBe(1000)
+        ->and($cafc->disponibles())->toBe(0)
+        ->and($cafc->estaAgotado())->toBeTrue();
 });

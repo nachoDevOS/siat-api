@@ -73,7 +73,7 @@ class FacturaController extends Controller
 
     public function show(Factura $factura, GeneradorQr $qr, AnuladorFactura $anulador): View
     {
-        $factura->load(['empresa', 'puntoVenta.sucursal', 'items', 'anulacion', 'cufd', 'paquete']);
+        $factura->load(['empresa', 'puntoVenta.sucursal', 'items', 'anulacion', 'cufd', 'paquete', 'facturaOrigen', 'notas']);
 
         return view('admin.facturas.show', [
             'factura' => $factura,
@@ -110,9 +110,7 @@ class FacturaController extends Controller
         ], ['motivo.in' => 'Elija un motivo del catalogo del SIN.']);
 
         if (! $anulador->esAnulable($factura)) {
-            return back()->with('error', $anulador->yaSeRevirtio($factura)
-                ? 'Esta factura ya se anulo y se revirtio una vez: el SIN no permite anularla de nuevo.'
-                : "Una factura {$factura->estado} no se puede anular.");
+            return back()->with('error', $anulador->motivoNoAnulable($factura));
         }
 
         $anulador->anular($factura, (int) $datos['motivo']);

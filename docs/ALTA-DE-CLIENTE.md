@@ -199,6 +199,11 @@ Pasá el cliente a **EN_PRUEBAS** y andá a **Pruebas piloto** (botón en la cab
 cómo correrlas y el estado de cada una está en [Piloto ante el SIN](#11-piloto-ante-el-sin), al
 final de esta guía.
 
+> **Pendiente:** el panel de pruebas todavía no tiene los casos de la **nota de crédito-débito
+> (sector 24)** ni de la **emisión masiva**. Si el cliente las va a usar, el SIN puede pedir
+> certificarlas aparte, y la emisión masiva exige además que el SIN la autorice para su NIT. Ver
+> [TECNICO.md → Pendientes](TECNICO.md#pendientes) (V1, V4).
+
 ### Paso 7 — Producción
 
 Cuando **el SIN** apruebe el piloto:
@@ -209,7 +214,27 @@ Cuando **el SIN** apruebe el piloto:
    separados con credenciales separadas)
 4. Pasá el estado a **PRODUCCION**
 
-Recién ahí `POST /api/v1/facturas` deja de responder `403 EMPRESA_NO_HABILITADA`.
+Durante el piloto (`EN_PRUEBAS` / `PILOTO_APROBADO`) el sistema de ventas del cliente **ya puede
+emitir por la API** contra el SIAT piloto, sin validez fiscal: dale un token (sale `siat_test_`)
+para que integre mientras corrés las pruebas.
+
+Al cambiar el **ambiente a Producción** en *Editar*, los tokens de API se **revocan solos**: generá
+uno nuevo (sale `siat_live_`) y entregáselo. Así un token de pruebas nunca emite facturas reales.
+
+### Paso 8 — Sandbox para un cliente que ya está en producción
+
+Una vez en producción el cliente se queda sin ambiente de pruebas. En su ficha, **Crear sandbox**
+arma una copia en el ambiente piloto: mismo NIT y código de sistema, sus sucursales con el punto de
+venta 0, un certificado de prueba y estado `EN_PRUEBAS`. No copia el token delegado ni el webhook.
+Después:
+
+1. En *Editar* del sandbox, pegá el **token delegado del piloto** del SIN (el de producción no
+   sirve).
+2. Pedí CUIS/CUFD del punto de venta 0 y sincronizá catálogos, como en cualquier alta.
+3. En *Acceso API* del sandbox, generá su token (`siat_test_…`) y entregáselo al cliente.
+
+> PENDIENTE DE VERIFICAR: que el SIN siga aceptando facturas del piloto para un NIT que ya pasó a
+> producción.
 
 > Antes de facturar en producción, el certificado activo tiene que ser el de la entidad
 > certificadora: con un autofirmado de prueba la emisión se rechaza. Después de pedir el CUIS
@@ -303,7 +328,7 @@ php artisan tinker --execute 'App\Models\Cufd::create(["punto_venta_id" => 1, "c
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/facturas \
-  -H "Authorization: Bearer 1|siat_TU_TOKEN" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer 1|siat_test_TU_TOKEN" -H "Content-Type: application/json" \
   -d '{"sucursal":0,"punto_venta":0,"referencia_externa":"VENTA-001",
        "comprador":{"tipo_documento":1,"numero_documento":"1023456","razon_social":"JUAN PEREZ"},
        "metodo_pago":1,
@@ -344,7 +369,7 @@ php artisan siat:inspeccionar-wsdl {id_empresa} --servicio=compra_venta --tipos
 | Síntoma | Causa | Solución |
 |---|---|---|
 | Todas las operaciones fallan por autenticación | token truncado al copiar, o vencido, o de otro ambiente | copiá el JWT completo; regeneralo para el ambiente correcto |
-| `403 EMPRESA_NO_HABILITADA` | la empresa no está en `PRODUCCION` | es correcto durante el piloto; la consulta y descarga sí funcionan |
+| `403 EMPRESA_NO_HABILITADA` | producción sin estado `PRODUCCION`, o piloto todavía en `EN_REGISTRO` / `OBSERVADO` | pasala a `EN_PRUEBAS` (piloto) o a `PRODUCCION`; la consulta y descarga sí funcionan |
 | `503 SIAT_NO_DISPONIBLE` | no hay CUFD vigente en ese punto de venta | pedí un CUFD; revisá que el cron horario esté corriendo |
 | `422` con "el codigo de producto N no esta homologado" | el producto no está en el catálogo del NIT | sincronizá catálogos, o corregí el código en la venta |
 | `422` con "no tiene un certificado digital activo" | falta el `.p12` | la modalidad electrónica no admite documentos sin firmar |

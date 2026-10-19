@@ -6,6 +6,7 @@ use App\Models\EventoSignificativo;
 use App\Models\Factura;
 use App\Models\Paquete;
 use App\Models\PuntoVenta;
+use App\Services\Webhooks\Notificador;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -16,6 +17,8 @@ use Illuminate\Support\Facades\DB;
  */
 class GestorContingencia
 {
+    public function __construct(private readonly Notificador $notificador) {}
+
     /**
      * Deriva una factura a contingencia: la marca y garantiza que exista un
      * evento significativo abierto para su punto de venta.
@@ -59,6 +62,8 @@ class GestorContingencia
                 ->pluck('id');
 
             $evento->update(['estado' => 'CERRADO', 'fecha_fin' => now()]);
+
+            $this->avisar($evento, 'siat.conexion_restablecida', $ids->count());
 
             if ($ids->isEmpty()) {
                 return null;
@@ -107,7 +112,7 @@ class GestorContingencia
             return $existente;
         }
 
-        return EventoSignificativo::create([
+        $evento = EventoSignificativo::create([
             'empresa_id' => $puntoVenta->sucursal->empresa_id,
             'punto_venta_id' => $puntoVenta->id,
             // Codigo de evento por caida del sistema; verificar catalogo del SIN.
@@ -117,5 +122,28 @@ class GestorContingencia
             'fecha_inicio' => now(),
             'estado' => 'ABIERTO',
         ]);
+
+        $this->avisar($evento, 'siat.conexion_perdida');
+
+        return $evento;
+    }
+
+    /**
+     * Webhook operativo del inicio o fin de una contingencia, para que el
+     * sistema de ventas sepa que el SIAT esta caido (o volvio) sin esperar a
+     * que una factura se lo diga.
+     */
+    private function avisar(EventoSignificativo $evento, string $nombre, ?int $facturasPendientes = null): void
+    {
+        $evento->loadMissing('puntoVenta.sucursal.empresa');
+        $puntoVenta = $evento->puntoVenta;
+
+        $this->notificador->emitir($puntoVenta->sucursal->empresa, $nombre, array_filter([
+            'sucursal' => $puntoVenta->sucursal->codigo_sucursal,
+            'punto_venta' => $puntoVenta->codigo_punto_venta,
+            'desde' => $evento->fecha_inicio?->toIso8601String(),
+            'hasta' => $evento->fecha_fin?->toIso8601String(),
+            'facturas_por_enviar' => $facturasPendientes,
+        ], fn ($valor) => $valor !== null));
     }
 }

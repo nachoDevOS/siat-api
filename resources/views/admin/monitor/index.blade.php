@@ -14,7 +14,10 @@
     </div>
 
     <div class="tarjeta">
-        <h2>Ultimas peticiones SOAP</h2>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h2 style="margin:0;">Ultimas peticiones SOAP</h2>
+            <a class="btn gris" href="{{ route('admin.comunicacion.index') }}">Ver analisis completo →</a>
+        </div>
         <table>
             <thead><tr><th>Fecha</th><th>Empresa</th><th>Servicio</th><th>Operacion</th><th>ms</th><th>Ok</th></tr></thead>
             <tbody>
@@ -23,7 +26,7 @@
                         <td>{{ optional($log->created_at)->format('d/m H:i:s') }}</td>
                         <td>{{ $log->empresa?->nombre_comercial ?? '—' }}</td>
                         <td>{{ $log->servicio }}</td>
-                        <td>{{ $log->operacion }}</td>
+                        <td><a href="{{ route('admin.comunicacion.show', $log) }}">{{ $log->operacion }}</a></td>
                         <td>{{ $log->duracion_ms }}</td>
                         <td><span class="{{ $log->exitoso ? 'ok' : 'no' }}">{{ $log->exitoso ? 'si' : 'no' }}</span></td>
                     </tr>

@@ -10,7 +10,7 @@ use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Limita las peticiones POR EMPRESA para que un cliente con un bug (o abuso) no
- * afecte a los demas. Corre despues de AutenticarApiKey.
+ * afecte a los demas. Corre despues de AutenticarToken.
  *
  * Por defecto: 60 peticiones por minuto por token y 120 por empresa; se
  * ajustan por variable de entorno (SIAT_RATE_LIMIT_TOKEN, SIAT_RATE_LIMIT).

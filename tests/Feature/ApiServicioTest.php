@@ -3,21 +3,25 @@
 use App\Exceptions\CufdVencidoException;
 use App\Exceptions\SiatException;
 use App\Jobs\RenovarCufd;
+use App\Models\Catalogo;
 use App\Models\Certificado;
 use App\Models\Cufd;
 use App\Models\Cuis;
 use App\Models\Empresa;
 use App\Models\EventoSignificativo;
 use App\Models\Factura;
+use App\Models\FacturaAnulada;
 use App\Models\LeyendaFactura;
 use App\Models\ProductoServicio;
 use App\Models\PuntoVenta;
 use App\Models\Sucursal;
 use App\Models\User;
+use App\Models\WebhookEntrega;
 use App\Services\Factura\EmisorFactura;
 use App\Services\Siat\FabricaServicios;
 use App\Services\Siat\GestorCodigos;
 use App\Services\Siat\ServicioCodigos;
+use App\Services\Siat\ServicioFacturacion;
 use App\Services\Siat\ServicioOperaciones;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -559,8 +563,8 @@ test('la coleccion de Postman cubre todas las rutas de la API', function () {
 
     $enColeccion = collect($coleccion['item'])->flatMap(fn ($carpeta) => $carpeta['item'])
         ->map(fn ($r) => $r['request']['method'].' '.preg_replace(
-            ['#\{\{base_url\}\}#', '#\?.*$#', '#/[0-9]{5,}/#', '#\{\{cuf\}\}#', '#\{\{sucursal\}\}/\{\{punto_venta\}\}#', '#/catalogos/\w+#'],
-            ['/api/v1', '', '/{nit}/', '{cuf}', '{sucursal}/{puntoVenta}', '/catalogos/{tipo}'],
+            ['#\{\{base_url\}\}#', '#\?.*$#', '#/[0-9]{5,}/#', '#\{\{cuf(_nota)?\}\}#', '#\{\{sucursal\}\}/\{\{punto_venta\}\}#', '#/catalogos/\w+#', '#\{\{webhook_id\}\}#', '#\{\{entrega_id\}\}#'],
+            ['/api/v1', '', '/{nit}/', '{cuf}', '{sucursal}/{puntoVenta}', '/catalogos/{tipo}', '{id}', '{uuid}'],
             $r['request']['url']['raw'],
         ))
         ->unique()->sort()->values()->all();
@@ -568,7 +572,9 @@ test('la coleccion de Postman cubre todas las rutas de la API', function () {
     $reales = collect(Route::getRoutes()->getRoutes())
         ->filter(fn ($ruta) => str_starts_with($ruta->uri(), 'api/v1/'))
         ->map(fn ($ruta) => collect($ruta->methods())->reject(fn ($m) => $m === 'HEAD')->first().' /'.$ruta->uri())
-        ->reject(fn ($r) => $r === 'POST /api/v1/puntos-venta') // alta local: no es parte del flujo de prueba
+        // Fuera del flujo de prueba: el alta local de un punto de venta, su
+        // registro en el SIN (irreversible) y la carga del .p12 (multipart).
+        ->reject(fn ($r) => in_array($r, ['POST /api/v1/puntos-venta', 'POST /api/v1/puntos-venta/registrar-siat', 'POST /api/v1/certificado'], true))
         ->sort()->values()->all();
 
     expect($enColeccion)->toBe($reales);
@@ -580,11 +586,15 @@ test('cada peticion de la coleccion funciona de punta a punta, en orden', functi
     Cufd::factory()->create(['punto_venta_id' => $pv->id]);
     $empresa = $pv->sucursal->empresa;
     ProductoServicio::create(['empresa_id' => $empresa->id, 'codigo_actividad' => '620100', 'codigo_producto' => '83141', 'descripcion' => 'Martillo']);
+    Catalogo::factory()->create(['tipo' => 'motivos_anulacion', 'codigo_clasificador' => '1', 'descripcion' => 'FACTURA MAL EMITIDA']);
 
     // El SIN simulado solo para las dos llamadas que salen al SIAT.
     $codigos = codigosDelSin();
     $codigos->shouldReceive('verificarNit')->andReturn((object) ['RespuestaVerificarNit' => (object) ['transaccion' => true]]);
     $codigos->shouldReceive('solicitarCufd')->andReturn(sinCufd('CUFD-EMERGENCIA'));
+    $facturacion = Mockery::mock(ServicioFacturacion::class);
+    $facturacion->shouldReceive('revertirAnulacion')->andReturn((object) ['RespuestaServicioFacturacion' => (object) ['transaccion' => true]]);
+    app(FabricaServicios::class)->shouldReceive('facturacion')->andReturn($facturacion);
 
     $variables = [
         'base_url' => '/api/v1',
@@ -593,7 +603,12 @@ test('cada peticion de la coleccion funciona de punta a punta, en orden', functi
         'punto_venta' => '0',
         'venta_id' => 'VENTA-0001',
         'cuf' => '',
+        'cuf_nota' => '',
+        'webhook_id' => '',
+        'entrega_id' => '',
     ];
+    // Los destinos de ejemplo no se resuelven por DNS en las pruebas.
+    config(['siat.webhooks.permitir_destinos_privados' => true]);
 
     // Por referencia: el CUF se guarda a mitad de camino, como en Postman.
     $sustituir = function (string $texto) use (&$variables): string {
@@ -619,9 +634,31 @@ test('cada peticion de la coleccion funciona de punta a punta, en orden', functi
             $variables['cuf'] = $respuesta->json('factura.cuf');
             Factura::where('cuf', $variables['cuf'])->update(['estado' => Factura::ESTADO_VALIDADA]);
         }
+
+        // Lo que hace el script de la coleccion con el webhook, y un aviso ya
+        // registrado para poder probar el reenvio.
+        if ($peticion['name'] === 'Registrar webhook') {
+            $variables['webhook_id'] = (string) $respuesta->json('webhook.id');
+            $variables['entrega_id'] = WebhookEntrega::factory()->create(['webhook_endpoint_id' => $variables['webhook_id']])->uuid;
+        }
+
+        // Lo que hace el worker con la anulacion: el SIN la confirma, y
+        // recien ahi se puede revertir.
+        if ($peticion['name'] === 'Anular la factura emitida') {
+            FacturaAnulada::whereHas('factura', fn ($q) => $q->where('cuf', $variables['cuf']))
+                ->update(['estado' => FacturaAnulada::ESTADO_CONFIRMADA]);
+        }
+
+        // Igual con la nota: se guarda su CUF y el SIN la valida, para que se
+        // pueda anular y despues anular la factura.
+        if ($peticion['name'] === 'Emitir nota de crédito-débito') {
+            $variables['cuf_nota'] = $respuesta->json('nota.cuf');
+            Factura::where('cuf', $variables['cuf_nota'])->update(['estado' => Factura::ESTADO_VALIDADA]);
+        }
     }
 
-    expect($variables['cuf'])->not->toBe('');
+    expect($variables['cuf'])->not->toBe('')
+        ->and($variables['cuf_nota'])->not->toBe('');
 });
 
 test('la coleccion y el entorno se descargan desde /docs/api con la URL real', function () {

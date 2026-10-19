@@ -44,10 +44,15 @@ return [
     */
     'urls' => [
         // 1 = Produccion. PENDIENTE DE VERIFICAR: la solicitud de autorizacion
-        // solo lista las rutas del ambiente de pruebas.
+        // solo lista las rutas del ambiente de pruebas, y tampoco dice si
+        // produccion ya paso a la version 3 (/sfd).
         1 => env('SIAT_URL_PRODUCCION', 'https://siatrest.impuestos.gob.bo/v2'),
-        // 2 = Piloto. VERIFICADA contra la solicitud de autorizacion del SIN.
-        2 => env('SIAT_URL_PILOTO', 'https://pilotosiatservicios.impuestos.gob.bo/v2'),
+        // 2 = Piloto, servicios SOAP version 3. VERIFICADA contra la solicitud
+        // de actualizacion R-1359 (17/10/2026): el SIN paso de /v2 a /sfd y
+        // da 30 dias para migrar. Desde entonces /v2 ya no registra ni
+        // encuentra facturas (responde -1). Mismo contrato que v2 salvo que
+        // respuestaCufd suma 'codigoInterno' y el paquete ya no lleva 'cafc'.
+        2 => env('SIAT_URL_PILOTO', 'https://pilotosiatservicios.impuestos.gob.bo/sfd'),
     ],
 
     /*
@@ -66,6 +71,11 @@ return [
         'codigos' => 'FacturacionCodigos',
         'operaciones' => 'FacturacionOperaciones',
         'compra_venta' => 'ServicioFacturacionCompraVenta',
+        // Notas de credito-debito (documentos de ajuste). VERIFICADO contra
+        // el WSDL del piloto /sfd (2026-10-18): recepcion, anulacion,
+        // reversion y verificacion de estado; NO tiene operaciones de paquete,
+        // asi que una nota no puede emitirse en contingencia.
+        'documento_ajuste' => 'ServicioFacturacionDocumentoAjuste',
     ],
 
     /*
@@ -89,6 +99,20 @@ return [
         // tipoFacturaDocumento: 1 = factura con derecho a credito fiscal.
         // Viaja en recepcionFactura y tambien entra al calculo del CUF.
         'tipo_factura_documento' => 1,
+
+        // Nota de credito-debito: devolucion total o parcial de una factura
+        // de compra-venta. Sector 24 y tipoFacturaDocumento 3 (documento de
+        // ajuste), contrastados con el SDK go-siat; los dos entran al CUF.
+        'nota_credito_debito' => [
+            'documento_sector' => 24,
+            'tipo_factura_documento' => 3,
+            // codigoDetalleTransaccion de cada <detalle> de la nota.
+            'detalle_original' => 1,
+            'detalle_devuelto' => 2,
+            // Alicuota del IVA: el credito fiscal que revierte la nota es el
+            // 13% de lo devuelto (montoEfectivoCreditoDebito).
+            'alicuota_iva' => 0.13,
+        ],
     ],
 
     /*
@@ -143,6 +167,7 @@ return [
             'facturas:emitir' => 'Emitir facturas',
             'facturas:leer' => 'Consultar y descargar facturas',
             'facturas:anular' => 'Anular facturas',
+            'webhooks:gestionar' => 'Registrar y administrar destinos de webhook',
         ],
 
         /*
@@ -157,7 +182,7 @@ return [
             ],
             'administracion' => [
                 'nombre' => 'Administracion',
-                'permisos' => ['estado:leer', 'catalogos:leer', 'estructura:leer', 'estructura:gestionar', 'codigos:leer', 'codigos:renovar', 'facturas:emitir', 'facturas:leer', 'facturas:anular'],
+                'permisos' => ['estado:leer', 'catalogos:leer', 'estructura:leer', 'estructura:gestionar', 'codigos:leer', 'codigos:renovar', 'facturas:emitir', 'facturas:leer', 'facturas:anular', 'webhooks:gestionar'],
             ],
             'consulta' => [
                 'nombre' => 'Solo consulta',
@@ -183,6 +208,27 @@ return [
         'permitir_destinos_privados' => (bool) env('SIAT_WEBHOOK_PERMITIR_PRIVADOS', false),
 
         'timeout' => (int) env('SIAT_WEBHOOK_TIMEOUT', 10),
+
+        /*
+        | Eventos a los que se suscribe un destino registrado por la API
+        | (POST /api/v1/webhooks). Se aceptan tambien '*' y 'grupo.*'. El
+        | webhook unico de la empresa (webhook_url) sigue recibiendo solo los
+        | factura.*, como siempre.
+        */
+        'eventos' => [
+            'factura.validada' => 'El SIN valido la factura o nota',
+            'factura.observada' => 'El SIN la rechazo',
+            'factura.anulada' => 'La anulacion quedo confirmada',
+            'factura.anulacion_rechazada' => 'El SIN rechazo la anulacion',
+            'factura.anulacion_revertida' => 'Se revirtio la anulacion',
+            'siat.conexion_perdida' => 'El SIAT dejo de responder: un punto de venta paso a contingencia',
+            'siat.conexion_restablecida' => 'El SIAT volvio: se cerro la contingencia y se envian las facturas',
+            'certificado.por_vencer' => 'El certificado digital vence en 30, 15, 7, 3 o 1 dias (o ya vencio)',
+            'cufd.renovacion_fallida' => 'No se pudo renovar el CUFD de un punto de venta',
+        ],
+
+        // Reintentos de una entrega a un destino registrado, en segundos.
+        'reintentos' => [10, 30, 60, 300, 900, 1800, 3600],
     ],
 
     /*

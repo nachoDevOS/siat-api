@@ -59,7 +59,7 @@ flowchart LR
 | `app/Services/Contingencia` | Eventos significativos y armado de paquetes |
 | `app/Services/Catalogos` | Sincronización de catálogos globales y por NIT |
 | `app/Services/Pruebas` | Ejecutor del piloto ante el SIN |
-| `app/Services/Panel` | Lógica de presentación del panel (colores de estado, checklist de etapa) |
+| `app/Services/Panel` | Lógica de presentación del panel (colores de estado, checklist de etapa, lectura de `logs_siat` y comparador de líneas para **Comunicación SIAT**) |
 | `app/Services/Webhooks` | Validación del destino de los webhooks (anti-SSRF) |
 | `app/Jobs` | Trabajo en segundo plano (envío, verificación, anulación, paquetes, webhooks, CUFD, piloto) |
 | `app/Console/Commands` | Comandos `siat:*` (ver [INSTALACION-Y-DESPLIEGUE.md](INSTALACION-Y-DESPLIEGUE.md#5-comandos-siat)) |
@@ -138,11 +138,15 @@ Detalles clave (todos en `app/Services/Factura/EmisorFactura.php`):
 flowchart TD
     A[EnviarFacturaAlSiat] -->|solo si PENDIENTE| B[PDF: si falla se loguea y sigue]
     B --> C{recepcionFactura}
-    C -->|transaccion=false| O[OBSERVADA + webhook factura.observada]
+    C -->|transaccion=false| X{verificacionEstado}
+    X -->|908 / 690| V
+    X -->|901 pendiente| R
+    X -->|-1 falla del SIN| P[Sigue PENDIENTE: se reenvia, nunca a contingencia]
+    X -->|no la conoce| O[OBSERVADA + webhook factura.observada]
     C -->|908 / 690| V[VALIDADA + webhook factura.validada]
     C -->|otro código| R[RECIBIDA]
     R --> D[VerificarEstadoFactura +15 s]
-    D -->|902 pendiente| D
+    D -->|901 pendiente / -1 falla del SIN| D
     D -->|908 / 690| V
     D -->|otro| O
     C -->|SiatException| E{¿quedan intentos?}
@@ -180,11 +184,11 @@ demás. La cola se declara con el atributo `#[Queue('...')]` en cada job.
 
 | Job | Disparado por | Intentos / backoff | Qué hace |
 |---|---|---|---|
-| `EnviarFacturaAlSiat` | Emisión (afterCommit), tarea `reintentar-pendientes` | 3 · 30/120/300 s | Genera PDF y llama `recepcionFactura`. Solo actúa sobre facturas `PENDIENTE`. Agotados los intentos, deriva a contingencia |
-| `VerificarEstadoFactura` | `EnviarFacturaAlSiat`, tarea `verificar-enviadas` | 5 · 60/120/300/600 s | Llama `verificacionEstadoFactura`. 902 = reintenta. En el último intento no se reencola: la retoma la tarea programada |
-| `AnularFacturaEnSiat` | `POST .../anular`, tarea `reintentar-anulaciones` | 5 · 30/120/300/900 s | Llama `anulacionFactura`. **Único por factura** (`ShouldBeUnique`, 1 h). Si el SIN rechaza, revierte la factura. Agotados los intentos queda `PENDIENTE` |
+| `EnviarFacturaAlSiat` | Emisión (afterCommit), tarea `reintentar-pendientes` | 3 · 30/120/300 s | Genera PDF y llama `recepcionFactura`. Solo actúa sobre facturas `PENDIENTE`. Ante un rechazo consulta `verificacionEstadoFactura` antes de observar (un reenvío tras timeout vuelve como duplicado): 908/690 = `VALIDADA`, 902 = `RECIBIDA`, si no responde queda `PENDIENTE`. Agotados los intentos, deriva a contingencia |
+| `VerificarEstadoFactura` | `EnviarFacturaAlSiat`, tarea `verificar-enviadas` | 5 · 60/120/300/600 s | Llama `verificacionEstadoFactura`. 901 (pendiente) o -1 (excepción interna del SIN) = reintenta; 902 = rechazada → `OBSERVADA`. En el último intento no se reencola: la retoma la tarea programada |
+| `AnularFacturaEnSiat` | `POST .../anular`, tarea `reintentar-anulaciones` | 5 · 30/120/300/900 s | Llama `anulacionFactura`. **Único por factura** (`ShouldBeUnique`, 1 h). Si el SIN rechaza, verifica antes el estado: si ya figura anulada (reintento tras timeout) la confirma; si sigue vigente revierte la factura; si no responde queda `PENDIENTE`. Agotados los intentos queda `PENDIENTE` |
 | `EnviarPaqueteContingencia` | `siat:recuperar-contingencia`, piloto | 3 · 60/300/900 s | Arma el TAR, llama `recepcionPaqueteFactura`, marca las facturas `ENVIADA` |
-| `NotificarWebhook` | Cambios de estado | 5 · 10/30/60/120 s | POST firmado al `webhook_url` del cliente |
+| `NotificarWebhook` | Cambios de estado | 5 · 10/30/60/120 s | POST firmado al `webhook_url` del cliente, con IP fijada y sin seguir redirecciones (anti-SSRF) |
 | `RenovarCufd` | `siat:renovar-cufds` | 3 | Pide un CUFD nuevo (y el CUIS antes si venció). Ignora puntos de venta no registrados en el SIN y empresas sin token |
 | `EjecutarCasoPrueba` | Panel del piloto | — | Ejecuta una llamada del piloto (etapas largas) |
 | `SincronizarCatalogosEmpresa` | Tarea `sincronizar-catalogos-empresas` | 3 · 300/900 s | Sincroniza actividades, productos homologados y leyendas del NIT con un punto de venta que tenga CUIS vigente (se salta la empresa si no hay). El panel tiene además el botón **Sincronizar ahora** (síncrono) |
@@ -236,7 +240,7 @@ Los sistemas de venta **no manejan códigos**: la API los consigue sola.
 | Clase | Responsabilidad |
 |---|---|
 | `SiatClient` | Construye el `SoapClient`: URL del WSDL por ambiente, cabecera `apikey: TokenApi {token}`, gzip, traza, y **timeout de lectura** (`default_socket_timeout`) tanto al bajar el WSDL como al invocar |
-| `ServicioBase` | Cabecera común (`codigoAmbiente`, `codigoSistema`, `codigoModalidad`, `nit`), invocación y auditoría en `logs_siat` (XML enviado/recibido, duración, éxito). Envuelve todo error en `SiatException` |
+| `ServicioBase` | Cabecera común (`codigoAmbiente`, `codigoSistema`, `codigoModalidad`, `nit`), invocación y auditoría en `logs_siat` (XML enviado/recibido, duración y `exitoso`, que solo dice si hubo comunicación: un rechazo del SIN llega con HTTP 200 y queda en 1; la pantalla **Comunicación SIAT** distingue aceptada / rechazada / sin respuesta leyendo `transaccion`). Envuelve todo error en `SiatException` |
 | `ServicioCodigos` | `verificarComunicacion`, `cuis`, `cufd`, `verificarNit` |
 | `ServicioSincronizacion` | `sincronizarFechaHora`, actividades, productos/servicios, leyendas y cualquier otra paramétrica por el nombre de su operación (`parametrica()`) |
 | `ServicioOperaciones` | `registroPuntoVenta`, `consultaPuntoVenta`, `cierreOperacionesSistema`, `registroEventoSignificativo` |
@@ -325,7 +329,7 @@ código de sistema `22848EC6F66C9401C16F7` · tipo PROVEEDOR · modalidad electr
 
 | Tema | Valor | Nivel |
 |---|---|---|
-| URL piloto | `https://pilotosiatservicios.impuestos.gob.bo/v2/{Servicio}?wsdl` | ✅ |
+| URL piloto | `https://pilotosiatservicios.impuestos.gob.bo/sfd/{Servicio}?wsdl` (v3; `/v2` dejó de registrar facturas el 16/10/2026) | ✅ |
 | URL producción | `https://siatrest.impuestos.gob.bo/v2/{Servicio}?wsdl` | ⚠️ |
 | Servicios | `FacturacionCodigos`, `FacturacionSincronizacion`, `FacturacionOperaciones`, `ServicioFacturacionCompraVenta` | ✅ |
 | Token | Cabecera HTTP **`apikey: TokenApi {token_delegado}`** (no `Authorization`) | ✅ |
@@ -400,6 +404,53 @@ Detalle, en orden: `actividadEconomica`, `codigoProductoSin`, `codigoProducto`, 
 
 ---
 
+### Nota de crédito-débito (sector 24, electrónica)
+
+Devolución total o parcial de una factura validada. Vive en la tabla `facturas` con
+`codigo_documento_sector = 24` y `factura_origen_id`, así reusa envío, verificación, anulación,
+PDF, webhook y panel. La emite `App\Services\Factura\EmisorNotaCreditoDebito`.
+
+| Tema | Detalle | Nivel |
+|---|---|---|
+| Servicio SOAP | `ServicioFacturacionDocumentoAjuste`: `recepcionDocumentoAjuste`, `anulacionDocumentoAjuste`, `reversionAnulacionDocumentoAjuste`, `verificacionEstadoDocumentoAjuste`; envoltorio `SolicitudServicio{Operación}DocumentoAjuste`; misma struct base que compra-venta | ✅ WSDL piloto `/sfd` (2026-10-18) |
+| Contingencia | El servicio **no tiene operaciones de paquete**: la nota solo se emite en línea; con evento abierto se rechaza y si el SIAT cae después queda `PENDIENTE` | ✅ WSDL |
+| CUF | Mismo algoritmo con `tipoFactura` = 3 (documento de ajuste) y sector 24 | ✅ (go-siat) |
+| Raíz XML | `notaFiscalElectronicaCreditoDebito` + `.xsd` | ✅ (go-siat) |
+| `codigoDetalleTransaccion` | 1 = item de la factura original, 2 = item devuelto. Van todos los originales y después los devueltos | ✅ (go-siat) |
+| `montoEfectivoCreditoDebito` | 13% de (`montoTotalDevuelto` − `montoDescuentoCreditoDebito`) | ✅ (go-siat) |
+| `montoDescuentoCreditoDebito` | `descuentoAdicional` de la factura prorrateado por lo devuelto sobre la suma de las líneas | ⚠️ regla propia, contrastar en el piloto |
+| Correlativo | `puntos_venta.siguiente_nota`, aparte del de facturas | ⚠️ contrastar en el piloto |
+| Gift card | Facturas con gift card no admiten nota todavía | ⚠️ |
+| Certificación | El sector 24 se certifica aparte ante el SIN; no hay casos en el piloto del panel | ❌ pendiente |
+
+Cabecera, en orden: `nitEmisor`, `razonSocialEmisor`, `municipio`, `telefono`,
+`numeroNotaCreditoDebito`, `cuf`, `cufd`, `codigoSucursal`, `direccion`, `codigoPuntoVenta`,
+`fechaEmision`, `nombreRazonSocial`, `codigoTipoDocumentoIdentidad`, `numeroDocumento`,
+`complemento`, `codigoCliente`, `numeroFactura`, `numeroAutorizacionCuf`, `fechaEmisionFactura`,
+`montoTotalOriginal`, `montoTotalDevuelto`, `montoDescuentoCreditoDebito`,
+`montoEfectivoCreditoDebito`, `codigoExcepcion`, `leyenda`, `usuario`, `codigoDocumentoSector`.
+
+Detalle: como el de la factura sin `numeroSerie`/`numeroImei` y con `codigoDetalleTransaccion` al
+final.
+
+---
+
+### Emisión masiva (tipo de emisión 3)
+
+| Tema | Detalle | Nivel |
+|---|---|---|
+| Operaciones | `recepcionMasivaFactura` (envoltorio `SolicitudServicioRecepcionMasiva`, struct = recepción + `cantidadFacturas`) y `validacionRecepcionMasivaFactura` (`SolicitudServicioValidacionRecepcionMasiva`, base + `codigoRecepcion`) | ✅ WSDL piloto `/sfd` (2026-10-18) |
+| Paquete | El mismo TAR de XML firmados que contingencia (`ArmadorPaquete`), hasta 500 por paquete | ⚠️ contrastar en el piloto |
+| CUF | `tipo_emision` = 3 mientras el lote del punto de venta está abierto | ⚠️ contrastar en el piloto |
+| Observación parcial | Si el SIN observa solo algunas facturas, hoy se observa el paquete entero | ⚠️ pendiente |
+| Autorización | El NIT necesita autorización del SIN para emisión masiva | ❌ trámite del cliente |
+
+Flujo: `GestorMasiva::abrir` → `EmisorFactura` emite en `MASIVA` (lee el lote con el punto de
+venta bloqueado) → `GestorMasiva::cerrar` arma paquetes `tipo = MASIVA` → `EnviarPaqueteMasivo` →
+`ValidarPaqueteMasivo` (y la tarea `validar-paquetes-masivos` cada 15 min).
+
+---
+
 ### Firma digital
 
 | Tema | Detalle | Nivel |
@@ -424,7 +475,7 @@ simple, el bloque XAdES no hace falta.
 | `verificacionEstadoFactura` | + `cuf` | ✅ |
 | `anulacionFactura` | + `cuf`, `codigoMotivo`; con el **CUFD vigente**, no el de la emisión | ✅ |
 | `reversionAnulacionFactura` | + `cuf` (sin motivo) | ✅ WSDL piloto |
-| Códigos | **908 y 690 = validada**; **902 = pendiente** (no es rechazo) | ✅ |
+| Códigos | **908 y 690 = validada** (ventas); **902 = rechazada** y **-1 = excepción interna del SIN** (respuestas reales del piloto, 2026-10-17); 901 = pendiente (catálogo, sin verificar) | ✅ |
 | 935 | `fechaEnvio` fuera de tolerancia (zona horaria) | ✅ |
 
 ---
@@ -507,6 +558,12 @@ erDiagram
 | `codigo_modalidad` | tinyint (1) | 1 electrónica |
 | `estado` | string | `EN_REGISTRO` → `EN_PRUEBAS` → `PILOTO_APROBADO` → `PRODUCCION`; `OBSERVADO` |
 | `webhook_url` | string null | Validada contra SSRF al guardar |
+| `sandbox_de_id` | FK null | Solo en un sandbox: la empresa de producción de la que es copia (panel → *Crear sandbox*) |
+
+Sandbox: una empresa con `codigo_ambiente = 2` emite por la API en `EN_PRUEBAS`, `PILOTO_APROBADO`
+o `PRODUCCION` (`Empresa::puedeEmitirPorApi`); en producción solo en `PRODUCCION`. Los tokens llevan
+prefijo por ambiente (`siat_test_` / `siat_live_`, `Empresa::generateTokenString`) y se revocan al
+cambiar el ambiente.
 
 #### `personal_access_tokens` (Sanctum)
 Tokens de API. `tokenable_type`/`tokenable_id` → la **empresa** dueña · `name` · `token` (hash
@@ -517,6 +574,12 @@ propia de este sistema; vacío = cualquier IP). Modelo `App\Models\TokenApi`.
 `empresa_id` · `contenido_p12` (base64, **cifrado**) · `passphrase` (**cifrada**) · `emitido_por`
 (`AUTOFIRMADO - solo pruebas` para los de prueba) · `vence_el` · `activo`. Ambos campos
 sensibles están en `$hidden`.
+
+#### `cafcs`
+`empresa_id` · `codigo` (único por empresa, en mayúsculas) · `numero_inicio` / `numero_fin` (rango
+que autorizó el SIN) · `ultimo_numero` (null = ninguno usado) · `activo` (uno solo por empresa;
+cargar otro desactiva el anterior). Va **por empresa**: el SIN lo emite para un NIT. Solo lo usan
+los eventos significativos 5, 6 y 7 (facturación manual). Se carga en la ficha de la empresa.
 
 ---
 
@@ -532,6 +595,7 @@ sensibles están en `$hidden`.
 | `sucursal_id`, `codigo_punto_venta` | Únicos juntos. Código del SIN |
 | `tipo_punto_venta` | Catálogo del SIN |
 | `siguiente_factura` | **Correlativo**; se reserva con `lockForUpdate` |
+| `siguiente_nota` | Correlativo de notas de crédito-débito, igual que el de facturas |
 | `activo` | Los dados de baja quedan por su historial |
 | `registrado_en_siat` | Fecha del `registroPuntoVenta`. Null = solo local (salvo el PV 0) |
 
@@ -563,7 +627,9 @@ código: pedirlo de nuevo no duplica.
 | `moneda`, `tipo_cambio` | Hoy siempre 1 y 1 |
 | `subtotal`, `descuento_global`, `gift_card`, `monto_total`, `monto_total_moneda`, `monto_total_sujeto_iva` | decimal(14,2) |
 | `leyenda`, `usuario` | |
-| `codigo_documento_sector` | 1 |
+| `codigo_documento_sector` | 1 factura, 24 nota de crédito-débito |
+| `factura_origen_id` | Solo en una nota: la factura que ajusta |
+| `monto_efectivo_credito_debito` | Solo en una nota: 13% de lo devuelto. En la nota, `subtotal` = suma de líneas devueltas y `descuento_global` = descuento prorrateado |
 | `tipo_emision` | 1 en línea, 2 contingencia (entra al CUF) |
 | `estado` | Ver [Máquina de estados](#máquina-de-estados-de-la-factura). Índice `(estado, id)` |
 | `codigo_recepcion`, `codigo_estado_siat` | Respuesta del SIN |
@@ -576,13 +642,42 @@ código: pedirlo de nuevo no duplica.
 #### `factura_items`
 `factura_id` · `codigo_producto_sin` · `codigo_actividad` (resuelta al emitir) · `codigo_interno` ·
 `descripcion` · `cantidad` decimal(14,4) · `unidad_medida` · `precio_unitario` · `descuento` ·
-`subtotal` · `numero_serie` · `numero_imei`.
+`subtotal` · `numero_serie` · `numero_imei` · `codigo_detalle_transaccion` (solo en notas: 1
+original, 2 devuelto) · `item_origen_id` (solo en notas: la línea de la factura; controla que no se
+devuelva dos veces lo mismo).
 
 #### `facturas_anuladas`
-`factura_id` · `motivo` · `anulada_en` · `codigo_recepcion` · `estado` (`PENDIENTE`, `CONFIRMADA`,
-`RECHAZADA`, `REVERTIDA`) · `motivo_rechazo` · `estado_anterior` (para revertir si el SIN rechaza).
+`factura_id` · `tipo` (`SIAT` por servicio web; `ADMINISTRATIVA` = aprobada por trámite fuera de
+plazo, se registra sin SOAP y no se revierte) · `numero_resolucion` (solo administrativa) · `motivo` ·
+`anulada_en` · `codigo_recepcion` · `estado` (`PENDIENTE`, `CONFIRMADA`, `RECHAZADA`, `REVERTIDA`) ·
+`motivo_rechazo` · `estado_anterior` (para revertir si el SIN rechaza).
 
 ---
+
+### Webhooks registrados por el cliente
+
+#### `webhook_endpoints`
+`empresa_id` · `url` (validada contra SSRF al guardar y en cada entrega) · `eventos` (json: `*`,
+`grupo.*` o exactos, catálogo en `config('siat.webhooks.eventos')`) · `descripcion` · `secreto`
+(**cifrado**, `whsec_…`) · `activo`. Máximo 10 por empresa.
+
+#### `webhook_entregas`
+`uuid` (va en `X-Siat-Entrega`) · `webhook_endpoint_id` · `evento` · `cuerpo` (los bytes exactos
+que se firman y reenvían) · `estado` (`PENDIENTE`, `ENTREGADA`, `FALLIDA`) · `intentos` ·
+`codigo_http` · `error` · `entregada_en`. Las crea `Services\Webhooks\Notificador` y las manda
+`EntregarWebhook` (reintentos en `config('siat.webhooks.reintentos')`). El webhook único
+`empresas.webhook_url` sigue igual (`NotificarWebhook`).
+
+#### `lotes_masivos`
+`empresa_id` · `punto_venta_id` · `estado` (`ABIERTO`, `CERRADO`) · `abierto_en` · `cerrado_en`.
+`facturas.lote_masivo_id` y `paquetes.lote_masivo_id` / `paquetes.tipo` (`CONTINGENCIA`, `MASIVA`)
+/ `paquetes.motivo_observacion` lo completan.
+
+### Servidor MCP
+
+`routes/ai.php` → `App\Mcp\Servers\SiatServer` en `POST /mcp`, detrás de `siat.registro`,
+`siat.token` y `siat.rate`. Las herramientas (`app/Mcp/Tools`) heredan de `HerramientaSiat`, que
+toma la empresa del request y exige el permiso del endpoint REST equivalente.
 
 ### Operación
 
@@ -666,8 +761,33 @@ Lo que falta, casi todo esperando algo externo. El historial de cambios está en
 | B3 | **Contingencia — tipo de emisión mezclado.** Las facturas derivadas a contingencia conservan un CUF de emisión 1 (en línea) y el paquete viaja con `codigoEmision = 2`; el SIN recalcula el CUF y rechazaría el paquete entero. También nacen en línea las facturas emitidas durante los ~7,5 min de reintentos antes de abrir el evento | `GestorContingencia::derivar`, `EnviarPaqueteContingencia` | Reenviar las derivadas por `recepcionFactura` cuando vuelva el SIAT y usar paquete solo para las de emisión 2. Se hace con la Etapa VI |
 | B4 | **Contingencia — fecha del evento.** `fecha_inicio` es el momento en que se abre el evento, posterior a la `fecha_emision` de las facturas que lo causaron | `GestorContingencia::eventoAbierto` | Fijarla en la emisión de la primera factura que falló |
 | B5 | **Contingencia — CUFD vencido bloquea la venta.** Si el CUFD vence durante una caída, `EmisorFactura` responde 503 aunque haya evento abierto | `EmisorFactura::emitir` | En contingencia, emitir con el CUFD del evento |
-| B6 | **Paquete sin tope.** El SIN admite hasta 500 facturas por paquete | `GestorContingencia::recuperar` | Partir en paquetes de 500 |
-| B7 | **CAFC** eliminado del esquema; hace falta para los motivos 5–7 | migración `2026_09_14_...` | Volver a incorporarlo cuando el SIN lo entregue (Etapa VI) |
+| B6 | **Paquete de contingencia sin tope.** El SIN admite hasta 500 facturas por paquete (la emisión masiva ya los parte) | `GestorContingencia::recuperar` | Partir en paquetes de 500, como `GestorMasiva::cerrar` |
+| B7 | **CAFC**: ya se carga por empresa (tabla `cafcs`, ficha de la empresa), pero todavía no se usa: falta emitir las facturas manuales de los eventos 5–7 con el CAFC y un número de su rango, y mandarlo en el paquete | `EmisorFactura`, `ConstructorXml`, `EnviarPaqueteContingencia` | Etapa VI. El SIN entregó el CAFC del piloto el 2026-10-14 |
+
+### Por verificar en el piloto (funciones agregadas el 2026-10-18)
+
+Construidas y con tests, pero **sin probar contra el SIN real**. Contrato SOAP verificado contra los
+WSDL del piloto `/sfd`; el XML de la nota, contra el SDK go-siat, no contra el XSD oficial.
+
+| # | Pendiente | Dónde | Qué hacer |
+|---|---|---|---|
+| V1 | **Certificar la nota de crédito-débito (sector 24)** ante el SIN: no hay casos de prueba del sector 24 en el panel del piloto | `CasosPruebaSeeder`, `EjecutorPruebas` | Agregar los casos del sector 24 que pida el portal y correrlos |
+| V2 | **XML de la nota** contra el XSD oficial `notaFiscalElectronicaCreditoDebito.xsd`: orden de campos, `montoDescuentoCreditoDebito` (hoy prorrateo propio del descuento adicional) y correlativo propio por punto de venta | `ConstructorXml::cabeceraNota`, `EmisorNotaCreditoDebito::montos` | Conseguir el XSD y emitir una nota en el piloto |
+| V3 | **Nota sobre facturas con gift card**: hoy se rechaza (no se sabe cómo prorratea el SIN la base del crédito fiscal) | `EmisorNotaCreditoDebito::validarOrigen` | Confirmar la regla con el SIN |
+| V4 | **Emisión masiva sin probar**: formato del paquete (TAR como contingencia), `tipo_emision = 3` en el CUF, códigos de `validacionRecepcionMasivaFactura` | `GestorMasiva`, `EnviarPaqueteMasivo`, `ValidarPaqueteMasivo` | Pedir al SIN la autorización de emisión masiva para un NIT de prueba y mandar un lote |
+| V5 | **Emisión masiva — observación parcial**: si el SIN observa solo algunas facturas del paquete, hoy se observa el paquete entero | `ValidarPaqueteMasivo` | Ver en el piloto cómo identifica las facturas (¿`numeroArchivo`?) |
+| V6 | **Sandbox de un cliente en producción**: falta confirmar que el SIN siga aceptando facturas del piloto para un NIT que ya pasó a producción | `CreadorSandbox` | Probar con el primer cliente en producción |
+| V7 | **Anulación administrativa**: solo se registra en local; confirmar que `verificacionEstadoFactura` la muestre anulada | `AnuladorFactura::anularAdministrativamente` | Probar con una anulación aprobada por trámite |
+| V8 | **Revertir anulación de una nota** (`reversionAnulacionDocumentoAjuste`) sin probar | `ServicioFacturacion::invocarPara` | Incluir en la certificación del sector 24 |
+
+### Operativos de la versión 2026-10-18
+
+| # | Pendiente | Qué hacer |
+|---|---|---|
+| O1 | Los tokens de *Administración* emitidos antes no traen el permiso `webhooks:gestionar` | Regenerar el token a los clientes que quieran webhooks por API |
+| O2 | El panel no muestra los destinos de webhook registrados por API ni los lotes masivos (solo se ven por la API) | Agregar en *Acceso API* y en la ficha si hace falta |
+| O3 | El servidor MCP solo acepta token Bearer; los clientes MCP que solo hablan OAuth no se conectan | Agregar Passport si un cliente lo pide (cambia dependencias: aprobar) |
+| O4 | Las herramientas MCP no cubren lote, emisión masiva, webhooks ni autogestión | Agregarlas si los clientes las usan |
 
 ### Otros
 

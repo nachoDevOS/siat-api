@@ -54,7 +54,8 @@
                     <tr>
                         <td>{{ $factura->fecha_emision?->format('d/m/Y H:i') }}</td>
                         <td>{{ $factura->empresa->nombre_comercial }}</td>
-                        <td>{{ $factura->numero_factura }}</td>
+                        {{-- Las notas de credito-debito llevan su propio correlativo. --}}
+                        <td>@if ($factura->esNotaCreditoDebito())<span title="Nota de credito-debito">NC</span> @endif{{ $factura->numero_factura }}</td>
                         <td>{{ $factura->puntoVenta->sucursal->codigo_sucursal }} / {{ $factura->puntoVenta->codigo_punto_venta }}</td>
                         <td>{{ $factura->comprador_razon_social }}</td>
                         <td style="text-align:right;">{{ number_format((float) $factura->monto_total, 2) }}</td>

@@ -55,6 +55,42 @@ class GeneradorPdf
     }
 
     /**
+     * Mini ticket de caja: emisor, numero, monto y QR. No se guarda.
+     */
+    public function mini(Factura $factura): string
+    {
+        return Pdf::loadView('factura.mini', $this->datos($factura, GeneradorQr::FORMATO_ROLLO))
+            ->setPaper([0, 0, 240, 300])
+            ->output();
+    }
+
+    /**
+     * ZIP con todo lo de la factura para archivarla o mandarla: el XML
+     * firmado (el documento legal), el PDF carta y, si es una factura, el
+     * rollo de 80 mm.
+     */
+    public function zip(Factura $factura): string
+    {
+        $nombre = ($factura->esNotaCreditoDebito() ? 'nota-credito-debito-' : 'factura-').$factura->numero_factura;
+        $ruta = tempnam(sys_get_temp_dir(), 'factura');
+
+        $zip = new \ZipArchive;
+        $zip->open($ruta, \ZipArchive::OVERWRITE);
+        $zip->addFromString("{$nombre}.xml", (string) $factura->xml_firmado);
+        $zip->addFromString("{$nombre}.pdf", Pdf::loadView('factura.pdf', $this->datos($factura))->setPaper('letter')->output());
+
+        if (! $factura->esNotaCreditoDebito()) {
+            $zip->addFromString("{$nombre}-rollo.pdf", $this->rollo($factura));
+        }
+
+        $zip->close();
+        $contenido = (string) file_get_contents($ruta);
+        @unlink($ruta);
+
+        return $contenido;
+    }
+
+    /**
      * Todo lo que necesita una representacion grafica, ya resuelto: la usan
      * el PDF carta, el rollo y la vista publica de la factura.
      *
@@ -64,7 +100,7 @@ class GeneradorPdf
      */
     public function datos(Factura $factura, int $formato = GeneradorQr::FORMATO_CARTA): array
     {
-        $factura->loadMissing(['items', 'empresa', 'puntoVenta.sucursal']);
+        $factura->loadMissing(['items', 'empresa', 'puntoVenta.sucursal', 'facturaOrigen']);
 
         return [
             'factura' => $factura,

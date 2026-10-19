@@ -21,13 +21,16 @@ class VerificarEstadoFactura implements ShouldQueue
 
     /*
     |--------------------------------------------------------------------------
-    | Codigos de estado del SIN — VERIFICADOS
+    | Codigos de estado del SIN
     |--------------------------------------------------------------------------
     |
-    | Contrastados contra un sistema que factura en produccion ante el SIN. El
-    | mapeo anterior era peligroso: daba por VALIDADA una factura en 902, que en
-    | realidad significa PENDIENTE. Al cliente se le confirmaba un documento que
-    | el SIN todavia no habia aceptado.
+    | 908 y 690 = validada: contrastados contra un sistema que factura en
+    | produccion (ventas). 902 = RECHAZADA y -1 = excepcion interna del SIN:
+    | vistos en respuestas reales del piloto el 2026-10-17.
+    |
+    | Antes 902 se tomaba como PENDIENTE (en ventas 902 es una marca local de
+    | "por enviar", no el significado del SIN): una factura rechazada quedaba
+    | RECIBIDA para siempre y se le volvia a preguntar sin fin.
     |
     | El detalle textual llega en 'codigoDescripcion'; el numero manda.
     |
@@ -40,10 +43,35 @@ class VerificarEstadoFactura implements ShouldQueue
     public const CODIGO_VALIDADA_ALTERNO = '690';
 
     /**
-     * El SIN todavia no la proceso. NO es un rechazo: hay que volver a
-     * preguntar mas tarde, no marcarla observada.
+     * El SIN la rechazo. Verificado en el piloto: llega con codigoDescripcion
+     * "RECHAZADA" y el motivo en mensajesList.
      */
-    public const CODIGO_PENDIENTE = '902';
+    public const CODIGO_RECHAZADA = '902';
+
+    /**
+     * El SIN todavia no la proceso: hay que volver a preguntar, no observarla.
+     *
+     * PENDIENTE DE VERIFICAR: 901 sale del catalogo del SIN, no de una
+     * respuesta real. Por eso tambien se reconoce por la descripcion.
+     */
+    public const CODIGO_PENDIENTE = '901';
+
+    /**
+     * Excepcion interna del SIN ("Error inesperado: Excepcion al ..."), sin
+     * mensajes. No juzga el documento: es una falla suya y pasajera, asi que
+     * se reintenta en vez de avisarle al cliente que su factura se rechazo.
+     */
+    public const CODIGO_ERROR_SIN = '-1';
+
+    /**
+     * Si la respuesta no es un veredicto todavia (en proceso o falla interna
+     * del SIN) y hay que volver a preguntar mas tarde.
+     */
+    public static function esTransitorio(?string $codigoEstado, ?string $descripcion): bool
+    {
+        return in_array($codigoEstado, [self::CODIGO_PENDIENTE, self::CODIGO_ERROR_SIN], true)
+            || str_contains(mb_strtoupper((string) $descripcion), 'PENDIENTE');
+    }
 
     /**
      * Codigos que confirman que el SIN acepto la factura.
@@ -93,9 +121,10 @@ class VerificarEstadoFactura implements ShouldQueue
 
             $factura->update(['codigo_estado_siat' => $codigoEstado]);
 
-            // Todavia en cola del lado del SIN: no es un rechazo. Se vuelve a
-            // preguntar mas tarde y la factura conserva su estado actual.
-            if ($codigoEstado === self::CODIGO_PENDIENTE) {
+            // Todavia en cola del lado del SIN, o el SIN fallo por dentro: no es
+            // un rechazo. Se vuelve a preguntar mas tarde y la factura conserva
+            // su estado actual.
+            if (self::esTransitorio($codigoEstado, $descripcion)) {
                 $this->reintentar();
 
                 return;

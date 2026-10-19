@@ -76,7 +76,7 @@ class EnviarFacturaAlSiat implements ShouldQueue
             // XML fuera de orden), asi que reintentarlo o derivarlo a
             // contingencia no lo arregla: se observa y se avisa al cliente.
             if (! $respuesta->aceptada) {
-                $this->observar($factura, $respuesta);
+                $this->resolverRechazo($factura, $respuesta, $fabrica, (string) $cufd, (string) $cuis);
 
                 return;
             }
@@ -85,30 +85,12 @@ class EnviarFacturaAlSiat implements ShouldQueue
             // la dio por validada, preguntarle de nuevo 15 s despues es un
             // viaje de mas y deja al cliente esperando el webhook sin motivo.
             if (in_array($respuesta->codigoEstado, VerificarEstadoFactura::CODIGOS_VALIDADA, true)) {
-                $factura->update([
-                    'estado' => Factura::ESTADO_VALIDADA,
-                    'enviada_en' => now(),
-                    'validada_en' => now(),
-                    'codigo_recepcion' => $respuesta->codigoRecepcion,
-                    'codigo_estado_siat' => $respuesta->codigoEstado,
-                ]);
-
-                NotificarWebhook::dispatch($factura->id, 'factura.validada');
+                $this->marcarValidada($factura, $respuesta);
 
                 return;
             }
 
-            // El SIN acuso recibo de ESTA factura sin validarla todavia: pasa a
-            // RECIBIDA. ENVIADA queda para las que viajan dentro de un paquete
-            // de contingencia, donde el acuse es del paquete y no de cada factura.
-            $factura->update([
-                'estado' => Factura::ESTADO_RECIBIDA,
-                'enviada_en' => now(),
-                'codigo_recepcion' => $respuesta->codigoRecepcion,
-            ]);
-
-            // Se consulta el estado final (validada/observada) por separado.
-            VerificarEstadoFactura::dispatch($factura->id)->delay(now()->addSeconds(15));
+            $this->marcarRecibida($factura, $respuesta->codigoRecepcion);
         } catch (SiatException) {
             // Un hipo de red no es una caida del SIAT: primero se agotan los
             // reintentos con backoff y recien en el ultimo intento se abre el
@@ -119,10 +101,114 @@ class EnviarFacturaAlSiat implements ShouldQueue
                 return;
             }
 
+            // Una nota de credito-debito no tiene contingencia: el servicio de
+            // ajuste del SIN no recibe paquetes. Queda PENDIENTE y la retoma
+            // la tarea programada 'reintentar-pendientes'.
+            if ($factura->esNotaCreditoDebito()) {
+                return;
+            }
+
             // El SIAT sigue sin responder: la factura pasa a contingencia y
             // sigue siendo valida, solo queda pendiente de transmitir.
             $contingencia->derivar($factura);
         }
+    }
+
+    /**
+     * Un rechazo en la recepcion no siempre es del documento.
+     *
+     * Si un intento anterior llego al SIN pero su respuesta se perdio por
+     * timeout, el reintento manda el mismo CUF y vuelve rechazado como
+     * duplicado: observarla le avisaria al cliente que se rechazo una factura
+     * que el SIN tiene validada. Por eso, antes de observar, se le pregunta al
+     * SIN el estado de ESE CUF, igual que hace el sistema que factura en
+     * produccion (ventas) con las que quedan colgadas por timeout.
+     */
+    private function resolverRechazo(
+        Factura $factura,
+        RespuestaSiat $rechazo,
+        FabricaServicios $fabrica,
+        string $cufd,
+        string $cuis,
+    ): void {
+        try {
+            $estado = RespuestaSiat::desde(
+                $fabrica->facturacion($factura->empresa)->verificarEstado($factura, $cufd, $cuis),
+            );
+        } catch (SiatException) {
+            // Sin saber si el SIN la tiene no se observa ni se deriva a
+            // contingencia (podria estar ya del otro lado).
+            $this->reintentarMasTarde();
+
+            return;
+        }
+
+        if (in_array($estado->codigoEstado, VerificarEstadoFactura::CODIGOS_VALIDADA, true)) {
+            $this->marcarValidada($factura, $estado);
+
+            return;
+        }
+
+        // La tiene pero todavia no la proceso: se sigue como una recepcion normal.
+        if ($estado->codigoEstado === VerificarEstadoFactura::CODIGO_PENDIENTE) {
+            $this->marcarRecibida($factura, $estado->codigoRecepcion);
+
+            return;
+        }
+
+        // Excepcion interna del SIN (-1) al recibirla o al consultarla: el SIN
+        // no juzgo el documento. Observarla le diria al cliente que su factura
+        // se rechazo por una falla del SIN; se reenvia cuando se recupere.
+        if (in_array(VerificarEstadoFactura::CODIGO_ERROR_SIN, [$rechazo->codigoEstado, $estado->codigoEstado], true)) {
+            $this->reintentarMasTarde();
+
+            return;
+        }
+
+        // El SIN no la conoce o la rechazo: el motivo que vale es el de la recepcion.
+        $this->observar($factura, $rechazo);
+    }
+
+    /**
+     * Deja la factura PENDIENTE para otro intento con el backoff del job.
+     * Agotados los intentos no se reencola (terminaria en failed_jobs): la
+     * retoma la tarea programada 'reintentar-pendientes'.
+     */
+    private function reintentarMasTarde(): void
+    {
+        if ($this->attempts() < $this->tries) {
+            $this->release($this->backoff[$this->attempts() - 1] ?? 300);
+        }
+    }
+
+    private function marcarValidada(Factura $factura, RespuestaSiat $respuesta): void
+    {
+        $factura->update([
+            'estado' => Factura::ESTADO_VALIDADA,
+            'enviada_en' => now(),
+            'validada_en' => now(),
+            'codigo_recepcion' => $respuesta->codigoRecepcion ?? $factura->codigo_recepcion,
+            'codigo_estado_siat' => $respuesta->codigoEstado,
+        ]);
+
+        NotificarWebhook::dispatch($factura->id, 'factura.validada');
+    }
+
+    /**
+     * El SIN acuso recibo de ESTA factura sin validarla todavia: pasa a
+     * RECIBIDA. ENVIADA queda para las que viajan dentro de un paquete de
+     * contingencia, donde el acuse es del paquete y no de cada factura.
+     */
+    private function marcarRecibida(Factura $factura, ?string $codigoRecepcion): void
+    {
+        $factura->update([
+            'estado' => Factura::ESTADO_RECIBIDA,
+            'enviada_en' => now(),
+            'codigo_recepcion' => $codigoRecepcion ?? $factura->codigo_recepcion,
+        ]);
+
+        // Se consulta el estado final (validada/observada) por separado.
+        VerificarEstadoFactura::dispatch($factura->id)->delay(now()->addSeconds(15));
     }
 
     /**

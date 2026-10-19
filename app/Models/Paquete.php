@@ -12,6 +12,12 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class Paquete extends Model
 {
+    /** Facturas emitidas fuera de linea, al volver el SIAT. */
+    public const TIPO_CONTINGENCIA = 'CONTINGENCIA';
+
+    /** Facturas de un lote de emision masiva. */
+    public const TIPO_MASIVA = 'MASIVA';
+
     protected $table = 'paquetes';
 
     protected $guarded = ['id'];
@@ -31,6 +37,11 @@ class Paquete extends Model
     public function puntoVenta(): BelongsTo
     {
         return $this->belongsTo(PuntoVenta::class);
+    }
+
+    public function loteMasivo(): BelongsTo
+    {
+        return $this->belongsTo(LoteMasivo::class);
     }
 
     public function evento(): BelongsTo

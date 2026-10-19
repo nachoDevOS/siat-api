@@ -5,10 +5,12 @@ namespace App\Models;
 use Database\Factories\EmpresaFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Laravel\Sanctum\HasApiTokens;
 use Laravel\Sanctum\NewAccessToken;
 
@@ -103,6 +105,66 @@ class Empresa extends Model
     }
 
     /**
+     * Si la empresa trabaja contra el SIAT PILOTO: lo que emite no tiene
+     * validez fiscal. Es el sandbox del sistema de ventas del cliente.
+     */
+    public function esSandbox(): bool
+    {
+        return $this->codigo_ambiente === config('siat.codigos.ambiente.piloto');
+    }
+
+    /**
+     * Si el sistema de ventas puede emitir por la API.
+     *
+     * En produccion, solo con la empresa habilitada. En el piloto tambien
+     * mientras corre o ya aprobo las pruebas ante el SIN: asi el
+     * desarrollador del cliente integra emitiendo de verdad contra el SIAT
+     * piloto, sin esperar a produccion. En registro todavia no hay punto de
+     * venta ni certificado; OBSERVADO es un cliente que se dejo de atender.
+     */
+    public function puedeEmitirPorApi(): bool
+    {
+        if ($this->estaEnProduccion()) {
+            return true;
+        }
+
+        return $this->esSandbox()
+            && in_array($this->estado, [self::ESTADO_EN_PRUEBAS, self::ESTADO_PILOTO_APROBADO], true);
+    }
+
+    /**
+     * Token en claro con el ambiente a la vista: siat_test_ (piloto) o
+     * siat_live_ (produccion), como las claves sk_test/sk_live de otras APIs.
+     * Quien lo pega en su sistema sabe al instante si factura de verdad.
+     *
+     * Pisa el de HasApiTokens, que usa un prefijo fijo de config.
+     */
+    public function generateTokenString(): string
+    {
+        $prefijo = $this->esSandbox() ? 'siat_test_' : 'siat_live_';
+        $entropia = Str::random(40);
+
+        return $prefijo.$entropia.hash('crc32b', $entropia);
+    }
+
+    /**
+     * Empresa de produccion de la que salio este sandbox (null si no es una
+     * copia).
+     */
+    public function sandboxDe(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'sandbox_de_id');
+    }
+
+    /**
+     * Sandbox de esta empresa de produccion, si se creo.
+     */
+    public function sandbox(): HasOne
+    {
+        return $this->hasOne(self::class, 'sandbox_de_id');
+    }
+
+    /**
      * Deja a la empresa con UN token nuevo y revoca los que tuviera.
      *
      * Regla del proveedor: un token por empresa. El sistema de ventas del
@@ -172,6 +234,19 @@ class Empresa extends Model
     public function certificados(): HasMany
     {
         return $this->hasMany(Certificado::class);
+    }
+
+    /**
+     * CAFC con el que se factura a mano en los eventos 5, 6 y 7.
+     */
+    public function cafcActivo(): HasOne
+    {
+        return $this->hasOne(Cafc::class)->where('activo', true);
+    }
+
+    public function cafcs(): HasMany
+    {
+        return $this->hasMany(Cafc::class);
     }
 
     public function sucursales(): HasMany

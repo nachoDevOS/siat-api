@@ -3,10 +3,12 @@
 use App\Jobs\AnularFacturaEnSiat;
 use App\Jobs\EnviarFacturaAlSiat;
 use App\Jobs\SincronizarCatalogosEmpresa;
+use App\Jobs\ValidarPaqueteMasivo;
 use App\Jobs\VerificarEstadoFactura;
 use App\Models\Empresa;
 use App\Models\Factura;
 use App\Models\FacturaAnulada;
+use App\Models\Paquete;
 use App\Services\Trabajos\RegistroTrabajos;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schedule;
@@ -73,6 +75,21 @@ Schedule::call(function () {
         ->pluck('factura_id')
         ->each(fn (int $id) => AnularFacturaEnSiat::dispatch($id));
 })->everyFifteenMinutes()->name('reintentar-anulaciones')->withoutOverlapping();
+
+/*
+ * Cada 15 min: retoma los paquetes de emision masiva que el SIN recibio pero
+ * de los que todavia no se tiene el resultado. El job de validacion reintenta
+ * ~38 min (backoff 60..1200); se esperan 45 para no pisarse con uno en vuelo.
+ */
+Schedule::call(function () {
+    Paquete::where('tipo', Paquete::TIPO_MASIVA)
+        ->where('estado', 'ENVIADO')
+        ->where('enviado_en', '<', now()->subMinutes(45))
+        ->orderBy('id')
+        ->limit(100)
+        ->pluck('id')
+        ->each(fn (int $id) => ValidarPaqueteMasivo::dispatch($id));
+})->everyFifteenMinutes()->name('validar-paquetes-masivos')->withoutOverlapping();
 
 // Cada 10 min: cierra los eventos de contingencia cuyo SIAT ya volvio y manda
 // el paquete. Sin esto una factura en CONTINGENCIA no llega nunca al SIN.

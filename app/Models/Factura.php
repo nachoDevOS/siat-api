@@ -35,6 +35,12 @@ class Factura extends Model
     public const ESTADO_ANULADA = 'ANULADA';
 
     /**
+     * Emitida dentro de un lote de emision masiva abierto: valida e
+     * imprimible, espera a que se cierre el lote para viajar en un paquete.
+     */
+    public const ESTADO_MASIVA = 'MASIVA';
+
+    /**
      * Todos los estados, para validar filtros.
      *
      * @var list<string>
@@ -47,12 +53,16 @@ class Factura extends Model
         self::ESTADO_OBSERVADA,
         self::ESTADO_CONTINGENCIA,
         self::ESTADO_ANULADA,
+        self::ESTADO_MASIVA,
     ];
 
     // Tipo de emision segun el SIN: 1 = en linea, 2 = contingencia.
     public const EMISION_EN_LINEA = 1;
 
     public const EMISION_CONTINGENCIA = 2;
+
+    /** Emision masiva (lote): entra al CUF como cualquier tipo de emision. */
+    public const EMISION_MASIVA = 3;
 
     protected $table = 'facturas';
 
@@ -72,7 +82,45 @@ class Factura extends Model
             'monto_total' => 'decimal:2',
             'monto_total_moneda' => 'decimal:2',
             'monto_total_sujeto_iva' => 'decimal:2',
+            'monto_efectivo_credito_debito' => 'decimal:2',
+            'codigo_documento_sector' => 'integer',
         ];
+    }
+
+    /**
+     * Si el documento es una nota de credito-debito (sector 24) y no una
+     * factura: cambia el XML, el servicio SOAP y la representacion grafica.
+     */
+    public function esNotaCreditoDebito(): bool
+    {
+        return $this->codigo_documento_sector === config('siat.codigos.nota_credito_debito.documento_sector');
+    }
+
+    /**
+     * tipoFacturaDocumento del SIN: 1 = factura con credito fiscal, 3 =
+     * documento de ajuste. Entra al CUF y viaja en cada solicitud SOAP.
+     */
+    public function tipoFacturaDocumento(): int
+    {
+        return $this->esNotaCreditoDebito()
+            ? config('siat.codigos.nota_credito_debito.tipo_factura_documento')
+            : config('siat.codigos.tipo_factura_documento');
+    }
+
+    /**
+     * Factura que ajusta una nota de credito-debito. Null en una factura.
+     */
+    public function facturaOrigen(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'factura_origen_id');
+    }
+
+    /**
+     * Notas de credito-debito emitidas sobre esta factura.
+     */
+    public function notas(): HasMany
+    {
+        return $this->hasMany(self::class, 'factura_origen_id');
     }
 
     public function empresa(): BelongsTo
@@ -92,7 +140,9 @@ class Factura extends Model
 
     public function items(): HasMany
     {
-        return $this->hasMany(FacturaItem::class);
+        // En el orden en que se cargaron: es el orden del <detalle> del XML,
+        // y en una nota los originales tienen que ir antes que los devueltos.
+        return $this->hasMany(FacturaItem::class)->orderBy('id');
     }
 
     /**
@@ -122,13 +172,16 @@ class Factura extends Model
      * Va firmada sin el dominio (relative) para que valga igual detras de un
      * proxy o con otro host.
      *
-     * @param  'ver'|'pdf'|'rollo'  $tipo  pagina, PDF carta o PDF rollo 80 mm.
+     * @param  'ver'|'pdf'|'rollo'|'mini'|'zip'  $tipo  pagina, PDF carta, PDF
+     *                                                  rollo 80 mm, mini ticket o ZIP.
      */
     public function urlPublica(string $tipo = 'ver'): string
     {
         $ruta = match ($tipo) {
             'pdf' => 'factura.publica.pdf',
             'rollo' => 'factura.publica.rollo',
+            'mini' => 'factura.publica.mini',
+            'zip' => 'factura.publica.zip',
             default => 'factura.publica',
         };
 

@@ -10,6 +10,6 @@
     @include('factura._estilos')
 </head>
 <body>
-    @include('factura._cuerpo')
+    @include($factura->esNotaCreditoDebito() ? 'factura._cuerpo_nota' : 'factura._cuerpo')
 </body>
 </html>

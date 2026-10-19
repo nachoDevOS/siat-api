@@ -8,7 +8,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex,nofollow">
-    <title>Factura N° {{ $factura->numero_factura }} — {{ $factura->empresa->razon_social }}</title>
+    @php($documento = $factura->esNotaCreditoDebito() ? 'Nota crédito-débito' : 'Factura')
+    <title>{{ $documento }} N° {{ $factura->numero_factura }} — {{ $factura->empresa->razon_social }}</title>
     <style>
         :root { color-scheme: light; }
         * { box-sizing: border-box; }
@@ -35,14 +36,14 @@
 </head>
 <body>
     <main class="caja">
-        <h1>Factura N° {{ $factura->numero_factura }}</h1>
+        <h1>{{ $documento }} N° {{ $factura->numero_factura }}</h1>
         <p class="emisor">{{ $factura->empresa->razon_social }} · NIT {{ $factura->empresa->nit }}</p>
 
         @if ($factura->estado === App\Models\Factura::ESTADO_ANULADA)
-            <p class="aviso anulada"><strong>FACTURA ANULADA.</strong> Este documento ya no tiene validez.</p>
+            <p class="aviso anulada"><strong>{{ mb_strtoupper($documento) }} ANULADA.</strong> Este documento ya no tiene validez.</p>
         @endif
         @if ($factura->empresa->codigo_ambiente === config('siat.codigos.ambiente.piloto'))
-            <p class="aviso prueba"><strong>Ambiente de pruebas:</strong> esta factura no tiene validez fiscal.</p>
+            <p class="aviso prueba"><strong>Ambiente de pruebas:</strong> este documento no tiene validez fiscal.</p>
         @endif
 
         <p class="pregunta">¿En qué formato la quiere imprimir?</p>

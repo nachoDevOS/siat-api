@@ -4,13 +4,11 @@ namespace App\Http\Controllers\Admin;
 
 use App\Exceptions\SiatException;
 use App\Http\Controllers\Controller;
-use App\Models\Certificado;
 use App\Models\Empresa;
+use App\Services\Factura\CargadorCertificado;
 use App\Services\Factura\GeneradorCertificadoPrueba;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Carbon;
-use Illuminate\Validation\ValidationException;
 
 /**
  * Carga del certificado digital .p12 de una empresa. El contenido y la
@@ -18,7 +16,7 @@ use Illuminate\Validation\ValidationException;
  */
 class CertificadoController extends Controller
 {
-    public function store(Request $request, Empresa $empresa): RedirectResponse
+    public function store(Request $request, Empresa $empresa, CargadorCertificado $cargador): RedirectResponse
     {
         $datos = $request->validate([
             'archivo' => ['required', 'file', 'max:5120'],
@@ -27,31 +25,13 @@ class CertificadoController extends Controller
             'vence_el' => ['nullable', 'date'],
         ]);
 
-        $binario = (string) file_get_contents($datos['archivo']->getRealPath());
-
-        // Se abre ANTES de guardar nada. Sin esto, un .p12 corrupto o una
-        // passphrase mal tipeada se guardaban igual y desactivaban el
-        // certificado que si funcionaba: el panel confirmaba "cargado y
-        // activado" y el cliente dejaba de facturar en silencio, porque la
-        // falla recien aparecia al firmar, dentro de un job en segundo plano.
-        $almacen = $this->abrirOFallar($binario, $datos['passphrase']);
-
-        // Solo un certificado activo por empresa: se desactivan los anteriores.
-        // Recien aca, con el nuevo ya comprobado.
-        $empresa->certificados()->update(['activo' => false]);
-
-        $empresa->certificados()->create([
-            // El .p12 se guarda en base64 y el cast lo cifra en reposo.
-            'contenido_p12' => base64_encode($binario),
-            'passphrase' => $datos['passphrase'],
-            'emitido_por' => $datos['emitido_por'] ?? null,
-            // La fecha la trae el propio certificado; lo que escriba el
-            // operador solo se usa si el certificado no la declara. Antes era
-            // al reves y, si no la tipeaba, el aviso de vencimiento a 30 dias
-            // no disparaba nunca (filtra por 'vence_el' no nulo).
-            'vence_el' => $this->vencimientoDe($almacen) ?? $datos['vence_el'] ?? null,
-            'activo' => true,
-        ]);
+        $cargador->cargar(
+            $empresa,
+            (string) file_get_contents($datos['archivo']->getRealPath()),
+            $datos['passphrase'],
+            $datos['emitido_por'] ?? null,
+            $datos['vence_el'] ?? null,
+        );
 
         return redirect()
             ->route('admin.empresas.show', $empresa)
@@ -72,42 +52,5 @@ class CertificadoController extends Controller
         return redirect()
             ->route('admin.empresas.show', $empresa)
             ->with('estado', 'Certificado de prueba generado y activado (vence el '.$certificado->vence_el->format('d/m/Y').'). Solo sirve para el piloto.');
-    }
-
-    /**
-     * Abre el .p12 con su passphrase o corta con un error de validacion visible
-     * en el formulario.
-     *
-     * @return array<string, mixed> almacen devuelto por openssl_pkcs12_read
-     *
-     * @throws ValidationException
-     */
-    private function abrirOFallar(string $binario, string $passphrase): array
-    {
-        $almacen = [];
-
-        if (! openssl_pkcs12_read($binario, $almacen, $passphrase)) {
-            throw ValidationException::withMessages([
-                'archivo' => 'No se pudo abrir el certificado: el archivo no es un .p12 valido o la contrasena no corresponde. El certificado anterior sigue activo.',
-            ]);
-        }
-
-        if (blank($almacen['pkey'] ?? null)) {
-            throw ValidationException::withMessages([
-                'archivo' => 'El certificado no contiene una clave privada: no sirve para firmar.',
-            ]);
-        }
-
-        return $almacen;
-    }
-
-    /**
-     * Fecha de vencimiento declarada por el propio certificado X509.
-     *
-     * @param  array<string, mixed>  $almacen
-     */
-    private function vencimientoDe(array $almacen): ?Carbon
-    {
-        return Certificado::vencimientoDeX509((string) ($almacen['cert'] ?? ''));
     }
 }

@@ -31,6 +31,12 @@ class ConstructorXml
      */
     private const RAIZ = 'facturaElectronicaCompraVenta';
 
+    /**
+     * Nota de credito-debito electronica (sector 24). Raiz y campos
+     * contrastados con el SDK go-siat (notaFiscalElectronicaCreditoDebito.xsd).
+     */
+    private const RAIZ_NOTA = 'notaFiscalElectronicaCreditoDebito';
+
     private const NS_XSI = 'http://www.w3.org/2001/XMLSchema-instance';
 
     private const NS_XMLNS = 'http://www.w3.org/2000/xmlns/';
@@ -41,7 +47,10 @@ class ConstructorXml
      */
     public function construir(Factura $factura): string
     {
-        $factura->loadMissing(['items', 'empresa', 'puntoVenta.sucursal']);
+        $factura->loadMissing(['items', 'empresa', 'puntoVenta.sucursal', 'facturaOrigen']);
+
+        $esNota = $factura->esNotaCreditoDebito();
+        $nombreRaiz = $esNota ? self::RAIZ_NOTA : self::RAIZ;
 
         $doc = new DOMDocument('1.0', 'UTF-8');
         $doc->formatOutput = false;
@@ -49,18 +58,24 @@ class ConstructorXml
         // Nodo raiz del documento fiscal, con la referencia al XSD que el SIN
         // usa para validarlo. Verificado contra un sistema en produccion: sin
         // estos dos atributos el documento no valida del otro lado.
-        $raiz = $doc->createElement(self::RAIZ);
+        $raiz = $doc->createElement($nombreRaiz);
         // La declaracion del prefijo va una sola vez en la raiz; si se usara
         // setAttribute suelto, DOM la repetiria en cada hijo con xsi:nil.
         $raiz->setAttributeNS(self::NS_XMLNS, 'xmlns:xsi', self::NS_XSI);
-        $raiz->setAttributeNS(self::NS_XSI, 'xsi:noNamespaceSchemaLocation', self::RAIZ.'.xsd');
+        $raiz->setAttributeNS(self::NS_XSI, 'xsi:noNamespaceSchemaLocation', $nombreRaiz.'.xsd');
         $doc->appendChild($raiz);
 
-        $this->cabecera($doc, $raiz, $factura);
+        if ($esNota) {
+            $this->cabeceraNota($doc, $raiz, $factura);
+        } else {
+            $this->cabecera($doc, $raiz, $factura);
+        }
 
-        // Un nodo <detalle> por cada item de la factura.
+        // Un nodo <detalle> por cada item. En la nota van primero los de la
+        // factura original y despues los devueltos, en el orden en que se
+        // guardaron.
         foreach ($factura->items as $item) {
-            $this->detalle($doc, $raiz, $item);
+            $esNota ? $this->detalleNota($doc, $raiz, $item) : $this->detalle($doc, $raiz, $item);
         }
 
         return $doc->saveXML();
@@ -130,6 +145,81 @@ class ConstructorXml
             'subTotal' => $this->monto($item->subtotal),
             'numeroSerie' => $item->numero_serie,
             'numeroImei' => $item->numero_imei,
+        ];
+
+        $this->nodoDesdeArray($doc, $raiz, 'detalle', $campos);
+    }
+
+    /**
+     * Cabecera de la nota de credito-debito. Repite los datos del emisor y
+     * del comprador como una factura, y agrega la referencia a la factura
+     * original (numero, CUF y fecha) y los montos del ajuste.
+     *
+     * Orden de notaFiscalElectronicaCreditoDebito.xsd (contrastado con
+     * go-siat): a diferencia de la factura no lleva metodo de pago, moneda,
+     * gift card ni cafc.
+     */
+    private function cabeceraNota(DOMDocument $doc, \DOMElement $raiz, Factura $nota): void
+    {
+        $empresa = $nota->empresa;
+        $sucursal = $nota->puntoVenta->sucursal;
+        $origen = $nota->facturaOrigen;
+
+        $campos = [
+            'nitEmisor' => $empresa->nit,
+            'razonSocialEmisor' => $empresa->razon_social,
+            'municipio' => $sucursal->municipio,
+            'telefono' => $sucursal->telefono,
+            'numeroNotaCreditoDebito' => $nota->numero_factura,
+            'cuf' => $nota->cuf,
+            'cufd' => optional($nota->cufd)->codigo,
+            'codigoSucursal' => $sucursal->codigo_sucursal,
+            'direccion' => $sucursal->direccion,
+            'codigoPuntoVenta' => $nota->puntoVenta->codigo_punto_venta,
+            'fechaEmision' => $nota->fecha_emision?->format('Y-m-d\TH:i:s.v'),
+            'nombreRazonSocial' => $nota->comprador_razon_social,
+            'codigoTipoDocumentoIdentidad' => $nota->comprador_tipo_documento,
+            'numeroDocumento' => $nota->comprador_numero_documento,
+            'complemento' => $nota->comprador_complemento,
+            'codigoCliente' => $nota->comprador_numero_documento,
+            // La factura que se ajusta: su numero, su CUF (el SIN lo llama
+            // numero de autorizacion) y su fecha de emision.
+            'numeroFactura' => $origen->numero_factura,
+            'numeroAutorizacionCuf' => $origen->cuf,
+            'fechaEmisionFactura' => $origen->fecha_emision?->format('Y-m-d\TH:i:s.v'),
+            'montoTotalOriginal' => $this->monto($origen->monto_total),
+            // subtotal de la nota = suma de los items devueltos.
+            'montoTotalDevuelto' => $this->monto($nota->subtotal),
+            // La parte del descuento adicional de la factura que corresponde a
+            // lo devuelto (descuento_global de la nota).
+            'montoDescuentoCreditoDebito' => $this->monto($nota->descuento_global),
+            'montoEfectivoCreditoDebito' => $this->monto($nota->monto_efectivo_credito_debito),
+            'codigoExcepcion' => $nota->codigo_excepcion ?? 0,
+            'leyenda' => $nota->leyenda,
+            'usuario' => $nota->usuario,
+            'codigoDocumentoSector' => $nota->codigo_documento_sector,
+        ];
+
+        $this->nodoDesdeArray($doc, $raiz, 'cabecera', $campos);
+    }
+
+    /**
+     * Detalle de la nota: como el de la factura, sin numero de serie ni IMEI,
+     * y con codigoDetalleTransaccion (1 = item original, 2 = devuelto).
+     */
+    private function detalleNota(DOMDocument $doc, \DOMElement $raiz, FacturaItem $item): void
+    {
+        $campos = [
+            'actividadEconomica' => $item->codigo_actividad,
+            'codigoProductoSin' => $item->codigo_producto_sin,
+            'codigoProducto' => $item->codigo_interno,
+            'descripcion' => $item->descripcion,
+            'cantidad' => $this->monto($item->cantidad, 4),
+            'unidadMedida' => $item->unidad_medida,
+            'precioUnitario' => $this->monto($item->precio_unitario),
+            'montoDescuento' => $this->monto($item->descuento),
+            'subTotal' => $this->monto($item->subtotal),
+            'codigoDetalleTransaccion' => $item->codigo_detalle_transaccion,
         ];
 
         $this->nodoDesdeArray($doc, $raiz, 'detalle', $campos);

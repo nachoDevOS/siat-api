@@ -35,11 +35,15 @@ class EstadoController extends Controller
             'empresa' => [
                 'estado' => $empresa->estado,
                 'en_produccion' => $empresa->estaEnProduccion(),
+                // PILOTO = sandbox: emite contra el SIAT de pruebas y las
+                // facturas no tienen validez fiscal.
+                'ambiente' => $empresa->esSandbox() ? 'PILOTO' : 'PRODUCCION',
+                'validez_fiscal' => ! $empresa->esSandbox(),
             ],
             'puntos_venta_activos' => $puntos->count(),
             'puntos_venta_registrados_en_siat' => $registrados->count(),
             'puntos_venta_con_cufd' => $conCufd->count(),
-            'puede_facturar' => $empresa->estaEnProduccion() && $registrados->isNotEmpty(),
+            'puede_facturar' => $empresa->puedeEmitirPorApi() && $registrados->isNotEmpty(),
         ]);
     }
 }

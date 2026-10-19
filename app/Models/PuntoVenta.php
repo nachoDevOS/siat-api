@@ -27,6 +27,7 @@ class PuntoVenta extends Model
             'codigo_punto_venta' => 'integer',
             'tipo_punto_venta' => 'integer',
             'siguiente_factura' => 'integer',
+            'siguiente_nota' => 'integer',
             'activo' => 'boolean',
             'registrado_en_siat' => 'datetime',
         ];

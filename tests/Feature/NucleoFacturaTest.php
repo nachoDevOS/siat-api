@@ -344,7 +344,9 @@ test('los codigos de estado del SIN se interpretan bien', function (string $codi
 })->with([
     '908 validada' => ['908', Factura::ESTADO_VALIDADA, true],
     '690 validada' => ['690', Factura::ESTADO_VALIDADA, true],
-    '902 pendiente: no valida ni observa' => ['902', Factura::ESTADO_RECIBIDA, false],
+    '902 rechazada: observada' => ['902', Factura::ESTADO_OBSERVADA, true],
+    '901 pendiente: no valida ni observa' => ['901', Factura::ESTADO_RECIBIDA, false],
+    '-1 excepcion del SIN: se vuelve a preguntar' => ['-1', Factura::ESTADO_RECIBIDA, false],
     '905 desconocido: observada' => ['905', Factura::ESTADO_OBSERVADA, true],
 ]);
 
@@ -359,6 +361,10 @@ test('una factura rechazada en la recepcion guarda el motivo y lo manda en el we
     $servicio->shouldReceive('recepcionarFactura')->andReturn((object) ['RespuestaServicioFacturacion' => (object) [
         'transaccion' => false, 'codigoEstado' => 904,
         'mensajesList' => (object) ['codigo' => 1001, 'descripcion' => 'HASH INVALIDO'],
+    ]]);
+    // Antes de observar se le pregunta al SIN: no la conoce.
+    $servicio->shouldReceive('verificarEstado')->once()->andReturn((object) ['RespuestaServicioFacturacion' => (object) [
+        'transaccion' => false, 'mensajesList' => (object) ['codigo' => 994, 'descripcion' => 'FACTURA NO EXISTE'],
     ]]);
     $this->mock(FabricaServicios::class, fn ($mock) => $mock->shouldReceive('facturacion')->andReturn($servicio));
 

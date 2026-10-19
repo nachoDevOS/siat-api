@@ -36,6 +36,24 @@
       "value": "",
       "type": "default",
       "enabled": true
+    },
+    {
+      "key": "cuf_nota",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "webhook_id",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "entrega_id",
+      "value": "",
+      "type": "default",
+      "enabled": true
     }
   ],
   "_postman_variable_scope": "environment"

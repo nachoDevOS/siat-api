@@ -41,16 +41,91 @@ class AnuladorFactura
     public function esAnulable(Factura $factura): bool
     {
         return in_array($factura->estado, self::ESTADOS_ANULABLES, true)
-            && ! $this->yaSeRevirtio($factura);
+            && ! $this->yaSeRevirtio($factura)
+            && ! $this->tieneNotasVigentes($factura);
     }
 
     /**
-     * Solo se revierte una anulacion que el SIN ya confirmo.
+     * Una factura con notas de credito-debito vigentes no se anula: la nota
+     * quedaria ajustando un documento que ya no existe. Primero se anulan
+     * las notas.
+     */
+    public function tieneNotasVigentes(Factura $factura): bool
+    {
+        return $factura->notas()->where('estado', '!=', Factura::ESTADO_ANULADA)->exists();
+    }
+
+    /**
+     * Por que no se puede anular, para responderle al cliente.
+     */
+    public function motivoNoAnulable(Factura $factura): string
+    {
+        return match (true) {
+            $this->yaSeRevirtio($factura) => 'Esta factura ya se anulo y se revirtio una vez: el SIN no permite anularla de nuevo.',
+            $this->tieneNotasVigentes($factura) => 'La factura tiene notas de credito-debito vigentes: anule primero las notas.',
+            default => "Una factura en estado {$factura->estado} no se puede anular.",
+        };
+    }
+
+    /**
+     * Solo se revierte una anulacion que el SIN ya confirmo por servicio web.
+     * Una administrativa la decidio una resolucion: no se revierte por SOAP.
      */
     public function esRevertible(Factura $factura): bool
     {
         return $factura->estado === Factura::ESTADO_ANULADA
-            && $factura->anulacion?->estado === FacturaAnulada::ESTADO_CONFIRMADA;
+            && $factura->anulacion?->estado === FacturaAnulada::ESTADO_CONFIRMADA
+            && ! $factura->anulacion->esAdministrativa();
+    }
+
+    /**
+     * Por que no se puede revertir, para responderle al cliente.
+     */
+    public function motivoNoRevertible(Factura $factura): string
+    {
+        return match (true) {
+            $factura->estado !== Factura::ESTADO_ANULADA => 'La factura no esta anulada.',
+            $factura->anulacion?->esAdministrativa() => 'Una anulacion administrativa no se revierte por servicio web.',
+            default => 'La anulacion todavia no esta confirmada por el SIN: espere el webhook factura.anulada.',
+        };
+    }
+
+    /**
+     * Si se puede registrar una anulacion administrativa: el SIN conoce la
+     * factura y no tiene notas vigentes. A diferencia de la de servicio web,
+     * no importa que ya se haya revertido una vez: la decidio el SIN por
+     * resolucion y aca solo se registra.
+     */
+    public function admiteAnulacionAdministrativa(Factura $factura): bool
+    {
+        return in_array($factura->estado, self::ESTADOS_ANULABLES, true)
+            && ! $this->tieneNotasVigentes($factura);
+    }
+
+    /**
+     * Registra una anulacion que el SIN ya aprobo por tramite (fuera del plazo
+     * del servicio web). No llama al SIAT: queda confirmada en el acto y se
+     * avisa al cliente. Quien llama ya verifico admiteAnulacionAdministrativa.
+     */
+    public function anularAdministrativamente(Factura $factura, int $motivo, string $resolucion): void
+    {
+        FacturaAnulada::updateOrCreate(
+            ['factura_id' => $factura->id],
+            [
+                'tipo' => FacturaAnulada::TIPO_ADMINISTRATIVA,
+                'numero_resolucion' => $resolucion,
+                'motivo' => $motivo,
+                'anulada_en' => now(),
+                'estado' => FacturaAnulada::ESTADO_CONFIRMADA,
+                'estado_anterior' => $factura->estado,
+                'motivo_rechazo' => null,
+                'codigo_recepcion' => null,
+            ],
+        );
+
+        $factura->update(['estado' => Factura::ESTADO_ANULADA]);
+
+        NotificarWebhook::dispatch($factura->id, 'factura.anulada');
     }
 
     public function yaSeRevirtio(Factura $factura): bool
@@ -82,6 +157,8 @@ class AnuladorFactura
         FacturaAnulada::updateOrCreate(
             ['factura_id' => $factura->id],
             [
+                'tipo' => FacturaAnulada::TIPO_SIAT,
+                'numero_resolucion' => null,
                 'motivo' => $motivo,
                 'anulada_en' => now(),
                 'estado' => FacturaAnulada::ESTADO_PENDIENTE,

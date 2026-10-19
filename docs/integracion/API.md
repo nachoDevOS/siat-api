@@ -49,7 +49,7 @@ ni en el navegador:
 
 ```bash
 SIAT_API_URL=https://{dominio}/api/v1
-SIAT_API_TOKEN=12|siat_4f8a...c91e
+SIAT_API_TOKEN=12|siat_live_4f8a...c91e
 ```
 
 ### Paso 2 — Probar la conexión
@@ -120,6 +120,18 @@ curl -s -X POST "$SIAT_API_URL/facturas/{cuf}/anular" \
   -d '{"motivo": 1}'
 ```
 
+### Paso 8 — Devolver mercadería: nota de crédito-débito (perfil Administración)
+
+Si el comprador devuelve todo o parte de lo que compró, **no anule** la factura: emita una nota sobre
+ella. Solo diga qué línea de la venta y cuánto se devuelve; la API calcula los montos (§2.10).
+
+```bash
+curl -s -X POST "$SIAT_API_URL/facturas/{cuf}/notas" \
+  -H "Authorization: Bearer $SIAT_API_TOKEN" -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: DEVOLUCION-000045" \
+  -d '{"items": [{"linea": 1, "cantidad": 1}]}'
+```
+
 ### Lista de verificación antes de salir a producción
 
 - [ ] Token guardado en el servidor de su sistema, no en cada caja ni en el navegador
@@ -139,7 +151,7 @@ La API usa **tokens Bearer** (Laravel Sanctum). Cada token pertenece a **una emp
 los datos de esa empresa.
 
 ```http
-Authorization: Bearer 12|siat_4f8a...c91e
+Authorization: Bearer 12|siat_live_4f8a...c91e
 ```
 
 - **El token no se obtiene por la API:** lo genera el **sistema de facturación (su proveedor)**
@@ -166,23 +178,43 @@ Authorization: Bearer 12|siat_4f8a...c91e
 | `codigos:renovar` | — | ✅ | — | `POST /puntos-venta/{s}/{pv}/cufd` |
 | `facturas:emitir` | ✅ | ✅ | — | `POST /facturas`, `GET /nit/{nit}/verificar` |
 | `facturas:leer` | ✅ | ✅ | ✅ | `GET /facturas`, `/{cuf}`, `/pdf`, `/xml` |
-| `facturas:anular` | — | ✅ | — | `POST /facturas/{cuf}/anular` |
+| `facturas:leer` | ✅ | ✅ | ✅ | también `GET /facturas/{cuf}/notas` |
+| `facturas:anular` | — | ✅ | — | `POST /facturas/{cuf}/anular`, `/revertir-anulacion`, `/anulacion-administrativa`, `POST /facturas/{cuf}/notas` |
+| `webhooks:gestionar` | — | ✅ | — | `/webhooks` (registrar, ver, cambiar, borrar, historial, reenviar) |
 
-Una caja **no puede anular**: si se filtra el token de una caja, no sirve para anular facturas.
+`facturas:emitir` permite también `POST /facturas/lote` y abrir/cerrar la emisión masiva;
+`facturas:leer`, `GET /dashboard`; `estructura:leer`, `GET /certificado`; `estructura:gestionar`,
+`POST /certificado` y `POST /puntos-venta/registrar-siat`.
+
+> Los tokens de *Administración* generados antes de que existieran los webhooks por API no traen
+> `webhooks:gestionar`: pida al proveedor que lo regenere.
+
+Una caja **no puede anular ni emitir notas de crédito-débito**: las dos le devuelven plata al
+comprador, así que un token de caja filtrado no sirve para ninguna.
 
 ### 1.2 Otras cabeceras
 
 | Cabecera | Obligatoria | Uso |
 |---|---|---|
-| `X-Idempotency-Key` | Recomendada en `POST /facturas` | Id único de la venta en su sistema. Si el cuerpo no trae `referencia_externa`, se usa este valor |
+| `X-Idempotency-Key` | Recomendada en `POST /facturas` y `POST /facturas/{cuf}/notas` | Id único de la venta en su sistema. Si el cuerpo no trae `referencia_externa`, se usa este valor |
 | `Accept: application/json` | Recomendada | Los errores siempre vuelven en JSON |
 
 **Límites:** 60 peticiones por minuto **por token** y 120 **por empresa** (los valores los
 ajusta el proveedor). Al superarlos: `429 DEMASIADAS_PETICIONES` con cabecera `Retry-After`
 (segundos). El límite por token hace que una caja con un bucle no frene a las demás.
 
-**Habilitación:** consultar y descargar funciona en cualquier etapa; **emitir** exige que la
-empresa esté en estado `PRODUCCION`.
+**Ambientes (sandbox):** el token dice dónde factura. `siat_live_…` = **producción** (facturas con
+validez fiscal). `siat_test_…` = **pruebas**: emite de verdad contra el SIAT piloto, con el mismo
+flujo, CUF, PDF y webhooks, pero **sin validez fiscal**. Integre y pruebe con el de pruebas; para
+pasar a producción solo cambia el token (la URL es la misma). Pida su token de pruebas al
+proveedor; si ya factura en producción, él le crea una empresa *sandbox* aparte. `GET /estado`
+responde `empresa.ambiente` (`PILOTO` o `PRODUCCION`) y `empresa.validez_fiscal`.
+
+Cuando su empresa pasa del piloto a producción, el token de pruebas **deja de funcionar** y el
+proveedor le entrega uno `siat_live_` nuevo: un token de pruebas nunca emite facturas reales.
+
+**Habilitación:** consultar y descargar funciona en cualquier etapa. **Emitir** exige la empresa en
+`PRODUCCION`; con un token de pruebas, basta con que el proveedor la tenga en pruebas.
 
 ---
 
@@ -203,7 +235,17 @@ empresa esté en estado `PRODUCCION`.
 | `GET` | `/facturas/{cuf}` | Estado de una factura |
 | `GET` | `/facturas/{cuf}/pdf` | PDF imprimible |
 | `GET` | `/facturas/{cuf}/xml` | XML firmado (documento legal) |
-| `POST` | `/facturas/{cuf}/anular` | Anula una factura |
+| `POST` | `/facturas/{cuf}/anular` | Anula una factura (o una nota) |
+| `POST` | `/facturas/{cuf}/revertir-anulacion` | Revierte una anulación confirmada (una sola vez) |
+| `POST` | `/facturas/{cuf}/anulacion-administrativa` | Registra una anulación aprobada por el SIN fuera de plazo |
+| `POST` | `/facturas/{cuf}/notas` | **Emite una nota de crédito-débito** (devolución) |
+| `GET` | `/facturas/{cuf}/notas` | Notas emitidas sobre una factura |
+| `POST` | `/facturas/lote` | Emite hasta 20 ventas en una petición |
+| `GET` | `/dashboard` | Resumen: mes, año, estados, tendencia |
+| `POST` | `/masiva/{sucursal}/{pv}/abrir` · `/cerrar`, `GET /masiva/{sucursal}/{pv}` | Emisión masiva por lotes |
+| `GET` `POST` `PUT` `DELETE` | `/webhooks…` | Sus destinos de webhook, historial y reenvío |
+| `GET` `POST` | `/certificado` | Estado y renovación del certificado digital |
+| `POST` | `/puntos-venta/registrar-siat` | Alta de un punto de venta en el SIN (irreversible) |
 
 ---
 
@@ -212,7 +254,7 @@ empresa esté en estado `PRODUCCION`.
 ```json
 {
   "exito": true,
-  "empresa": { "estado": "PRODUCCION", "en_produccion": true },
+  "empresa": { "estado": "PRODUCCION", "en_produccion": true, "ambiente": "PRODUCCION", "validez_fiscal": true },
   "puntos_venta_activos": 2,
   "puntos_venta_registrados_en_siat": 2,
   "puntos_venta_con_cufd": 1,
@@ -220,7 +262,8 @@ empresa esté en estado `PRODUCCION`.
 }
 ```
 
-`puede_facturar` = empresa en producción **y** al menos un punto de venta registrado en el SIN.
+`puede_facturar` = empresa habilitada para emitir (en producción, o en pruebas si es del ambiente
+piloto) **y** al menos un punto de venta registrado en el SIN.
 No hace falta CUFD vigente: si falta, la emisión lo pide en el momento.
 
 ### 2.2 `GET /catalogos/{tipo}`
@@ -383,7 +426,7 @@ Todo se redondea a 2 decimales.
 
 ```http
 POST /api/v1/facturas
-Authorization: Bearer 12|siat_4f8a...c91e
+Authorization: Bearer 12|siat_live_4f8a...c91e
 X-Idempotency-Key: VENTA-000123
 Content-Type: application/json
 
@@ -479,13 +522,15 @@ Devuelve `{ "exito": true, "factura": { ... } }` con la misma forma que la emisi
 ### Imprimir y compartir la factura (su sistema NO la arma)
 
 La API ya arma la factura completa. En la respuesta de la emisión (y de `GET /facturas/{cuf}`)
-vienen tres **enlaces públicos** que se abren **sin token**:
+vienen **enlaces públicos** que se abren **sin token**:
 
 | Campo | Qué abre | Para qué |
 |---|---|---|
 | `url_publica` | Página con la factura, botones de descarga, impresión y verificación en el SIN | Mostrarla en pantalla o **mandársela al comprador** (WhatsApp, correo) |
 | `url_publica_pdf` | PDF tamaño carta | Imprimir en hoja o archivar |
 | `url_publica_rollo` | PDF para **impresora térmica de 80 mm** | Imprimir el ticket en caja |
+| `url_publica_mini` | Mini ticket: emisor, número, monto y QR (sin detalle) | Comprobante corto de caja; el QR lleva a la factura completa |
+| `url_publica_zip` | ZIP con el XML firmado, el PDF carta y el rollo | Archivar o mandar todo junto |
 
 Su sistema solo abre o manda a imprimir uno de esos enlaces. Están **firmados**: nadie puede ver
 otra factura cambiando el CUF (responde 404). No vencen. También llegan en el webhook (`url_publica`).
@@ -501,19 +546,169 @@ otra factura cambiando el CUF (responde 404). No vencen. También llegan en el w
 { "motivo": 1 }
 ```
 
-`motivo` del catálogo `motivos_anulacion`.
+`motivo` del catálogo `motivos_anulacion`; un código fuera del catálogo responde `422`.
 
 | Situación | Respuesta |
 |---|---|
 | Factura `ENVIADA`, `RECIBIDA` o `VALIDADA` | `200` — "Anulación registrada. Pendiente de confirmación del SIAT." |
 | Ya estaba `ANULADA` | `200` — "La factura ya estaba anulada." |
 | Otro estado (`PENDIENTE`, `OBSERVADA`, `CONTINGENCIA`) | `409 FACTURA_NO_ANULABLE` |
+| Factura con notas de crédito-débito vigentes | `409 FACTURA_NO_ANULABLE` — anule primero las notas |
+| `motivo` fuera del catálogo | `422` |
 
 La factura pasa a `ANULADA` de inmediato y la anulación se transmite al SIN en segundo plano:
 - Si el SIN la confirma → webhook `factura.anulada`.
 - Si el SIN la rechaza (fuera de plazo, motivo inválido) → la factura **vuelve a su estado
   anterior** y llega el webhook `factura.anulacion_rechazada`.
 - Si el SIAT está caído, se reintenta sola hasta que responda.
+
+Una **nota de crédito-débito** se anula igual, con su propio CUF.
+
+La respuesta de `GET /facturas/{cuf}` trae `anulacion` (`tipo` `SIAT` o `ADMINISTRATIVA`, `estado`,
+`motivo`, `numero_resolucion`, `anulada_en`) cuando se pidió alguna vez la anulación.
+
+### 2.9.1 `POST /facturas/{cuf}/revertir-anulacion`
+
+Sin cuerpo. La factura (o nota) anulada vuelve a estar vigente ante el SIN. Es **síncrono**: espera
+la respuesta del SIN.
+
+| Situación | Respuesta |
+|---|---|
+| Anulación `CONFIRMADA` por servicio web | `200` con la factura (`estado` anterior, `anulacion.estado = REVERTIDA`) + webhook `factura.anulacion_revertida` |
+| No está anulada, la anulación sigue `PENDIENTE` o fue administrativa | `409 FACTURA_NO_REVERTIBLE` con el porqué en `mensaje` |
+| El SIN la rechazó o no respondió | `502 SIAT_NO_REVIRTIO`: la factura sigue anulada; puede reintentar |
+
+El SIN permite revertir **una sola vez**: después, la factura ya no se puede anular por servicio web
+(sí administrativamente).
+
+### 2.9.2 `POST /facturas/{cuf}/anulacion-administrativa`
+
+Por servicio web solo se anula **hasta el día 9 del mes siguiente** a la emisión (fuera de plazo el SIN
+rechaza la anulación y llega `factura.anulacion_rechazada`). Pasado ese plazo se tramita ante el SIN;
+cuando la aprueba, regístrela acá:
+
+```json
+{ "resolucion": "RA-2026-0042", "motivo": 1 }
+```
+
+- **No llama al SIAT**: el SIN ya la anuló de su lado. Queda `CONFIRMADA` al instante y llega el
+  webhook `factura.anulada`.
+- Vale para facturas `ENVIADA`, `RECIBIDA` o `VALIDADA` sin notas vigentes, aunque ya se haya
+  revertido una anulación antes. Otro estado: `409 FACTURA_NO_ANULABLE`.
+- No se revierte por servicio web.
+
+### 2.10 `POST /facturas/{cuf}/notas` — nota de crédito-débito
+
+Devolución total o parcial de una factura **`VALIDADA`** (documento sector 24 del SIN). Usted solo
+dice **qué** se devuelve; precios, descuentos y crédito fiscal los toma la API de la factura, así la
+nota nunca la contradice.
+
+```json
+{
+  "referencia_externa": "DEVOLUCION-000045",
+  "usuario": "caja-01",
+  "items": [
+    { "linea": 1, "cantidad": 1 },
+    { "linea": 3, "cantidad": 0.5 }
+  ]
+}
+```
+
+| Campo | Obligatorio | Descripción |
+|---|---|---|
+| `items[].linea` | Sí | Posición del item en la factura, **desde 1**, en el orden en que lo mandó en la venta |
+| `items[].cantidad` | Sí | Cuánto se devuelve de esa línea. No más de lo que queda por devolver |
+| `referencia_externa` | No | Su id de la devolución (idempotencia, igual que la venta). También vale `X-Idempotency-Key` |
+| `usuario` | No | Quién la emite. Si falta, el de la factura |
+
+Cómo se calculan los montos:
+
+- Cada línea devuelta va al **precio unitario de la factura**, con la parte proporcional del
+  descuento de esa línea.
+- `monto_devuelto` = suma de las líneas devueltas.
+- `descuento` = la parte del `descuento_global` de la factura que corresponde a lo devuelto.
+- `monto_credito_debito` = **13%** de (`monto_devuelto` − `descuento`): el crédito fiscal que se
+  revierte.
+
+Respuesta `201 Created`: `{"exito": true, "nota": {...}}` con la misma forma que una factura, más
+`tipo_documento: "NOTA_CREDITO_DEBITO"`, `documento_sector: 24`, `factura_origen` (`cuf`,
+`numero_factura`), `monto_devuelto`, `descuento` y `monto_credito_debito`. `numero_factura` es el
+**número de la nota**: las notas tienen su propio correlativo.
+
+Reglas:
+
+- La nota es un documento más, **con su propio CUF**: se consulta (`GET /facturas/{cuf}`), se
+  descarga (`/pdf`, `/xml`, enlaces públicos) y se anula (`POST /facturas/{cuf}/anular`) igual que
+  una factura. Su estado llega con los mismos webhooks `factura.*`, con
+  `tipo_documento: "NOTA_CREDITO_DEBITO"`.
+- Se pueden emitir varias notas sobre la misma factura; entre todas no devuelven más de lo
+  vendido. Anular una nota libera lo que devolvía.
+- Una factura con notas vigentes **no se puede anular**: anule primero las notas.
+- **Solo en línea.** El SIN no recibe notas en paquetes de contingencia: si el punto de venta está
+  en contingencia responde `422` (reintente cuando vuelva el SIAT). Si el SIAT falla después de
+  emitida, la nota queda `PENDIENTE` y se reenvía sola.
+- Todavía no se emiten notas sobre facturas pagadas en parte con gift card.
+- Errores de negocio: `422 NOTA_INVALIDA` con `detalles[]`, por ejemplo
+  `"Linea 1: se piden devolver 3 y quedan 2 por devolver."`.
+- `GET /facturas/{cuf}/notas` lista las notas de una factura. `GET /facturas` lista solo facturas;
+  con `?tipo=nota` lista solo notas y con `?tipo=todos`, las dos (útil para buscar una nota por su
+  `referencia_externa` tras un corte de red).
+
+### 2.11 `POST /facturas/lote` — varias ventas en una petición
+
+```json
+{ "ventas": [ { "referencia_externa": "VENTA-000201", "sucursal": 0, "punto_venta": 0, "...": "..." },
+              { "referencia_externa": "VENTA-000202", "sucursal": 0, "punto_venta": 0, "...": "..." } ] }
+```
+
+- Hasta **20** ventas, cada una con el formato de `POST /facturas` y **`referencia_externa`
+  obligatoria** (sin repetir dentro del lote).
+- Cada venta se emite por separado y viaja sola al SIN: una rechazada **no frena** a las demás.
+- Responde `200` con `emitidas`, `rechazadas` y `resultados[]` en el mismo orden: cada uno con
+  `exito` y la `factura`, o el `error` (`FACTURA_INVALIDA` con `detalles`, `SIAT_NO_DISPONIBLE`,
+  `PUNTO_VENTA_NO_ENCONTRADO`). `exito` general es `true` solo si salieron todas.
+- Reintentar el lote entero es seguro: las ya emitidas vuelven por su referencia.
+
+No es la emisión masiva del SIN (§2.13): es un atajo para mandar varias ventas juntas.
+
+### 2.12 `GET /dashboard`
+
+Resumen para el tablero de su sistema: `facturas.total`, `facturas.mes` y `facturas.anio`
+(`cantidad` y `monto`), `facturas.por_estado`, `facturas.tendencia` (últimos 6 meses) y
+`notas_credito_debito.mes`. Los montos cuentan solo facturas **vigentes**; las notas van aparte.
+Trae `ambiente` (`PILOTO` = sandbox).
+
+### 2.13 Emisión masiva — `/masiva/{sucursal}/{pv}`
+
+Para alto volumen (servicios básicos, cobranzas): en vez de un viaje al SIN por factura, se mandan
+paquetes de hasta 500.
+
+1. `POST /masiva/{sucursal}/{pv}/abrir` → abre un lote en el punto de venta (si ya hay uno abierto,
+   devuelve ese).
+2. Emita con `POST /facturas` (o `/facturas/lote`) como siempre. Mientras el lote esté abierto, cada
+   factura sale con **tipo de emisión masiva** y queda en estado **`MASIVA`**: ya es válida, tiene CUF
+   y se puede imprimir, pero todavía no viajó.
+3. `POST /masiva/{sucursal}/{pv}/cerrar` → arma los paquetes y los manda en segundo plano. Lo que
+   emita después del cierre ya sale en línea.
+4. El resultado de cada factura llega por webhook (`factura.validada` / `factura.observada`).
+   `GET /masiva/{sucursal}/{pv}` muestra el lote, sus facturas por estado y sus paquetes.
+
+- **Requiere autorización del SIN** para emisión masiva en su NIT; sin ella el SIN rechaza el paquete
+  y las facturas quedan `OBSERVADA` con el motivo.
+- Si el SIAT cae con el lote abierto, manda la contingencia: lo que se emita sale fuera de línea.
+- Las notas de crédito-débito no entran al lote: se emiten en línea siempre.
+
+### 2.14 Autogestión: certificado y puntos de venta
+
+- `GET /certificado` → `vence_el`, `vigente`, `dias_restantes`, `de_prueba`. Nunca devuelve el
+  certificado ni su contraseña.
+- `POST /certificado` (`multipart/form-data`: `archivo` = el `.p12`, `passphrase`) → lo abre antes
+  de guardarlo; si no abre, responde `422` y **el anterior sigue activo**. Renuévelo antes de que
+  venza: con el certificado vencido no se puede firmar.
+- `POST /puntos-venta/registrar-siat` (`sucursal`, `nombre`, `tipo_punto_venta`) → da de alta un
+  punto de venta **nuevo en el SIN** y le pide CUIS y CUFD. **Irreversible**: el SIN crea uno nuevo en
+  cada llamada y asigna él el código; no se borra, solo se cierra. Mire antes `GET /puntos-venta`.
+  Si responde `502` con "NO reintentes", el SIN pudo haberlo creado igual: avise al proveedor.
 
 ---
 
@@ -528,8 +723,11 @@ Todas las respuestas de error traen `"exito": false`.
 | 403 | `PERMISO_INSUFICIENTE` | El perfil del token no incluye esa operación | Usar un token con el perfil adecuado |
 | 403 | `EMPRESA_NO_HABILITADA` | La empresa no está en `PRODUCCION` | Esperar la habilitación |
 | 404 | — | CUF o punto de venta inexistente / inactivo | Revisar códigos |
-| 409 | `FACTURA_NO_ANULABLE` | Anular algo que el SIN no conoce | — |
+| 409 | `FACTURA_NO_ANULABLE` | Anular algo que el SIN no conoce, o con notas vigentes | — |
+| 409 | `FACTURA_NO_REVERTIBLE` | Revertir algo no anulado, sin confirmar o administrativo | Leer `mensaje` |
+| 502 | `SIAT_NO_REVIRTIO` | El SIN rechazó la reversión o no respondió | Reintentar; si persiste, avisar al proveedor |
 | 422 | — (formato Laravel `message` + `errors`) | El JSON no cumple la forma (tipos, obligatorios, `moneda`, `anticipo`…) | Corregir el campo indicado |
+| 422 | `NOTA_INVALIDA` + `detalles[]` | Devolución imposible: factura no validada, cantidad mayor a la pendiente, línea inexistente, contingencia | Corregir la devolución o reintentar cuando vuelva el SIAT |
 | 422 | `FACTURA_INVALIDA` + `detalles[]` | Reglas de negocio: descuentos, gift card, producto no homologado, punto de venta no registrado en el SIN, sin certificado | Corregir la venta |
 | 429 | `DEMASIADAS_PETICIONES` | Límite por minuto | Esperar `Retry-After` |
 | 409 | `PUNTO_VENTA_NO_REGISTRADO` | Forzar CUFD en un punto de venta que el SIN no conoce | — |
@@ -561,6 +759,7 @@ Ejemplo de `FACTURA_INVALIDA`:
 | `OBSERVADA` | Rechazada por el SIN. El porqué viene en `motivo_observacion` (y en el webhook). Requiere revisión con el proveedor |
 | `CONTINGENCIA` | Emitida sin conexión con el SIN; válida, se enviará cuando vuelva |
 | `ANULADA` | Anulada |
+| `MASIVA` | Emitida en un lote de emisión masiva abierto: válida, viaja al cerrar el lote (§2.13) |
 
 ---
 
@@ -585,9 +784,10 @@ Content-Type: application/json
 X-Siat-Evento: factura.validada
 X-Siat-Signature: sha256=5d41402abc4b2a76b9719d911017c592...
 
-{"evento":"factura.validada","cuf":"4A1B...","referencia_externa":"VENTA-000123","estado":"VALIDADA","codigo_recepcion":"1234567","url_publica":"https://{dominio}/factura/4A1B...?signature=...","motivo":null,"emitido_en":"2026-10-11T10:16:03-04:00"}
+{"evento":"factura.validada","tipo_documento":"FACTURA","cuf":"4A1B...","referencia_externa":"VENTA-000123","estado":"VALIDADA","codigo_recepcion":"1234567","url_publica":"https://{dominio}/factura/4A1B...?signature=...","motivo":null,"emitido_en":"2026-10-11T10:16:03-04:00"}
 ```
 
+- `tipo_documento` es `FACTURA` o `NOTA_CREDITO_DEBITO`: las notas avisan con los mismos eventos.
 - `motivo` trae el porqué en `factura.observada` (ej. `"[1001] HASH INVALIDO"`) y en
   `factura.anulacion_rechazada`; en los demás eventos es `null`.
 - Debe responder `2xx`. Si no, se reintenta 5 veces (10, 30, 60, 120 s).
@@ -622,6 +822,47 @@ const valida = crypto.timingSafeEqual(Buffer.from(esperada), Buffer.from(req.get
 > Verifique sobre el cuerpo **crudo**, antes de parsear el JSON: re-serializarlo puede cambiar
 > el orden o el escapado y la firma deja de coincidir.
 
+### 5.4 Varios destinos, por evento, con historial (`/webhooks`)
+
+Además del webhook único que configura el proveedor, su sistema puede registrar **sus propios
+destinos** (hasta 10), cada uno suscrito a lo que le interesa y con **su propio secreto**:
+
+```bash
+curl -s -X POST "$SIAT_API_URL/webhooks" -H "Authorization: Bearer $SIAT_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://erp.miempresa.bo/siat", "eventos": ["factura.*", "siat.*"], "descripcion": "ERP"}'
+```
+
+La respuesta trae el `secreto` (`whsec_…`) **una sola vez**. Eventos: `*`, un grupo (`factura.*`,
+`siat.*`, `certificado.*`, `cufd.*`) o uno exacto:
+
+| Evento | Cuándo |
+|---|---|
+| `factura.validada`, `factura.observada`, `factura.anulada`, `factura.anulacion_rechazada`, `factura.anulacion_revertida` | Igual que §5.1 |
+| `siat.conexion_perdida` | El SIAT dejó de responder: un punto de venta pasó a contingencia (sigue facturando fuera de línea) |
+| `siat.conexion_restablecida` | Volvió: se cierra la contingencia y se envían las facturas pendientes |
+| `certificado.por_vencer` | El certificado vence en 30, 15, 7, 3 o 1 días, o ya venció |
+| `cufd.renovacion_fallida` | No se pudo renovar el CUFD de un punto de venta |
+
+Cada aviso a estos destinos:
+
+```http
+POST {url}
+X-Siat-Evento: siat.conexion_perdida
+X-Siat-Entrega: 2f6c1d3e-…            (id único: úselo para deduplicar)
+X-Siat-Signature: sha256=…            (HMAC-SHA256 del cuerpo con el secreto de ESE destino)
+
+{"id":"2f6c1d3e-…","evento":"siat.conexion_perdida","ambiente":"PRODUCCION","emitido_en":"…","datos":{"sucursal":0,"punto_venta":1,"desde":"…"}}
+```
+
+- Los datos de los eventos `factura.*` son los mismos campos que en §5.2 (`cuf`, `estado`,
+  `url_publica`, `motivo`…).
+- Se reintenta 7 veces (10 s, 30 s, 1 min, 5 min, 15 min, 30 min, 1 h). Agotado, queda `FALLIDA`.
+- `GET /webhooks/{id}/entregas` muestra cada aviso con su estado, intentos, código HTTP de su
+  servidor y el cuerpo exacto; `POST /webhooks/entregas/{id}/reenviar` lo vuelve a mandar con el
+  mismo id. `POST /webhooks/{id}/rotar-secreto` cambia el secreto (el anterior deja de valer en el
+  acto). `PUT /webhooks/{id}` con `"activo": false` lo pausa.
+
 ---
 
 ## 6. Recomendaciones de integración
@@ -634,6 +875,24 @@ const valida = crypto.timingSafeEqual(Buffer.from(esperada), Buffer.from(req.get
 5. Use los catálogos de la API para unidades de medida, métodos de pago y documentos.
 6. Use solo productos homologados (`GET /catalogos/productos`).
 7. Ante `OBSERVADA` u `anulacion_rechazada`, contacte al proveedor: el motivo queda registrado.
+
+---
+
+## 6.1 Agentes de IA (servidor MCP)
+
+La misma facturación está disponible como **servidor MCP** para agentes de IA (Claude, Cursor,
+VS Code y otros clientes MCP), en `https://{dominio}/mcp` (HTTP), con **el mismo token** en
+`Authorization: Bearer …`. Herramientas: `estado-integracion`, `emitir-factura`,
+`consultar-factura`, `listar-facturas`, `anular-factura` y `emitir-nota-credito-debito`. Cada una
+exige el mismo permiso que su endpoint: con un token de caja, un agente tampoco puede anular. Con un
+token `siat_test_` el agente factura en el piloto, sin validez fiscal.
+
+Ejemplo de configuración de cliente:
+
+```json
+{ "mcpServers": { "facturacion": { "type": "http", "url": "https://{dominio}/mcp",
+    "headers": { "Authorization": "Bearer 12|siat_test_..." } } } }
+```
 
 ---
 
@@ -678,11 +937,13 @@ Abra el entorno y reemplace los valores:
 | Variable | Qué poner | Ejemplo |
 |---|---|---|
 | `base_url` | La URL base que le dio el proveedor, **terminada en `/api/v1`** | `https://facturas.proveedor.bo/api/v1` |
-| `token` | El token que le entregó el **sistema de facturación** (su proveedor), **completo, con el número y la barra**. No se obtiene por la API | `12\|siat_4f8a...c91e` |
+| `token` | El token que le entregó el **sistema de facturación** (su proveedor), **completo, con el número y la barra**. No se obtiene por la API | `12\|siat_live_4f8a...c91e` |
 | `sucursal` | Su código de sucursal (0 = casa matriz) | `0` |
 | `punto_venta` | Su código de punto de venta | `0` |
 | `venta_id` | El id de **su** venta. Cámbielo para cada venta nueva | `VENTA-0001` |
 | `cuf` | **Déjelo vacío**: se llena solo al emitir | |
+| `cuf_nota` | **Déjelo vacío**: se llena solo al emitir una nota de crédito-débito | |
+| `webhook_id`, `entrega_id` | **Déjelos vacíos**: se llenan solos en la carpeta 9 | |
 
 **Guarde** el entorno (Ctrl+S en Postman, botón *Save* en Thunder).
 
@@ -757,7 +1018,16 @@ entorno (`VENTA-0002`).
 - **Descargar XML firmado** → el documento legal.
 - **Buscar por su id de venta** → encuentra la factura con su `venta_id`, útil si se cortó la red.
 
-#### 6. Anular (solo si su token es de perfil *Administración*)
+#### 6. Devolución — nota de crédito-débito (perfil *Administración*)
+Con la factura ya `VALIDADA`:
+
+- **Emitir nota de crédito-débito** → devuelve 1 unidad de la línea 1. Responde 201 y guarda el
+  CUF de la nota en la variable `cuf_nota`.
+- **Notas de la factura** → la lista de notas de esa factura.
+- **Anular la nota** → igual que anular una factura, con el CUF de la nota. Hace falta para el paso
+  siguiente: **una factura con notas vigentes no se puede anular**.
+
+#### 7. Anular y revertir (solo si su token es de perfil *Administración*)
 **Antes**, ejecute **Estado de la factura emitida** y confirme que ya **no** está `PENDIENTE`
 (debe decir `RECIBIDA` o `VALIDADA`). Una factura `PENDIENTE` todavía no llegó al SIN y no se puede
 anular: responde `409 FACTURA_NO_ANULABLE`. Espere unos segundos y vuelva a mirar.
@@ -766,9 +1036,25 @@ anular: responde `409 FACTURA_NO_ANULABLE`. Espere unos segundos y vuelva a mira
 en segundo plano. Con un token de perfil *Caja / POS* responde `403 PERMISO_INSUFICIENTE`: es lo
 esperado.
 
-#### 7. Códigos del SIN
+**Revertir la anulación** → cuando la anulación ya está `CONFIRMADA` (mire `anulacion.estado` en
+**Estado de la factura emitida**), la factura vuelve a estar vigente. Solo una vez.
+
+**Anulación administrativa (fuera de plazo)** → registra una anulación que el SIN aprobó por trámite,
+con su número de resolución. No llama al SIAT.
+
+#### 8. Códigos del SIN
 Solo para mirar: la API maneja el CUIS y el CUFD sola. **Forzar CUFD nuevo** es una emergencia;
 no la use en pruebas normales.
+
+#### 9. Webhooks (perfil *Administración*)
+**Registrar webhook** guarda el `webhook_id` (y le muestra el secreto una vez). **Historial de
+entregas** guarda la última en `entrega_id` para probar **Reenviar una entrega**. Cambie la `url`
+del cuerpo por una suya (https y pública; para mirar lo que llega sirve un servicio como
+webhook.site).
+
+#### 10. Emisión masiva
+**Abrir lote masivo** → emita una o más facturas (carpeta 4) → **Estado del lote** → **Cerrar lote
+masivo**. Solo si el SIN autorizó la emisión masiva para su NIT.
 
 ---
 

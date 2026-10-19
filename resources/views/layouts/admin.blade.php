@@ -221,6 +221,9 @@
                 <a href="{{ route('admin.monitor') }}" class="{{ request()->routeIs('admin.monitor') ? 'activo' : '' }}">
                     <span class="ic">◷</span> Monitor
                 </a>
+                <a href="{{ route('admin.comunicacion.index') }}" class="{{ request()->routeIs('admin.comunicacion.*') ? 'activo' : '' }}">
+                    <span class="ic">⇄</span> Comunicacion SIAT
+                </a>
             </nav>
 
             <div class="grupo">Integracion</div>
@@ -259,6 +262,15 @@
                      sin este bloque esos mensajes se perdian sin mostrarse. --}}
                 @if (session('error'))
                     <div class="aviso-error">{{ session('error') }}</div>
+                @endif
+                {{-- Errores de validacion de cualquier formulario del panel: sin
+                     esto un dato rechazado volvia a la pantalla sin decir por que. --}}
+                @if ($errors->any())
+                    <div class="aviso-error">
+                        @foreach ($errors->all() as $mensaje)
+                            <div>{{ $mensaje }}</div>
+                        @endforeach
+                    </div>
                 @endif
                 @if (session('token_api'))
                     <div class="clave">Token de API (copielo ahora, no se vuelve a mostrar): {{ session('token_api') }}</div>

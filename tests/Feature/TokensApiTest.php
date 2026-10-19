@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\Catalogo;
 use App\Models\Empresa;
 use App\Models\Factura;
 use App\Models\FacturaAnulada;
@@ -105,6 +106,7 @@ test('cada perfil solo llega a lo que sus permisos permiten', function (string $
 ]);
 
 test('la API no anula de nuevo una factura cuya anulacion ya se revirtio', function () {
+    Catalogo::factory()->create(['tipo' => 'motivos_anulacion', 'codigo_clasificador' => '1', 'descripcion' => 'FACTURA MAL EMITIDA']);
     $empresa = Empresa::factory()->create();
     $factura = Factura::factory()->for($empresa)->create(['estado' => Factura::ESTADO_VALIDADA]);
     FacturaAnulada::create([

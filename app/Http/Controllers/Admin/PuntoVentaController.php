@@ -7,9 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\PuntoVenta;
 use App\Models\Sucursal;
 use App\Services\Panel\PuntosVentaSiat;
-use App\Services\Siat\FabricaServicios;
-use App\Services\Siat\GestorCodigos;
-use App\Services\Siat\RespuestaSiat;
+use App\Services\Panel\RegistradorPuntoVenta;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 
@@ -51,62 +49,22 @@ class PuntoVentaController extends Controller
      * Antes de llegar aca conviene mirar la lista del SIN: casi siempre lo que
      * se busca ya existe y alcanza con «Configurar aca».
      */
-    public function registrarEnSiat(
-        Request $request,
-        Sucursal $sucursal,
-        FabricaServicios $fabrica,
-        PuntosVentaSiat $puntosVentaSiat,
-        GestorCodigos $gestor,
-    ): RedirectResponse {
+    public function registrarEnSiat(Request $request, Sucursal $sucursal, RegistradorPuntoVenta $registrador): RedirectResponse
+    {
         $datos = $request->validate([
             'nombre' => ['required', 'string', 'max:255'],
             'tipo_punto_venta' => ['required', 'integer'],
         ]);
 
         try {
-            $respuesta = RespuestaSiat::desde(
-                $fabrica->operaciones($sucursal->empresa)->registrarPuntoVentaPara(
-                    (int) $sucursal->codigo_sucursal,
-                    $datos['nombre'],
-                    (int) $datos['tipo_punto_venta'],
-                    $puntosVentaSiat->cuisParaConsultar($sucursal),
-                ),
-                'RespuestaRegistroPuntoVenta',
-            );
+            $puntoVenta = $registrador->registrar($sucursal, $datos['nombre'], (int) $datos['tipo_punto_venta']);
         } catch (SiatException $e) {
-            return $this->volver($sucursal, 'No se pudo registrar: '.$e->getMessage());
+            return $this->volver($sucursal, $e->getMessage());
         }
-
-        if (! $respuesta->aceptada) {
-            return $this->volver($sucursal, 'El SIN rechazo el registro: '.$respuesta->motivo());
-        }
-
-        $codigo = data_get($respuesta->crudo, 'codigoPuntoVenta');
-
-        if (blank($codigo)) {
-            // Peligroso: el SIN pudo haberlo creado igual. Se avisa para que se
-            // consulte la lista en vez de reintentar a ciegas y duplicar.
-            return $this->volver(
-                $sucursal,
-                'El SIN acepto el registro pero no devolvio el codigo. NO reintentes: consulta la lista del SIAT para ver si quedo creado.',
-            );
-        }
-
-        $puntoVenta = $sucursal->puntosVenta()->create([
-            'codigo_punto_venta' => (int) $codigo,
-            'nombre' => $datos['nombre'],
-            'tipo_punto_venta' => (int) $datos['tipo_punto_venta'],
-            'siguiente_factura' => 1,
-            'activo' => true,
-            'registrado_en_siat' => now(),
-        ]);
-
-        // La lista cacheada quedo vieja: ahora hay uno mas del otro lado.
-        $puntosVentaSiat->olvidar($sucursal);
 
         return $this->volver(
             $sucursal,
-            "El SIN creo el punto de venta {$puntoVenta->codigo_punto_venta}. ".$this->pedirCodigos($gestor, $puntoVenta),
+            "El SIN creo el punto de venta {$puntoVenta->codigo_punto_venta}. ".$registrador->pedirCodigos($puntoVenta),
         );
     }
 
@@ -121,7 +79,7 @@ class PuntoVentaController extends Controller
      * No se llama a registroPuntoVenta: el punto de venta ya esta del otro lado.
      * Llamarlo crearia OTRO con un codigo nuevo, y no se puede borrar.
      */
-    public function configurar(Request $request, Sucursal $sucursal, GestorCodigos $gestor): RedirectResponse
+    public function configurar(Request $request, Sucursal $sucursal, RegistradorPuntoVenta $registrador): RedirectResponse
     {
         $datos = $request->validate([
             'codigo_punto_venta' => ['required', 'integer', 'min:0'],
@@ -149,31 +107,7 @@ class PuntoVentaController extends Controller
             'registrado_en_siat' => now(),
         ]);
 
-        return $this->volver($sucursal, "Punto de venta {$puntoVenta->codigo_punto_venta} configurado. ".$this->pedirCodigos($gestor, $puntoVenta));
-    }
-
-    /**
-     * Le pide CUIS y CUFD al SIN, best-effort.
-     *
-     * Si el SIAT no responde, el punto de venta igual queda configurado y el
-     * operador reintenta con los botones de la ficha: una caida del SIN no
-     * puede dejar el alta a medias.
-     */
-    private function pedirCodigos(GestorCodigos $gestor, PuntoVenta $puntoVenta): string
-    {
-        try {
-            $gestor->solicitarCuis($puntoVenta);
-        } catch (SiatException $e) {
-            return "El CUIS no se pudo pedir: {$e->getMessage()}";
-        }
-
-        try {
-            $gestor->solicitarCufd($puntoVenta);
-        } catch (SiatException $e) {
-            return "CUIS obtenido. El CUFD no se pudo pedir: {$e->getMessage()}";
-        }
-
-        return 'Ya tiene CUIS y CUFD vigentes.';
+        return $this->volver($sucursal, "Punto de venta {$puntoVenta->codigo_punto_venta} configurado. ".$registrador->pedirCodigos($puntoVenta));
     }
 
     /**

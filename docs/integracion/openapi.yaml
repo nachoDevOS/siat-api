@@ -22,7 +22,7 @@ info:
     sistema de facturación (su proveedor) desde su panel y se lo entrega a usted.
 
     ```http
-    Authorization: Bearer 12|siat_4f8a...c91e
+    Authorization: Bearer 12|siat_live_4f8a...c91e
     ```
 
     - Hay **un token por empresa**: su sistema lo usa para todas sus sucursales y cajas (cada venta
@@ -127,6 +127,10 @@ tags:
   - name: Códigos
   - name: NIT
   - name: Facturas
+  - name: Notas crédito-débito
+  - name: Emisión masiva
+  - name: Webhooks
+  - name: Autogestión
 
 paths:
   /estado:
@@ -148,6 +152,8 @@ paths:
                     properties:
                       estado: { type: string, example: PRODUCCION }
                       en_produccion: { type: boolean }
+                      ambiente: { type: string, enum: [PILOTO, PRODUCCION], description: "PILOTO = sandbox (token siat_test_)" }
+                      validez_fiscal: { type: boolean, description: "false en el sandbox: lo emitido no vale ante el SIN" }
                   puntos_venta_activos: { type: integer }
                   puntos_venta_registrados_en_siat: { type: integer }
                   puntos_venta_con_cufd: { type: integer }
@@ -375,6 +381,10 @@ paths:
         - { name: sucursal, in: query, schema: { type: integer, minimum: 0 }, description: "Va junto con punto_venta" }
         - { name: punto_venta, in: query, schema: { type: integer, minimum: 0 } }
         - { name: referencia_externa, in: query, schema: { type: string, maxLength: 100 }, description: "Su id de venta (clave de idempotencia)" }
+        - name: tipo
+          in: query
+          description: "Por defecto solo facturas. `nota` = solo notas de crédito-débito, `todos` = ambas"
+          schema: { type: string, enum: [factura, nota, todos], default: factura }
         - { name: hasta, in: query, schema: { type: string, format: date } }
         - { name: page, in: query, schema: { type: integer, minimum: 1 } }
       responses:
@@ -498,7 +508,7 @@ paths:
               type: object
               required: [motivo]
               properties:
-                motivo: { type: integer, description: "Catálogo motivos_anulacion" }
+                motivo: { type: integer, description: "Catálogo motivos_anulacion (otro código responde 422)" }
       responses:
         "200":
           description: Anulación registrada (o ya estaba anulada)
@@ -514,6 +524,500 @@ paths:
         "403": { $ref: "#/components/responses/Prohibido" }
         "404": { $ref: "#/components/responses/NoEncontrado" }
         "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+
+  /facturas/{cuf}/revertir-anulacion:
+    post:
+      tags: [Facturas]
+      summary: Revertir una anulación
+      description: |
+        La factura (o nota) anulada vuelve a quedar vigente ante el SIN. Es síncrono: responde con lo que
+        dijo el SIN. Solo una anulación **confirmada** por servicio web (webhook `factura.anulada`), y una
+        sola vez: después de revertir, la factura ya no se puede anular por servicio web. Una anulación
+        administrativa no se revierte.
+      x-permiso: facturas:anular
+      parameters: [{ $ref: "#/components/parameters/Cuf" }]
+      responses:
+        "200":
+          description: Revertida
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean }
+                  mensaje: { type: string }
+                  factura: { $ref: "#/components/schemas/Factura" }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+        "403": { $ref: "#/components/responses/Prohibido" }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+        "409": { $ref: "#/components/responses/Error" }
+        "502":
+          description: SIAT_NO_REVIRTIO — el SIN rechazó la reversión o no respondió; la factura sigue anulada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /facturas/{cuf}/anulacion-administrativa:
+    post:
+      tags: [Facturas]
+      summary: Registrar una anulación administrativa (fuera de plazo)
+      description: |
+        Pasado el plazo del servicio web (día 9 del mes siguiente) la anulación se tramita ante el SIN.
+        Cuando el SIN la aprueba, regístrela acá con el número de resolución: queda `CONFIRMADA` al
+        instante, sin llamar al SIAT, y llega el webhook `factura.anulada`. No se revierte por servicio web.
+      x-permiso: facturas:anular
+      parameters: [{ $ref: "#/components/parameters/Cuf" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resolucion, motivo]
+              properties:
+                resolucion: { type: string, maxLength: 100, description: "Número de la resolución del SIN que aprobó la anulación" }
+                motivo: { type: integer, description: "Catálogo motivos_anulacion" }
+      responses:
+        "200":
+          description: Registrada (o ya estaba anulada)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean }
+                  mensaje: { type: string }
+                  cuf: { type: string }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+        "403": { $ref: "#/components/responses/Prohibido" }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+
+  /facturas/{cuf}/notas:
+    get:
+      tags: [Notas crédito-débito]
+      summary: Notas de crédito-débito de una factura
+      x-permiso: facturas:leer
+      parameters: [{ $ref: "#/components/parameters/Cuf" }]
+      responses:
+        "200":
+          description: Notas, de la más nueva a la más vieja
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean }
+                  notas:
+                    type: array
+                    items: { $ref: "#/components/schemas/Factura" }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+        "403": { $ref: "#/components/responses/Prohibido" }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+    post:
+      tags: [Notas crédito-débito]
+      summary: Emitir una nota de crédito-débito (devolución)
+      description: |
+        Devolución total o parcial de una factura **VALIDADA** (documento sector 24). Solo se indica qué se
+        devuelve: la `linea` de la factura (posición desde 1, en el orden en que se envió en la venta) y la
+        `cantidad`. Precios, descuentos y el 13% de crédito fiscal salen de la factura.
+
+        La nota tiene su propio CUF y su propio correlativo; se consulta, descarga y anula con los endpoints
+        de `/facturas/{cuf}`, y su estado llega con los mismos webhooks `factura.*` (`tipo_documento` =
+        `NOTA_CREDITO_DEBITO`). Solo se emite en línea: con el SIAT caído (contingencia) responde 422.
+        Una factura con notas vigentes no se puede anular. Exige la empresa en `PRODUCCION`. Idempotente
+        por `referencia_externa` / `X-Idempotency-Key`. Pide el mismo permiso que anular.
+      x-permiso: facturas:anular
+      parameters:
+        - { $ref: "#/components/parameters/Cuf" }
+        - name: X-Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, maxLength: 100 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Devolucion" }
+      responses:
+        "201":
+          description: Emitida
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean }
+                  nota: { $ref: "#/components/schemas/Factura" }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+        "403": { $ref: "#/components/responses/Prohibido" }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+        "422":
+          description: Forma inválida (formato Laravel) o NOTA_INVALIDA con `detalles` (factura no validada, cantidad mayor a la pendiente de devolver, contingencia…)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /dashboard:
+    get:
+      tags: [Facturas]
+      summary: Resumen de lo facturado
+      description: Cuenta solo facturas vigentes (no anuladas); las notas de crédito-débito van aparte.
+      x-permiso: facturas:leer
+      responses:
+        "200":
+          description: Resumen
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean }
+                  ambiente: { type: string, enum: [PILOTO, PRODUCCION] }
+                  facturas:
+                    type: object
+                    properties:
+                      total: { type: integer }
+                      mes: { type: object, properties: { cantidad: { type: integer }, monto: { type: number } } }
+                      anio: { type: object, properties: { cantidad: { type: integer }, monto: { type: number } } }
+                      por_estado: { type: object, additionalProperties: { type: integer } }
+                      tendencia:
+                        type: array
+                        items: { type: object, properties: { mes: { type: string, example: "2026-10" }, cantidad: { type: integer }, monto: { type: number } } }
+                  notas_credito_debito:
+                    type: object
+                    properties:
+                      mes: { type: object, properties: { cantidad: { type: integer }, monto_devuelto: { type: number } } }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+
+  /facturas/lote:
+    post:
+      tags: [Facturas]
+      summary: Emitir hasta 20 ventas en una petición
+      description: |
+        Cada venta se emite por separado (como `POST /facturas`) y viaja sola al SIN; una rechazada no frena
+        a las demás. `referencia_externa` es **obligatoria** en cada venta: reintentar el lote no duplica.
+        No es la emisión masiva del SIN (ver `/masiva`).
+      x-permiso: facturas:emitir
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ventas]
+              properties:
+                ventas:
+                  type: array
+                  minItems: 1
+                  maxItems: 20
+                  items: { $ref: "#/components/schemas/Venta" }
+      responses:
+        "200":
+          description: Resultado de cada venta, en el mismo orden
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean, description: "true solo si se emitieron todas" }
+                  emitidas: { type: integer }
+                  rechazadas: { type: integer }
+                  resultados:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        indice: { type: integer }
+                        referencia_externa: { type: string }
+                        exito: { type: boolean }
+                        factura: { $ref: "#/components/schemas/Factura" }
+                        error: { type: string, enum: [FACTURA_INVALIDA, SIAT_NO_DISPONIBLE, PUNTO_VENTA_NO_ENCONTRADO] }
+                        detalles: { type: array, items: { type: string } }
+                        mensaje: { type: string }
+        "401": { $ref: "#/components/responses/NoAutenticado" }
+        "403": { $ref: "#/components/responses/Prohibido" }
+        "422": { $ref: "#/components/responses/Error" }
+
+  /masiva/{sucursal}/{puntoVenta}:
+    get:
+      tags: [Emisión masiva]
+      summary: Lote de emisión masiva del punto de venta (abierto o el último)
+      x-permiso: facturas:leer
+      parameters:
+        - { $ref: "#/components/parameters/Sucursal" }
+        - { $ref: "#/components/parameters/PuntoVenta" }
+      responses:
+        "200":
+          description: Lote, o null si nunca se abrió uno
+          content:
+            application/json:
+              schema: { type: object, properties: { exito: { type: boolean }, lote: { $ref: "#/components/schemas/LoteMasivo" } } }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+
+  /masiva/{sucursal}/{puntoVenta}/abrir:
+    post:
+      tags: [Emisión masiva]
+      summary: Abrir un lote de emisión masiva
+      description: |
+        Mientras el lote está abierto, lo que se emita en el punto de venta (con `POST /facturas`) sale con
+        tipo de emisión masiva y queda `MASIVA`: válido e imprimible, sin enviar. Idempotente. Requiere que el
+        SIN haya autorizado la emisión masiva para el NIT.
+      x-permiso: facturas:emitir
+      parameters:
+        - { $ref: "#/components/parameters/Sucursal" }
+        - { $ref: "#/components/parameters/PuntoVenta" }
+      responses:
+        "201":
+          description: Lote abierto
+          content:
+            application/json:
+              schema: { type: object, properties: { exito: { type: boolean }, lote: { $ref: "#/components/schemas/LoteMasivo" } } }
+        "403": { $ref: "#/components/responses/Prohibido" }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+
+  /masiva/{sucursal}/{puntoVenta}/cerrar:
+    post:
+      tags: [Emisión masiva]
+      summary: Cerrar el lote y enviarlo al SIN
+      description: |
+        Arma paquetes de hasta 500 facturas y los envía en segundo plano (recepcionMasivaFactura). El
+        resultado de cada factura llega por webhook (`factura.validada` / `factura.observada`).
+      x-permiso: facturas:emitir
+      parameters:
+        - { $ref: "#/components/parameters/Sucursal" }
+        - { $ref: "#/components/parameters/PuntoVenta" }
+      responses:
+        "200":
+          description: Lote cerrado con sus paquetes
+          content:
+            application/json:
+              schema: { type: object, properties: { exito: { type: boolean }, mensaje: { type: string }, lote: { $ref: "#/components/schemas/LoteMasivo" } } }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /webhooks:
+    get:
+      tags: [Webhooks]
+      summary: Destinos de webhook registrados
+      x-permiso: webhooks:gestionar
+      responses:
+        "200":
+          description: Destinos y eventos disponibles
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean }
+                  webhooks: { type: array, items: { $ref: "#/components/schemas/Webhook" } }
+                  eventos_disponibles: { type: object, additionalProperties: { type: string } }
+        "403": { $ref: "#/components/responses/Prohibido" }
+    post:
+      tags: [Webhooks]
+      summary: Registrar un destino de webhook
+      description: |
+        URL https pública que recibe los eventos elegidos (`*`, `factura.*`, `siat.*`, `certificado.*`,
+        `cufd.*` o uno exacto). La respuesta trae el `secreto` (`whsec_...`) una sola vez. Cada aviso llega con
+        `X-Siat-Evento`, `X-Siat-Entrega` (id para deduplicar) y `X-Siat-Signature: sha256=HMAC(cuerpo, secreto)`.
+        Máximo 10 por empresa.
+      x-permiso: webhooks:gestionar
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, eventos]
+              properties:
+                url: { type: string, format: uri }
+                eventos: { type: array, items: { type: string }, example: ["factura.*", "siat.*"] }
+                descripcion: { type: string, nullable: true }
+      responses:
+        "201":
+          description: Registrado (incluye `secreto`)
+          content:
+            application/json:
+              schema: { type: object, properties: { exito: { type: boolean }, webhook: { $ref: "#/components/schemas/Webhook" }, mensaje: { type: string } } }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+
+  /webhooks/{id}:
+    get:
+      tags: [Webhooks]
+      summary: Ver un destino
+      x-permiso: webhooks:gestionar
+      parameters: [{ $ref: "#/components/parameters/WebhookId" }]
+      responses:
+        "200":
+          description: Destino (sin secreto)
+          content:
+            application/json:
+              schema: { type: object, properties: { exito: { type: boolean }, webhook: { $ref: "#/components/schemas/Webhook" } } }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+    put:
+      tags: [Webhooks]
+      summary: Actualizar un destino
+      x-permiso: webhooks:gestionar
+      parameters: [{ $ref: "#/components/parameters/WebhookId" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url: { type: string, format: uri }
+                eventos: { type: array, items: { type: string } }
+                descripcion: { type: string, nullable: true }
+                activo: { type: boolean }
+      responses:
+        "200":
+          description: Actualizado
+          content:
+            application/json:
+              schema: { type: object, properties: { exito: { type: boolean }, webhook: { $ref: "#/components/schemas/Webhook" } } }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+        "422": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [Webhooks]
+      summary: Eliminar un destino y su historial
+      x-permiso: webhooks:gestionar
+      parameters: [{ $ref: "#/components/parameters/WebhookId" }]
+      responses:
+        "200": { description: Eliminado }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+
+  /webhooks/{id}/rotar-secreto:
+    post:
+      tags: [Webhooks]
+      summary: Rotar el secreto de firma
+      description: El anterior deja de firmar en el acto. El nuevo se muestra una sola vez.
+      x-permiso: webhooks:gestionar
+      parameters: [{ $ref: "#/components/parameters/WebhookId" }]
+      responses:
+        "200":
+          description: Secreto nuevo
+          content:
+            application/json:
+              schema: { type: object, properties: { exito: { type: boolean }, webhook: { $ref: "#/components/schemas/Webhook" } } }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+
+  /webhooks/{id}/entregas:
+    get:
+      tags: [Webhooks]
+      summary: Historial de entregas (50 por página)
+      x-permiso: webhooks:gestionar
+      parameters:
+        - { $ref: "#/components/parameters/WebhookId" }
+        - name: estado
+          in: query
+          schema: { type: string, enum: [PENDIENTE, ENTREGADA, FALLIDA] }
+      responses:
+        "200":
+          description: Entregas, la más nueva primero
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exito: { type: boolean }
+                  entregas:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        evento: { type: string }
+                        estado: { type: string, enum: [PENDIENTE, ENTREGADA, FALLIDA] }
+                        intentos: { type: integer }
+                        codigo_http: { type: integer, nullable: true }
+                        error: { type: string, nullable: true }
+                        creada_en: { type: string, format: date-time }
+                        entregada_en: { type: string, format: date-time, nullable: true }
+                        cuerpo: { type: object }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+
+  /webhooks/entregas/{uuid}/reenviar:
+    post:
+      tags: [Webhooks]
+      summary: Reenviar una entrega
+      description: Mismo cuerpo y mismo id de entrega (`X-Siat-Entrega`).
+      x-permiso: webhooks:gestionar
+      parameters:
+        - { name: uuid, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "202": { description: Reenvío encolado }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+
+  /certificado:
+    get:
+      tags: [Autogestión]
+      summary: Estado del certificado digital
+      description: Nunca devuelve el certificado ni su contraseña.
+      x-permiso: estructura:leer
+      responses:
+        "200":
+          description: Certificado activo (null si no hay)
+          content:
+            application/json:
+              schema: { type: object, properties: { exito: { type: boolean }, certificado: { $ref: "#/components/schemas/CertificadoEstado" } } }
+    post:
+      tags: [Autogestión]
+      summary: Cargar un certificado .p12
+      description: Se abre antes de guardar; si no abre, el anterior sigue activo (422).
+      x-permiso: estructura:gestionar
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [archivo, passphrase]
+              properties:
+                archivo: { type: string, format: binary }
+                passphrase: { type: string }
+      responses:
+        "201":
+          description: Cargado y activo
+          content:
+            application/json:
+              schema: { type: object, properties: { exito: { type: boolean }, certificado: { $ref: "#/components/schemas/CertificadoEstado" } } }
+        "422": { $ref: "#/components/responses/Error" }
+
+  /puntos-venta/registrar-siat:
+    post:
+      tags: [Autogestión]
+      summary: Registrar un punto de venta NUEVO en el SIN
+      description: |
+        **IRREVERSIBLE**: el SIN crea uno nuevo en cada llamada (no se borra, solo se cierra) y asigna él el
+        código. Revise `GET /puntos-venta` antes. Después pide CUIS y CUFD.
+      x-permiso: estructura:gestionar
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sucursal, nombre, tipo_punto_venta]
+              properties:
+                sucursal: { type: integer, minimum: 0 }
+                nombre: { type: string, maxLength: 255 }
+                tipo_punto_venta: { type: integer, minimum: 1 }
+      responses:
+        "201":
+          description: Creado en el SIN
+          content:
+            application/json:
+              schema: { type: object, properties: { exito: { type: boolean }, mensaje: { type: string }, punto_venta: { $ref: "#/components/schemas/PuntoVenta" } } }
+        "404": { $ref: "#/components/responses/NoEncontrado" }
+        "502":
+          description: REGISTRO_SIAT_FALLIDO (si dice "NO reintentes", consulte la lista del SIN antes)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
 components:
   securitySchemes:
@@ -521,8 +1025,8 @@ components:
       type: http
       scheme: bearer
       description: |
-        **Token de su empresa**, con el formato `12|siat_...`, en la cabecera
-        `Authorization: Bearer 12|siat_...` de **todas** las llamadas.
+        **Token de su empresa**, con el formato `12|siat_live_...` (o `siat_test_...` en pruebas), en la cabecera
+        `Authorization: Bearer 12|siat_live_...` de **todas** las llamadas.
 
         **El token NO se obtiene por esta API:** lo genera el **sistema de facturación (su
         proveedor)** desde su panel de administración y se lo entrega a usted **una sola vez**, por
@@ -548,6 +1052,11 @@ components:
       in: path
       required: true
       schema: { type: string }
+    WebhookId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer }
 
   responses:
     Error:
@@ -656,11 +1165,32 @@ components:
         items:
           - { codigo_producto_sin: 83141, descripcion: Martillo 16 oz, cantidad: 2, unidad_medida: 58, precio_unitario: 45.5, descuento: 1 }
 
+    Devolucion:
+      type: object
+      required: [items]
+      properties:
+        referencia_externa: { type: string, maxLength: 100, nullable: true, description: "Su id de la devolución (idempotencia)" }
+        usuario: { type: string, maxLength: 100, nullable: true }
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [linea, cantidad]
+            properties:
+              linea: { type: integer, minimum: 1, description: "Posición del item en la factura, desde 1" }
+              cantidad: { type: number, exclusiveMinimum: 0, description: "No más de lo que queda por devolver de esa línea" }
+      example:
+        items:
+          - { linea: 1, cantidad: 1 }
+
     Factura:
       type: object
       properties:
+        tipo_documento: { type: string, enum: [FACTURA, NOTA_CREDITO_DEBITO] }
+        documento_sector: { type: integer, example: 1, description: "1 = compra-venta, 24 = nota de crédito-débito" }
         cuf: { type: string }
-        numero_factura: { type: integer }
+        numero_factura: { type: integer, description: "En una nota, su número de nota (correlativo propio)" }
         sucursal: { type: integer }
         punto_venta: { type: integer }
         fecha_emision: { type: string, format: date-time }
@@ -671,13 +1201,75 @@ components:
         motivo_observacion: { type: string, nullable: true, description: "Por qué el SIN la observó (solo en OBSERVADA)", example: "[1001] HASH INVALIDO" }
         leyenda: { type: string, nullable: true }
         total: { type: number }
+        factura_origen:
+          type: object
+          description: "Solo en una nota: la factura que ajusta"
+          properties:
+            cuf: { type: string }
+            numero_factura: { type: integer }
+        monto_devuelto: { type: number, description: "Solo en una nota: suma de las líneas devueltas" }
+        descuento: { type: number, description: "Solo en una nota: parte del descuento adicional de la factura" }
+        monto_credito_debito: { type: number, description: "Solo en una nota: crédito fiscal revertido (13% del total devuelto)" }
         referencia_externa: { type: string, nullable: true }
+        anulacion:
+          type: object
+          description: "Solo si se pidió alguna vez la anulación"
+          properties:
+            tipo: { type: string, enum: [SIAT, ADMINISTRATIVA] }
+            estado: { type: string, enum: [PENDIENTE, CONFIRMADA, RECHAZADA, REVERTIDA] }
+            motivo: { type: integer }
+            numero_resolucion: { type: string, nullable: true, description: "Solo en la administrativa" }
+            anulada_en: { type: string, format: date-time }
         url_publica: { type: string, format: uri, description: "Página pública de la factura (sin token, enlace firmado). Para mostrarla o compartirla con el comprador" }
         url_publica_pdf: { type: string, format: uri, description: "PDF tamaño carta (sin token)" }
         url_publica_rollo: { type: string, format: uri, description: "PDF para impresora térmica de 80 mm (sin token)" }
+        url_publica_mini: { type: string, format: uri, description: "Mini ticket de caja: monto y QR, sin detalle (sin token)" }
+        url_publica_zip: { type: string, format: uri, description: "ZIP con XML firmado y PDF (sin token)" }
         url_verificacion: { type: string, format: uri }
         url_pdf: { type: string, format: uri }
         url_xml: { type: string, format: uri }
+
+    LoteMasivo:
+      type: object
+      nullable: true
+      properties:
+        id: { type: integer }
+        estado: { type: string, enum: [ABIERTO, CERRADO] }
+        abierto_en: { type: string, format: date-time }
+        cerrado_en: { type: string, format: date-time, nullable: true }
+        facturas: { type: integer }
+        facturas_por_estado: { type: object, additionalProperties: { type: integer } }
+        paquetes:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              estado: { type: string, enum: [PENDIENTE, ENVIADO, VALIDADO, OBSERVADO] }
+              cantidad_facturas: { type: integer }
+              codigo_recepcion: { type: string, nullable: true }
+              motivo_observacion: { type: string, nullable: true }
+
+    Webhook:
+      type: object
+      properties:
+        id: { type: integer }
+        url: { type: string, format: uri }
+        eventos: { type: array, items: { type: string } }
+        descripcion: { type: string, nullable: true }
+        activo: { type: boolean }
+        creado_en: { type: string, format: date-time }
+        secreto: { type: string, description: "Solo al crear o rotar", example: "whsec_..." }
+
+    CertificadoEstado:
+      type: object
+      nullable: true
+      properties:
+        vence_el: { type: string, format: date, nullable: true }
+        vigente: { type: boolean }
+        dias_restantes: { type: integer, nullable: true }
+        de_prueba: { type: boolean, description: "Autofirmado: solo sirve en el piloto" }
+        cargado_en: { type: string, format: date-time }
 
     RespuestaFactura:
       type: object

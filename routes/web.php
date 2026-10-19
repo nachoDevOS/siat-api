@@ -2,9 +2,11 @@
 
 use App\Http\Controllers\Admin\AccesoApiController;
 use App\Http\Controllers\Admin\ApiController;
+use App\Http\Controllers\Admin\CafcController;
 use App\Http\Controllers\Admin\CatalogoEmpresaController;
 use App\Http\Controllers\Admin\CertificadoController;
 use App\Http\Controllers\Admin\CodigoController;
+use App\Http\Controllers\Admin\ComunicacionSiatController;
 use App\Http\Controllers\Admin\ConfiguracionController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\EmpresaController;
@@ -33,6 +35,8 @@ Route::middleware('signed:relative')->group(function () {
     Route::get('factura/{cuf}', [FacturaPublicaController::class, 'show'])->name('factura.publica');
     Route::get('factura/{cuf}/pdf', [FacturaPublicaController::class, 'pdf'])->name('factura.publica.pdf');
     Route::get('factura/{cuf}/rollo', [FacturaPublicaController::class, 'rollo'])->name('factura.publica.rollo');
+    Route::get('factura/{cuf}/mini', [FacturaPublicaController::class, 'mini'])->name('factura.publica.mini');
+    Route::get('factura/{cuf}/zip', [FacturaPublicaController::class, 'zip'])->name('factura.publica.zip');
 });
 
 /*
@@ -94,6 +98,8 @@ Route::prefix('admin')->name('admin.')->middleware('auth')->group(function () {
     Route::post('facturas/{factura}/revertir', [FacturaController::class, 'revertir'])->name('facturas.revertir');
 
     // Avance de etapa del cliente ante el SIN (lo decide el SIN, aca se refleja).
+    Route::post('empresas/{empresa}/sandbox', [EmpresaController::class, 'crearSandbox'])
+        ->name('empresas.sandbox');
     Route::post('empresas/{empresa}/estado', [EmpresaController::class, 'cambiarEstado'])
         ->name('empresas.estado');
 
@@ -104,6 +110,9 @@ Route::prefix('admin')->name('admin.')->middleware('auth')->group(function () {
     // Solo en ambiente de pruebas.
     Route::post('empresas/{empresa}/certificados/prueba', [CertificadoController::class, 'generarPrueba'])
         ->name('empresas.certificados.prueba');
+    // CAFC del SIN (codigo y rango) para facturar a mano en los eventos 5, 6 y 7.
+    Route::post('empresas/{empresa}/cafcs', [CafcController::class, 'store'])
+        ->name('empresas.cafcs.store');
     // Acceso API de la empresa: datos de conexion, tokens, webhook y llamadas.
     Route::get('empresas/{empresa}/api', [AccesoApiController::class, 'show'])
         ->name('empresas.api');
@@ -178,4 +187,8 @@ Route::prefix('admin')->name('admin.')->middleware('auth')->group(function () {
         ->name('pruebas.payload');
 
     Route::get('monitor', [MonitorController::class, 'index'])->name('monitor');
+    // Comunicacion con el SIAT: cada llamada SOAP, que se mando, que respondio
+    // el SIN y la comparacion contra la ultima aceptada.
+    Route::get('comunicacion-siat', [ComunicacionSiatController::class, 'index'])->name('comunicacion.index');
+    Route::get('comunicacion-siat/{log}', [ComunicacionSiatController::class, 'show'])->name('comunicacion.show');
 });

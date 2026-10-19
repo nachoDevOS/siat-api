@@ -23,6 +23,15 @@ class FacturaAnulada extends Model
     /** La anulacion se revirtio ante el SIN: la factura volvio a ser valida. */
     public const ESTADO_REVERTIDA = 'REVERTIDA';
 
+    /** Anulada por el servicio web del SIN (anulacionFactura). */
+    public const TIPO_SIAT = 'SIAT';
+
+    /**
+     * Anulada por tramite ante el SIN, fuera de plazo, con resolucion. No pasa
+     * por SOAP: aca solo se registra lo que el SIN ya hizo.
+     */
+    public const TIPO_ADMINISTRATIVA = 'ADMINISTRATIVA';
+
     protected $table = 'facturas_anuladas';
 
     protected $guarded = ['id'];
@@ -32,6 +41,11 @@ class FacturaAnulada extends Model
         return [
             'anulada_en' => 'datetime',
         ];
+    }
+
+    public function esAdministrativa(): bool
+    {
+        return $this->tipo === self::TIPO_ADMINISTRATIVA;
     }
 
     public function factura(): BelongsTo

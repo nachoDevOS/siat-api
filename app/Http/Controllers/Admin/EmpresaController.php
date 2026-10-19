@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Exceptions\SiatException;
 use App\Http\Controllers\Controller;
 use App\Models\ActividadEconomica;
 use App\Models\Catalogo;
@@ -9,6 +10,7 @@ use App\Models\Empresa;
 use App\Models\Factura;
 use App\Models\LeyendaFactura;
 use App\Models\ProductoServicio;
+use App\Services\Panel\CreadorSandbox;
 use App\Services\Panel\EstadosVisuales;
 use App\Services\Panel\PuntosVentaSiat;
 use App\Services\Panel\RequisitosEtapa;
@@ -16,6 +18,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
+use RuntimeException;
 
 /**
  * ABM de empresas (clientes contribuyentes) del panel /admin.
@@ -105,12 +108,14 @@ class EmpresaController extends Controller
             'sucursales.puntosVenta.cuis.cufds' => fn ($q) => $q->latest('id'),
             'sucursales.puntosVenta.cufds' => fn ($q) => $q->latest('id'),
             'certificados',
+            'cafcActivo',
         ]);
 
         return view('admin.empresas.show', [
             'empresa' => $empresa,
             'certificado' => $empresa->certificados->firstWhere('activo', true),
             'semaforoCertificado' => $requisitos->semaforoCertificado($empresa),
+            'cafc' => $empresa->cafcActivo,
             'requisitos' => $requisitos->para($empresa),
             'progresoPiloto' => $requisitos->progresoPiloto($empresa),
             // Resumen del acceso API; el detalle esta en su propia pantalla.
@@ -157,6 +162,23 @@ class EmpresaController extends Controller
             ->with('estado', "Cliente marcado como {$etiqueta}.");
     }
 
+    /**
+     * Crea el sandbox (copia en el ambiente piloto) de un cliente en
+     * produccion, para que su sistema de ventas pruebe sin validez fiscal.
+     */
+    public function crearSandbox(Empresa $empresa, CreadorSandbox $creador): RedirectResponse
+    {
+        try {
+            $sandbox = $creador->crear($empresa);
+        } catch (RuntimeException|SiatException $e) {
+            return back()->with('error', $e->getMessage());
+        }
+
+        return redirect()
+            ->route('admin.empresas.edit', $sandbox)
+            ->with('estado', 'Sandbox creado con certificado de prueba. Falta pegar el token delegado del PILOTO del SIN (el de produccion no sirve) y despues generar su token de API (siat_test_).');
+    }
+
     public function edit(Empresa $empresa): View
     {
         return view('admin.empresas.edit', compact('empresa'));
@@ -172,7 +194,21 @@ class EmpresaController extends Controller
             unset($datos['token_delegado']);
         }
 
+        $cambiaAmbiente = (int) $datos['codigo_ambiente'] !== $empresa->codigo_ambiente;
+
         $empresa->update($datos);
+
+        // Un token es de un ambiente (siat_test_ / siat_live_): si la empresa
+        // pasa del piloto a produccion, el token con el que el cliente probo
+        // no puede seguir emitiendo, ahora facturas con validez fiscal. Se
+        // revocan y se emite uno nuevo del ambiente nuevo.
+        if ($cambiaAmbiente && $empresa->tokens()->exists()) {
+            $empresa->tokens()->delete();
+
+            return redirect()
+                ->route('admin.empresas.api', $empresa)
+                ->with('estado', 'Empresa actualizada. Cambio el ambiente: el token de API anterior quedo REVOCADO. Genera uno nuevo y entregaselo al cliente.');
+        }
 
         return redirect()
             ->route('admin.empresas.show', $empresa)

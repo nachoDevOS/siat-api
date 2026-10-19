@@ -59,6 +59,8 @@ class EstadosVisuales
         Factura::ESTADO_CONTINGENCIA => ['etiqueta' => 'Contingencia', 'color' => 'ambar'],
         Factura::ESTADO_OBSERVADA => ['etiqueta' => 'Observada', 'color' => 'rojo'],
         Factura::ESTADO_ANULADA => ['etiqueta' => 'Anulada', 'color' => 'violeta'],
+        // Valida, espera el cierre de su lote de emision masiva.
+        Factura::ESTADO_MASIVA => ['etiqueta' => 'En lote masivo', 'color' => 'ambar'],
     ];
 
     /**

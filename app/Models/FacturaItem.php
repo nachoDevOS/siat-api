@@ -27,7 +27,17 @@ class FacturaItem extends Model
             'precio_unitario' => 'decimal:2',
             'descuento' => 'decimal:2',
             'subtotal' => 'decimal:2',
+            'codigo_detalle_transaccion' => 'integer',
         ];
+    }
+
+    /**
+     * En una nota de credito-debito: si el item es uno DEVUELTO (y no la
+     * copia de un item de la factura original).
+     */
+    public function esDevuelto(): bool
+    {
+        return $this->codigo_detalle_transaccion === config('siat.codigos.nota_credito_debito.detalle_devuelto');
     }
 
     public function factura(): BelongsTo

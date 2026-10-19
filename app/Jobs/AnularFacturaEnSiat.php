@@ -101,13 +101,52 @@ class AnularFacturaEnSiat implements ShouldBeUnique, ShouldQueue
         // SIGUE VIGENTE ante el SIN: dejarla ANULADA en local seria mentirle al
         // cliente, asi que se revierte y se registra el motivo.
         if (! $respuesta->aceptada) {
-            $this->revertir($factura, $anulacion, $respuesta);
+            match ($this->anuladaEnElSin($factura, $fabrica, (string) $cufd, (string) $cuis)) {
+                true => $this->confirmar($factura, $anulacion, null),
+                false => $this->revertir($factura, $anulacion, $respuesta),
+                // No se pudo saber: queda PENDIENTE y la retoma la tarea
+                // programada. Revertir a ciegas podria desanular aca una
+                // factura que el SIN ya anulo.
+                null => null,
+            };
 
             return;
         }
 
+        $this->confirmar($factura, $anulacion, $respuesta->codigoRecepcion);
+    }
+
+    /**
+     * Si el SIN ya tiene la factura anulada, segun su verificacion de estado.
+     *
+     * Un rechazo de la anulacion puede ser falso: si un intento anterior la
+     * anulo pero su respuesta se perdio por timeout, el reintento vuelve como
+     * "ya anulada" y se leia como rechazo, dejando la factura vigente aca y
+     * anulada en el SIN. Antes de revertir se le pregunta al SIN.
+     *
+     * PENDIENTE DE VERIFICAR: el codigo de estado de una factura anulada no
+     * esta contrastado; se reconoce por la descripcion. Si no la reconoce,
+     * devuelve false y se revierte como antes.
+     *
+     * @return bool|null null si el SIN no respondio la verificacion.
+     */
+    private function anuladaEnElSin(Factura $factura, FabricaServicios $fabrica, string $cufd, string $cuis): ?bool
+    {
+        try {
+            $estado = RespuestaSiat::desde(
+                $fabrica->facturacion($factura->empresa)->verificarEstado($factura, $cufd, $cuis),
+            );
+        } catch (SiatException) {
+            return null;
+        }
+
+        return (bool) preg_match('/ANULAD|ANULACION CONFIRMADA/', mb_strtoupper((string) $estado->descripcion));
+    }
+
+    private function confirmar(Factura $factura, FacturaAnulada $anulacion, ?string $codigoRecepcion): void
+    {
         $anulacion->update([
-            'codigo_recepcion' => $respuesta->codigoRecepcion,
+            'codigo_recepcion' => $codigoRecepcion,
             'estado' => FacturaAnulada::ESTADO_CONFIRMADA,
         ]);
 

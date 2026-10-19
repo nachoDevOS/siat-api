@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Empresa;
 use App\Models\Factura;
 use App\Services\Webhooks\DestinoWebhook;
+use App\Services\Webhooks\Notificador;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Http;
@@ -32,11 +33,22 @@ class NotificarWebhook implements ShouldQueue
         public readonly string $evento,
     ) {}
 
-    public function handle(DestinoWebhook $destino): void
+    public function handle(DestinoWebhook $destino, Notificador $notificador): void
     {
         $factura = Factura::with('empresa')->find($this->facturaId);
 
-        if ($factura === null || blank($factura->empresa->webhook_url)) {
+        if ($factura === null) {
+            return;
+        }
+
+        // Los destinos registrados por la API reciben el evento con su propia
+        // entrega, historial y reintentos. Solo en el primer intento: si el
+        // webhook unico de abajo falla y este job se reintenta, no se repite.
+        if ($this->attempts() <= 1) {
+            $notificador->emitir($factura->empresa, $this->evento, $this->datos($factura));
+        }
+
+        if (blank($factura->empresa->webhook_url)) {
             return;
         }
 
@@ -55,8 +67,40 @@ class NotificarWebhook implements ShouldQueue
             return;
         }
 
-        $cuerpo = [
-            'evento' => $this->evento,
+        $cuerpo = ['evento' => $this->evento] + $this->datos($factura) + ['emitido_en' => now()->toIso8601String()];
+
+        // Se serializa una sola vez y se envia ese string tal cual: asi la firma
+        // cubre exactamente los bytes que recibe el cliente y no una version
+        // re-serializada que podria diferir en el orden o el escapado.
+        $json = json_encode($cuerpo);
+
+        Http::timeout((int) config('siat.webhooks.timeout'))
+            // Sin seguir redirecciones: solo se valido $url. Un 302 a
+            // http://169.254.169.254 o a la red interna saltaba el control
+            // anti-SSRF, porque el destino nuevo no pasa por DestinoWebhook.
+            ->withoutRedirecting()
+            // Se conecta a la IP que se acaba de validar y no a lo que el DNS
+            // conteste en el segundo siguiente (rebinding).
+            ->when($fijar !== null, fn ($http) => $http->withOptions([
+                'curl' => [CURLOPT_RESOLVE => [$fijar]],
+            ]))
+            ->withHeaders($this->cabeceras($factura->empresa, $json))
+            ->withBody($json, 'application/json')
+            ->post($url)
+            ->throw();
+    }
+
+    /**
+     * Lo que se cuenta de la factura en el aviso.
+     *
+     * @return array<string, mixed>
+     */
+    private function datos(Factura $factura): array
+    {
+        return [
+            // Los eventos factura.* llegan tambien para las notas de
+            // credito-debito: esto dice cual de los dos es.
+            'tipo_documento' => $factura->esNotaCreditoDebito() ? 'NOTA_CREDITO_DEBITO' : 'FACTURA',
             'cuf' => $factura->cuf,
             'referencia_externa' => $factura->referencia_externa,
             'estado' => $factura->estado,
@@ -70,24 +114,7 @@ class NotificarWebhook implements ShouldQueue
                 'factura.anulacion_rechazada' => $factura->anulacion?->motivo_rechazo,
                 default => null,
             },
-            'emitido_en' => now()->toIso8601String(),
         ];
-
-        // Se serializa una sola vez y se envia ese string tal cual: asi la firma
-        // cubre exactamente los bytes que recibe el cliente y no una version
-        // re-serializada que podria diferir en el orden o el escapado.
-        $json = json_encode($cuerpo);
-
-        Http::timeout((int) config('siat.webhooks.timeout'))
-            // Se conecta a la IP que se acaba de validar y no a lo que el DNS
-            // conteste en el segundo siguiente (rebinding).
-            ->when($fijar !== null, fn ($http) => $http->withOptions([
-                'curl' => [CURLOPT_RESOLVE => [$fijar]],
-            ]))
-            ->withHeaders($this->cabeceras($factura->empresa, $json))
-            ->withBody($json, 'application/json')
-            ->post($url)
-            ->throw();
     }
 
     /**

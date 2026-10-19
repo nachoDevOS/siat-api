@@ -51,17 +51,52 @@ class FacturaPublicaController extends Controller
             $factura->update(['ruta_pdf' => $this->pdf->generarYGuardar($factura)]);
         }
 
-        return $this->enLinea(Storage::disk('local')->get($factura->ruta_pdf), "factura-{$factura->numero_factura}.pdf");
+        return $this->enLinea(Storage::disk('local')->get($factura->ruta_pdf), $this->nombreArchivo($factura).'.pdf');
     }
 
     /**
      * PDF para impresora termica de ticket (80 mm).
+     *
+     * La nota de credito-debito no tiene version ticket (lleva dos listas de
+     * items y la referencia a la factura): se entrega la de hoja carta.
      */
     public function rollo(string $cuf): Response
     {
         $factura = $this->buscar($cuf);
 
-        return $this->enLinea($this->pdf->rollo($factura), "factura-{$factura->numero_factura}-rollo.pdf");
+        if ($factura->esNotaCreditoDebito()) {
+            return $this->pdf($cuf);
+        }
+
+        return $this->enLinea($this->pdf->rollo($factura), $this->nombreArchivo($factura).'-rollo.pdf');
+    }
+
+    /**
+     * Mini ticket de caja (monto y QR, sin detalle).
+     */
+    public function mini(string $cuf): Response
+    {
+        $factura = $this->buscar($cuf);
+
+        return $this->enLinea($this->pdf->mini($factura), $this->nombreArchivo($factura).'-mini.pdf');
+    }
+
+    /**
+     * ZIP con el XML firmado y los PDF, para archivar o enviar.
+     */
+    public function zip(string $cuf): Response
+    {
+        $factura = $this->buscar($cuf);
+
+        return response($this->pdf->zip($factura), 200, [
+            'Content-Type' => 'application/zip',
+            'Content-Disposition' => 'attachment; filename="'.$this->nombreArchivo($factura).'.zip"',
+        ]);
+    }
+
+    private function nombreArchivo(Factura $factura): string
+    {
+        return ($factura->esNotaCreditoDebito() ? 'nota-credito-debito-' : 'factura-').$factura->numero_factura;
     }
 
     private function buscar(string $cuf): Factura

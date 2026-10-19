@@ -1,17 +1,24 @@
 # siat-api
 
 Proveedor de **facturación electrónica en línea** ante el SIAT (Servicio de Impuestos Nacionales
-de Bolivia), multi-cliente, para el **documento sector 1 — Factura Compra Venta**.
+de Bolivia), multi-cliente, para el **documento sector 1 — Factura Compra Venta** y sus
+devoluciones con **notas de crédito-débito (sector 24)**.
 
 Los sistemas de venta de los clientes mandan la venta en JSON a una API REST (con el token de su
 empresa) y reciben el CUF al instante. `siat-api` hace todo lo demás: CUIS y CUFD, CUF, XML, firma
-digital, envío y verificación ante el SIN, anulación, contingencia, catálogos, avisos por webhook y
-la factura lista para imprimir (hoja o ticket de 80 mm).
+digital, envío y verificación ante el SIN, anulación (también revertir y administrativa),
+contingencia, catálogos, avisos por webhook y la factura lista para imprimir (hoja, ticket de 80 mm,
+mini ticket o ZIP).
+
+También: lotes de hasta 20 ventas, **emisión masiva** (paquetes de 500), dashboard, webhooks propios
+del cliente por evento con historial, autogestión de certificado y puntos de venta, un **sandbox**
+por cliente contra el SIAT piloto (tokens `siat_test_` / `siat_live_`) y un **servidor MCP** para
+agentes de IA.
 
 | | |
 |---|---|
 | Stack | PHP 8.3 · Laravel 13 · Sanctum · MySQL · colas en base de datos · Pest 4 · sin Node |
-| Modalidad | Electrónica en línea (1) · Sector 1, compra-venta con crédito fiscal |
+| Modalidad | Electrónica en línea (1) · Sector 1, compra-venta con crédito fiscal · Sector 24, nota de crédito-débito |
 | Ambientes | 1 producción · 2 piloto (por empresa) |
 
 ---
@@ -50,8 +57,10 @@ Tests: `php artisan test --compact`.
 | `/docs/api` en el servidor | **Los clientes**: la misma documentación, navegable |
 
 **Pendiente** (depende de terceros): firma XAdES y Etapas IV/VIII (passphrase del `.p12`), Etapa
-VI y contingencia (CAFC), correo al comprador, URL de producción. Detalle en
-[TECNICO.md → Pendientes](docs/TECNICO.md#pendientes).
+VI y contingencia (CAFC), URL de producción. **Por verificar en el piloto:** certificación de la nota
+de crédito-débito (sector 24), emisión masiva (requiere autorización del SIN), sandbox de un cliente
+ya en producción y anulación administrativa. El correo al comprador lo hace otro servicio. Detalle
+en [TECNICO.md → Pendientes](docs/TECNICO.md#pendientes).
 
 ---
 

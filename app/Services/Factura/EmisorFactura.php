@@ -6,9 +6,11 @@ use App\Exceptions\CufdVencidoException;
 use App\Exceptions\FacturaInvalidaException;
 use App\Exceptions\SiatException;
 use App\Jobs\EnviarFacturaAlSiat;
+use App\Models\Certificado;
 use App\Models\Cufd;
 use App\Models\Empresa;
 use App\Models\Factura;
+use App\Models\LoteMasivo;
 use App\Models\PuntoVenta;
 use App\Services\Contingencia\GestorContingencia;
 use App\Services\Siat\GestorCodigos;
@@ -140,9 +142,21 @@ class EmisorFactura
             // deja un CUF que contradice a la factura y el SIN la rechaza.
             $enContingencia = $this->contingencia->hayContingenciaAbierta($puntoVenta);
 
-            $tipoEmision = $enContingencia
-                ? Factura::EMISION_CONTINGENCIA
-                : Factura::EMISION_EN_LINEA;
+            // Lote de emision masiva abierto: la factura tambien nace con su
+            // tipo de emision en el CUF (3) y espera el cierre del lote. Se
+            // lee con el punto de venta ya bloqueado (reservarNumero): el
+            // cierre bloquea la misma fila, asi que una factura no puede caer
+            // en un lote que ya se cerro. La contingencia manda: con el SIAT
+            // caido no hay a donde mandar el lote.
+            $lote = $enContingencia ? null : LoteMasivo::where('punto_venta_id', $puntoVenta->id)
+                ->where('estado', LoteMasivo::ESTADO_ABIERTO)
+                ->first();
+
+            $tipoEmision = match (true) {
+                $enContingencia => Factura::EMISION_CONTINGENCIA,
+                $lote !== null => Factura::EMISION_MASIVA,
+                default => Factura::EMISION_EN_LINEA,
+            };
 
             $cuf = $this->generadorCuf->generar([
                 'nit' => $empresa->nit,
@@ -160,42 +174,24 @@ class EmisorFactura
                 $empresa, $puntoVenta, $cufd, $venta, $totales, $numero, $cuf, $fecha, $actividades, $tipoEmision,
             );
 
+            if ($lote !== null) {
+                $factura->update(['lote_masivo_id' => $lote->id]);
+            }
+
             // Arma y firma el XML con el certificado activo de la empresa. La
             // modalidad electronica NO admite un documento sin firmar: si no hay
             // certificado se corta aca en vez de emitir algo que el SIN rechaza.
             $xml = $this->constructorXml->construir($factura);
-            $certificado = $empresa->certificadoActivo;
-
-            if ($certificado === null) {
-                throw new FacturaInvalidaException([
-                    'La empresa no tiene un certificado digital activo: no se puede firmar la factura.',
-                ]);
-            }
-
-            // Firmar con un certificado vencido no da error aca, pero el SIN
-            // rechaza la firma: todas las facturas saldrian observadas.
-            if ($certificado->estaVencido()) {
-                throw new FacturaInvalidaException([
-                    "El certificado digital de la empresa vencio el {$certificado->vence_el->format('d/m/Y')}: carga uno vigente para poder firmar.",
-                ]);
-            }
-
-            // Un autofirmado sirve para el piloto y nada mas: una factura de
-            // produccion firmada con el no tiene validez legal.
-            if ($certificado->esDePrueba() && $empresa->codigo_ambiente === config('siat.codigos.ambiente.produccion')) {
-                throw new FacturaInvalidaException([
-                    'El certificado activo es un autofirmado de prueba: no se puede facturar en produccion con el. Carga el de la entidad certificadora.',
-                ]);
-            }
-
-            $xml = $this->firmadorXml->firmar($xml, $certificado);
+            $xml = $this->firmadorXml->firmar($xml, $this->certificadoFirmable($empresa));
 
             $factura->update(['xml_firmado' => $xml]);
 
             // Bajo contingencia no se intenta el envio individual: el SIAT no
             // esta respondiendo y estas facturas viajan juntas en el paquete que
             // arma GestorContingencia::recuperar() cuando el servicio vuelve.
-            if (! $enContingencia && $encolarEnvio) {
+            //
+            // En un lote masivo tampoco: viaja en su paquete al cerrar el lote.
+            if ($tipoEmision === Factura::EMISION_EN_LINEA && $encolarEnvio) {
                 // Del paso 12 en adelante es asincrono: el worker envia al SIAT.
                 // afterCommit para que el worker no busque una factura que
                 // todavia no existe (o que un rollback posterior deje sin existir).
@@ -204,6 +200,44 @@ class EmisorFactura
 
             return $factura;
         });
+    }
+
+    /**
+     * Certificado con el que se firma un documento de la empresa. La modalidad
+     * electronica NO admite un documento sin firmar: si no hay uno valido se
+     * corta aca en vez de emitir algo que el SIN rechaza.
+     *
+     * Publico porque la nota de credito-debito firma con las mismas reglas.
+     *
+     * @throws FacturaInvalidaException si no hay certificado usable.
+     */
+    public function certificadoFirmable(Empresa $empresa): Certificado
+    {
+        $certificado = $empresa->certificadoActivo;
+
+        if ($certificado === null) {
+            throw new FacturaInvalidaException([
+                'La empresa no tiene un certificado digital activo: no se puede firmar la factura.',
+            ]);
+        }
+
+        // Firmar con un certificado vencido no da error aca, pero el SIN
+        // rechaza la firma: todas las facturas saldrian observadas.
+        if ($certificado->estaVencido()) {
+            throw new FacturaInvalidaException([
+                "El certificado digital de la empresa vencio el {$certificado->vence_el->format('d/m/Y')}: carga uno vigente para poder firmar.",
+            ]);
+        }
+
+        // Un autofirmado sirve para el piloto y nada mas: una factura de
+        // produccion firmada con el no tiene validez legal.
+        if ($certificado->esDePrueba() && $empresa->codigo_ambiente === config('siat.codigos.ambiente.produccion')) {
+            throw new FacturaInvalidaException([
+                'El certificado activo es un autofirmado de prueba: no se puede facturar en produccion con el. Carga el de la entidad certificadora.',
+            ]);
+        }
+
+        return $certificado;
     }
 
     /**
@@ -254,9 +288,11 @@ class EmisorFactura
      *   - el punto de venta esta en contingencia (el SIAT no responde);
      *   - el SIN fallo hace menos de un minuto al entregarlo.
      *
+     * Publico porque la nota de credito-debito consigue su CUFD igual.
+     *
      * @throws CufdVencidoException si no hay CUFD y no se pudo conseguir.
      */
-    private function obtenerCufd(PuntoVenta $puntoVenta): Cufd
+    public function obtenerCufd(PuntoVenta $puntoVenta): Cufd
     {
         $vigente = $puntoVenta->cufdVigente();
 
@@ -332,7 +368,7 @@ class EmisorFactura
      * @param  array<string, mixed>  $venta
      * @param  array<string, mixed>  $totales
      * @param  list<string|null>  $actividades
-     * @param  int  $tipoEmision  1 = en linea, 2 = contingencia. Ya entro al CUF.
+     * @param  int  $tipoEmision  1 en linea, 2 contingencia, 3 masiva. Ya entro al CUF.
      */
     private function crearFactura(
         Empresa $empresa,
@@ -381,9 +417,11 @@ class EmisorFactura
             'tipo_emision' => $tipoEmision,
             // Una factura emitida fuera de linea ya nace en contingencia: es
             // valida e imprimible, solo le falta viajar dentro de un paquete.
-            'estado' => $tipoEmision === Factura::EMISION_CONTINGENCIA
-                ? Factura::ESTADO_CONTINGENCIA
-                : Factura::ESTADO_PENDIENTE,
+            'estado' => match ($tipoEmision) {
+                Factura::EMISION_CONTINGENCIA => Factura::ESTADO_CONTINGENCIA,
+                Factura::EMISION_MASIVA => Factura::ESTADO_MASIVA,
+                default => Factura::ESTADO_PENDIENTE,
+            },
             'referencia_externa' => $venta['referencia_externa'] ?? null,
         ]);
 

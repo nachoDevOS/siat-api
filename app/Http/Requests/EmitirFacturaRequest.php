@@ -12,7 +12,7 @@ class EmitirFacturaRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        // La empresa ya fue autenticada por el middleware AutenticarApiKey.
+        // La empresa ya fue autenticada por el middleware AutenticarToken.
         return true;
     }
 

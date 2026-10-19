@@ -2,13 +2,16 @@
 
 use App\Exceptions\SiatException;
 use App\Http\Requests\EmitirFacturaRequest;
+use App\Jobs\AnularFacturaEnSiat;
 use App\Jobs\EnviarFacturaAlSiat;
 use App\Jobs\NotificarWebhook;
 use App\Jobs\VerificarEstadoFactura;
+use App\Models\Catalogo;
 use App\Models\Certificado;
 use App\Models\Cufd;
 use App\Models\Empresa;
 use App\Models\Factura;
+use App\Models\FacturaAnulada;
 use App\Models\PuntoVenta;
 use App\Models\Sucursal;
 use App\Services\Factura\EmisorFactura;
@@ -226,3 +229,207 @@ test('la descarga del WSDL corre con el timeout del SIAT y lo restaura despues',
         ->and($timeoutVisto)->toBe('7')
         ->and(ini_get('default_socket_timeout'))->toBe('60');
 });
+
+// --- Rechazos que en realidad no lo son (reintento tras timeout) -------------
+
+/**
+ * Respuesta del SIN a un reenvio del mismo CUF: rechazado como duplicado.
+ */
+function recepcionDuplicada(): object
+{
+    return (object) ['RespuestaServicioFacturacion' => (object) [
+        'transaccion' => false, 'codigoEstado' => 904,
+        'mensajesList' => (object) ['codigo' => 1003, 'descripcion' => 'FACTURA YA REGISTRADA'],
+    ]];
+}
+
+test('un rechazo de una factura que el SIN ya tiene validada la valida, no la observa', function () {
+    Queue::fake();
+    $factura = Factura::factory()->create(['xml_firmado' => '<f/>', 'ruta_pdf' => 'ya.pdf']);
+
+    $facturacion = servicioFacturacionFalso();
+    $facturacion->shouldReceive('recepcionarFactura')->once()->andReturn(recepcionDuplicada());
+    $facturacion->shouldReceive('verificarEstado')->once()->andReturn((object) [
+        'RespuestaServicioFacturacion' => (object) ['transaccion' => true, 'codigoEstado' => 908, 'codigoDescripcion' => 'VALIDADA'],
+    ]);
+
+    app()->call([new EnviarFacturaAlSiat($factura->id), 'handle']);
+
+    $factura->refresh();
+    expect($factura->estado)->toBe(Factura::ESTADO_VALIDADA)
+        ->and($factura->motivo_observacion)->toBeNull();
+    Queue::assertPushed(NotificarWebhook::class, fn ($job) => $job->evento === 'factura.validada');
+    Queue::assertNotPushed(NotificarWebhook::class, fn ($job) => $job->evento === 'factura.observada');
+});
+
+test('un rechazo de una factura que el SIN todavia procesa la deja RECIBIDA', function () {
+    Queue::fake();
+    $factura = Factura::factory()->create(['xml_firmado' => '<f/>', 'ruta_pdf' => 'ya.pdf']);
+
+    $facturacion = servicioFacturacionFalso();
+    $facturacion->shouldReceive('recepcionarFactura')->andReturn(recepcionDuplicada());
+    $facturacion->shouldReceive('verificarEstado')->andReturn((object) [
+        'RespuestaServicioFacturacion' => (object) ['transaccion' => true, 'codigoEstado' => 901],
+    ]);
+
+    app()->call([new EnviarFacturaAlSiat($factura->id), 'handle']);
+
+    expect($factura->fresh()->estado)->toBe(Factura::ESTADO_RECIBIDA);
+    Queue::assertPushed(VerificarEstadoFactura::class);
+    Queue::assertNotPushed(NotificarWebhook::class);
+});
+
+test('si tras un rechazo no se puede verificar, la factura sigue PENDIENTE y nunca va a contingencia', function (int $intento, bool $reencola) {
+    Queue::fake();
+    $factura = Factura::factory()->create(['xml_firmado' => '<f/>', 'ruta_pdf' => 'ya.pdf']);
+
+    $facturacion = servicioFacturacionFalso();
+    $facturacion->shouldReceive('recepcionarFactura')->andReturn(recepcionDuplicada());
+    $facturacion->shouldReceive('verificarEstado')->andThrow(new SiatException('SIAT caido'));
+
+    $job = Mockery::mock(EnviarFacturaAlSiat::class.'[attempts,release]', [$factura->id]);
+    $job->shouldReceive('attempts')->andReturn($intento);
+    $reencola
+        ? $job->shouldReceive('release')->once()
+        : $job->shouldNotReceive('release');
+
+    app()->call([$job, 'handle']);
+
+    expect($factura->fresh()->estado)->toBe(Factura::ESTADO_PENDIENTE);
+    Queue::assertNotPushed(NotificarWebhook::class);
+})->with([
+    'intermedio' => [1, true],
+    'ultimo' => [3, false],
+]);
+
+test('una excepcion interna del SIN (-1) no observa la factura: queda PENDIENTE para reenviarla', function (int $intento, bool $reencola) {
+    Queue::fake();
+    $factura = Factura::factory()->create(['xml_firmado' => '<f/>', 'ruta_pdf' => 'ya.pdf']);
+    $excepcion = fn (string $que) => (object) ['RespuestaServicioFacturacion' => (object) [
+        'transaccion' => false, 'codigoEstado' => -1, 'codigoDescripcion' => "Error inesperado: Excepcion al {$que} la factura",
+    ]];
+
+    $facturacion = servicioFacturacionFalso();
+    $facturacion->shouldReceive('recepcionarFactura')->andReturn($excepcion('registrar'));
+    $facturacion->shouldReceive('verificarEstado')->andReturn($excepcion('recuperar'));
+
+    $job = Mockery::mock(EnviarFacturaAlSiat::class.'[attempts,release]', [$factura->id]);
+    $job->shouldReceive('attempts')->andReturn($intento);
+    $reencola
+        ? $job->shouldReceive('release')->once()
+        : $job->shouldNotReceive('release');
+
+    app()->call([$job, 'handle']);
+
+    expect($factura->fresh()->estado)->toBe(Factura::ESTADO_PENDIENTE);
+    Queue::assertNotPushed(NotificarWebhook::class);
+})->with([
+    'intermedio' => [2, true],
+    'ultimo' => [3, false],
+]);
+
+test('un rechazo real (902) en la recepcion se observa con su motivo', function () {
+    Queue::fake();
+    $factura = Factura::factory()->create(['xml_firmado' => '<f/>', 'ruta_pdf' => 'ya.pdf']);
+
+    $facturacion = servicioFacturacionFalso();
+    $facturacion->shouldReceive('recepcionarFactura')->andReturn((object) ['RespuestaServicioFacturacion' => (object) [
+        'transaccion' => false, 'codigoEstado' => 902, 'codigoDescripcion' => 'RECHAZADA',
+        'mensajesList' => (object) ['codigo' => 1037, 'descripcion' => 'FIRMA INVALIDA'],
+    ]]);
+    $facturacion->shouldReceive('verificarEstado')->andReturn((object) ['RespuestaServicioFacturacion' => (object) [
+        'transaccion' => false, 'codigoEstado' => 902, 'codigoDescripcion' => 'RECHAZADA',
+    ]]);
+
+    app()->call([new EnviarFacturaAlSiat($factura->id), 'handle']);
+
+    expect($factura->fresh()->estado)->toBe(Factura::ESTADO_OBSERVADA)
+        ->and($factura->fresh()->motivo_observacion)->toBe('[1037] FIRMA INVALIDA');
+    Queue::assertPushed(NotificarWebhook::class, fn ($job) => $job->evento === 'factura.observada');
+});
+
+/**
+ * Factura ANULADA de este lado con su anulacion pendiente de confirmar.
+ */
+function facturaConAnulacionPendiente(): Factura
+{
+    $factura = Factura::factory()->create(['estado' => Factura::ESTADO_ANULADA]);
+    FacturaAnulada::create([
+        'factura_id' => $factura->id, 'motivo' => 1, 'anulada_en' => now(),
+        'estado' => FacturaAnulada::ESTADO_PENDIENTE, 'estado_anterior' => Factura::ESTADO_VALIDADA,
+    ]);
+
+    return $factura;
+}
+
+test('una anulacion rechazada se resuelve segun lo que el SIN dice de la factura', function (?string $descripcion, string $anulacion, string $estado, ?string $evento) {
+    Queue::fake();
+    $factura = facturaConAnulacionPendiente();
+
+    $facturacion = servicioFacturacionFalso();
+    $facturacion->shouldReceive('anular')->andReturn((object) ['RespuestaServicioFacturacion' => (object) [
+        'transaccion' => false, 'mensajesList' => (object) ['codigo' => 1004, 'descripcion' => 'FACTURA YA ANULADA'],
+    ]]);
+    $descripcion === null
+        ? $facturacion->shouldReceive('verificarEstado')->andThrow(new SiatException('SIAT caido'))
+        : $facturacion->shouldReceive('verificarEstado')->andReturn((object) ['RespuestaServicioFacturacion' => (object) [
+            'transaccion' => true, 'codigoDescripcion' => $descripcion,
+        ]]);
+
+    app()->call([new AnularFacturaEnSiat($factura->id), 'handle']);
+
+    expect($factura->anulacion->fresh()->estado)->toBe($anulacion)
+        ->and($factura->fresh()->estado)->toBe($estado);
+    $evento === null
+        ? Queue::assertNotPushed(NotificarWebhook::class)
+        : Queue::assertPushed(NotificarWebhook::class, fn ($job) => $job->evento === $evento);
+})->with([
+    'ya la anulo un intento anterior' => ['ANULACION CONFIRMADA', FacturaAnulada::ESTADO_CONFIRMADA, Factura::ESTADO_ANULADA, 'factura.anulada'],
+    'sigue vigente: rechazo real' => ['VALIDADA', FacturaAnulada::ESTADO_RECHAZADA, Factura::ESTADO_VALIDADA, 'factura.anulacion_rechazada'],
+    'no se pudo verificar: queda pendiente' => [null, FacturaAnulada::ESTADO_PENDIENTE, Factura::ESTADO_ANULADA, null],
+]);
+
+// --- Webhook: sin redirecciones ------------------------------------------------
+
+test('el webhook no sigue redirecciones hacia otro destino', function () {
+    config(['siat.webhooks.permitir_destinos_privados' => false]);
+    Http::fake([
+        'cliente.example/*' => Http::response('', 302, ['Location' => 'http://169.254.169.254/latest/meta-data/']),
+        '*' => Http::response('secreto'),
+    ]);
+
+    $destino = Mockery::mock(DestinoWebhook::class)->makePartial()->shouldAllowMockingProtectedMethods();
+    $destino->shouldReceive('resolver')->with('cliente.example')->andReturn(['93.184.216.34']);
+    app()->instance(DestinoWebhook::class, $destino);
+
+    $empresa = Empresa::factory()->create(['webhook_url' => 'https://cliente.example/hook']);
+    $factura = Factura::factory()->for($empresa)->create();
+
+    app()->call([new NotificarWebhook($factura->id, 'factura.validada'), 'handle']);
+
+    Http::assertSentCount(1);
+    Http::assertNotSent(fn (Request $request) => str_contains($request->url(), '169.254.169.254'));
+});
+
+// --- Anulacion por la API: motivo del catalogo -----------------------------------
+
+test('la API rechaza un motivo de anulacion fuera del catalogo del SIN', function (string $motivo, int $codigo) {
+    Queue::fake();
+    Catalogo::factory()->create(['tipo' => 'motivos_anulacion', 'codigo_clasificador' => '1', 'descripcion' => 'FACTURA MAL EMITIDA']);
+    $empresa = Empresa::factory()->create();
+    $factura = Factura::factory()->for($empresa)->create(['estado' => Factura::ESTADO_VALIDADA]);
+
+    $this->withToken($empresa->emitirTokenApi('T', 'administracion')->plainTextToken)
+        ->postJson("/api/v1/facturas/{$factura->cuf}/anular", ['motivo' => (int) $motivo])
+        ->assertStatus($codigo);
+
+    if ($codigo === 422) {
+        expect($factura->fresh()->estado)->toBe(Factura::ESTADO_VALIDADA);
+        Queue::assertNotPushed(AnularFacturaEnSiat::class);
+    } else {
+        Queue::assertPushed(AnularFacturaEnSiat::class);
+    }
+})->with([
+    'del catalogo' => ['1', 200],
+    'inventado' => ['99', 422],
+]);

@@ -22,7 +22,7 @@ tres procesos a la vez:
 
 | # | Comando (desarrollo) | Qué es | Qué hace | Si no está corriendo |
 |---|---|---|---|---|
-| 1 | `php artisan serve` | **Servidor web** | Recibe las peticiones: la API, el panel `/admin`, `/docs/api` y las facturas públicas | No se puede entrar a nada |
+| 1 | `php artisan serve` | **Servidor web** | Recibe las peticiones: la API, el servidor MCP `/mcp`, el panel `/admin`, `/docs/api` y las facturas públicas | No se puede entrar a nada |
 | 2 | `php artisan queue:work --queue=facturas,default,piloto` | **Worker** (el trabajador) | Hace en segundo plano lo lento: **envía las facturas al SIN**, verifica si quedaron validadas, anula, manda los paquetes, avisa por webhook, renueva el CUFD y corre el piloto | La API entrega el CUF pero **la factura nunca llega al SIN**: queda en `PENDIENTE` |
 | 3 | `php artisan schedule:work` | **Scheduler** (el reloj) | Cada minuto revisa si toca una tarea y la lanza: reintentar pendientes, verificar enviadas, renovar CUFD y CUIS, sincronizar catálogos, avisar vencimientos, limpiar logs | El CUFD vence y nadie lo renueva; nada se reintenta ni se avisa |
 
@@ -75,8 +75,8 @@ Cambie la contraseña del administrador apenas instale.
 | `SIAT_PROVEEDOR_CODIGO_SISTEMA` | — | Código de sistema asignado por el SIN; valor por defecto al crear empresas |
 | `SIAT_PROVEEDOR_NOMBRE_SISTEMA` | `SolucionDigital-api` | Nombre del sistema registrado |
 | `SIAT_AMBIENTE` | `2` | Ambiente por defecto (1 producción, 2 piloto). Cada empresa tiene el suyo |
-| `SIAT_URL_PILOTO` | `https://pilotosiatservicios.impuestos.gob.bo/v2` | Verificada |
-| `SIAT_URL_PRODUCCION` | `https://siatrest.impuestos.gob.bo/v2` | **Pendiente de verificar** |
+| `SIAT_URL_PILOTO` | `https://pilotosiatservicios.impuestos.gob.bo/sfd` | Verificada (versión 3, solicitud de actualización 17/10/2026) |
+| `SIAT_URL_PRODUCCION` | `https://siatrest.impuestos.gob.bo/v2` | **Pendiente de verificar** (¿ya pasó a `/sfd`?) |
 | `SIAT_WEBHOOK_SECRET` | — | Secreto maestro; de él se deriva el secreto de cada empresa. **Sin él los webhooks salen sin firmar.** Cambiarlo cambia el secreto de todos los clientes |
 | `SIAT_WEBHOOK_PERMITIR_PRIVADOS` | `false` | `true` solo en desarrollo (permite `http://localhost`) |
 | `SIAT_WEBHOOK_TIMEOUT` | `10` | Segundos por intento de webhook |
@@ -192,7 +192,10 @@ Verificar que el scheduler ve sus tareas: `php artisan schedule:list`.
 
 **Servidor**
 
-- [ ] HTTPS activo (la API y los webhooks lo exigen)
+- [ ] HTTPS activo (la API, el servidor MCP y los webhooks lo exigen)
+- [ ] Después de actualizar a la versión del 2026-10-18: `php artisan migrate --force` (notas,
+      anulación administrativa, sandbox, webhooks, emisión masiva) y regenerar el token de los clientes
+      de perfil *Administración* que vayan a registrar webhooks por API
 - [ ] `storage/` y `bootstrap/cache/` con escritura para el usuario del servidor web
 - [ ] Worker en Supervisor con `--queue=facturas,default,piloto` → `supervisorctl status` en RUNNING
 - [ ] Cron del scheduler → `php artisan schedule:list` muestra las tareas
@@ -236,6 +239,12 @@ php artisan up
 | `siat:sincronizar-globales` | domingo 03:00 | Catálogos paramétricos globales |
 | `siat:recuperar-contingencia` | cada 10 min | Cierra eventos y envía paquetes cuando vuelve el SIAT |
 | `siat:purgar-logs` | diario 04:00 | Borra `logs_siat` fuera de retención |
+
+Tareas sin comando propio (en `routes/console.php`): `reintentar-pendientes` (cada 5 min),
+`verificar-enviadas` y `reintentar-anulaciones` (cada 15 min) y `validar-paquetes-masivos` (cada 15
+min: pregunta el resultado de los paquetes de emisión masiva que el SIN recibió). El aviso de
+`siat:avisar-certificados` también sale por webhook (`certificado.por_vencer`) a los destinos que
+registró el cliente.
 
 Ver lo programado: `php artisan schedule:list`. Probar una tarea:
 `php artisan schedule:test --name=reintentar-anulaciones`.
