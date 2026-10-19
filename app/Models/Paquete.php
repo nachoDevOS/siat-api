@@ -39,11 +39,6 @@ class Paquete extends Model
         return $this->belongsTo(PuntoVenta::class);
     }
 
-    public function loteMasivo(): BelongsTo
-    {
-        return $this->belongsTo(LoteMasivo::class);
-    }
-
     public function evento(): BelongsTo
     {
         return $this->belongsTo(EventoSignificativo::class, 'evento_id');

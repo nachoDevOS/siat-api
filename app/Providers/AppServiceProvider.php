@@ -4,7 +4,9 @@ namespace App\Providers;
 
 use App\Models\TokenApi;
 use App\Services\Trabajos\RegistroTrabajos;
+use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Middleware\TrustProxies;
+use Illuminate\Http\Request;
 use Illuminate\Pagination\Paginator;
 use Illuminate\Queue\Events\JobExceptionOccurred;
 use Illuminate\Queue\Events\JobFailed;
@@ -15,6 +17,7 @@ use Illuminate\Queue\Events\JobRetryRequested;
 use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Laravel\Sanctum\Sanctum;
 
@@ -56,6 +59,9 @@ class AppServiceProvider extends ServiceProvider
         Event::listen(JobFailed::class, fn (JobFailed $e) => $registro()->fallido($e));
         Event::listen(JobRetryRequested::class, fn (JobRetryRequested $e) => $registro()->reintentoPedido($e));
         Event::listen(Looping::class, fn () => $registro()->latidoWorker());
+
+        // Formulario de contacto del sitio publico: pocas solicitudes por IP.
+        RateLimiter::for('sitio-contacto', fn (Request $request) => Limit::perMinute(config('sitio.limite_contacto'))->by($request->ip()));
 
         // Detras de un proxy, la IP real del sistema de ventas llega en
         // X-Forwarded-For; solo se le cree a los proxies configurados.

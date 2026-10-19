@@ -224,6 +224,14 @@
                 <a href="{{ route('admin.comunicacion.index') }}" class="{{ request()->routeIs('admin.comunicacion.*') ? 'activo' : '' }}">
                     <span class="ic">⇄</span> Comunicacion SIAT
                 </a>
+                {{-- Lo que llega del formulario del sitio publico, con las pendientes en el globo. --}}
+                @php($solicitudesPendientes = App\Models\Sitio\SolicitudContacto::whereNull('atendida_en')->count())
+                <a href="{{ route('admin.solicitudes.index') }}" class="{{ request()->routeIs('admin.solicitudes.*') ? 'activo' : '' }}">
+                    <span class="ic">✉</span> Solicitudes
+                    @if ($solicitudesPendientes > 0)
+                        <span class="globo" title="{{ $solicitudesPendientes }} solicitud(es) sin atender">{{ $solicitudesPendientes }}</span>
+                    @endif
+                </a>
             </nav>
 
             <div class="grupo">Integracion</div>

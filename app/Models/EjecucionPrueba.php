@@ -33,9 +33,4 @@ class EjecucionPrueba extends Model
     {
         return $this->belongsTo(Empresa::class);
     }
-
-    public function caso(): BelongsTo
-    {
-        return $this->belongsTo(CasoPrueba::class, 'caso_id');
-    }
 }

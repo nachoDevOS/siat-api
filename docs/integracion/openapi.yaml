@@ -3,8 +3,8 @@ info:
   title: API de facturación electrónica — v1
   version: "1.0.0"
   description: |
-    Facturación electrónica en línea ante el SIAT (Bolivia), **documento sector 1 — Factura Compra
-    Venta**.
+    Facturación electrónica en línea ante el SIAT (Bolivia): **factura de compra-venta (sector 1)** y
+    sus devoluciones con **nota de crédito-débito (sector 24)**.
 
     # Cómo funciona
 

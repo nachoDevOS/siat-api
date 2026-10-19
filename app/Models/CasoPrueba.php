@@ -5,7 +5,6 @@ namespace App\Models;
 use Database\Factories\CasoPruebaFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * Caso de prueba ante el SIN. Vive en base de datos (no en codigo) para poder
@@ -72,10 +71,5 @@ class CasoPrueba extends Model
     public function requiereCertificado(): bool
     {
         return in_array($this->tipo, self::TIPOS_QUE_FIRMAN, true);
-    }
-
-    public function ejecuciones(): HasMany
-    {
-        return $this->hasMany(EjecucionPrueba::class, 'caso_id');
     }
 }

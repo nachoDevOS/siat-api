@@ -21,3 +21,8 @@ _ide_helper.php
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# Frontend del sitio publico (React + Vite): dependencias y build generados.
+/node_modules
+/public/build
+/public/hot

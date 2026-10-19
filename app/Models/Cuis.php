@@ -42,9 +42,4 @@ class Cuis extends Model
     {
         return $this->hasMany(Cufd::class);
     }
-
-    public function estaVigente(): bool
-    {
-        return $this->fecha_vigencia->isFuture();
-    }
 }

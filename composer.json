@@ -18,6 +18,7 @@
         "ext-zlib": "*",
         "barryvdh/laravel-dompdf": "^3.1",
         "laravel/framework": "^13.8",
+        "laravel/mcp": "^0.9",
         "laravel/sanctum": "^4.3",
         "laravel/tinker": "^3.0",
         "simplesoftwareio/simple-qrcode": "^4.2"
@@ -51,6 +52,10 @@
             "@php -r \"file_exists('.env') || copy('.env.example', '.env');\"",
             "@php artisan key:generate",
             "@php artisan migrate --force"
+        ],
+        "dev": [
+            "Composer\\Config::disableProcessTimeout",
+            "npx concurrently -k -c \"#93c5fd,#c4b5fd,#86efac,#fdba74\" \"php artisan serve\" \"php artisan queue:listen --queue=facturas,default,piloto --timeout=0\" \"php artisan schedule:work\" \"npm run dev\" --names=web,worker,reloj,vite"
         ],
         "test": [
             "@php artisan config:clear --ansi @no_additional_args",

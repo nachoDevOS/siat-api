@@ -22,7 +22,7 @@ son.** Solo una cosa es tuya.
 | **NIT** | del **cliente** | — | ❌ nunca |
 | **Sucursales** | del **cliente** | el cliente, en su Oficina Virtual | ❌ nunca |
 | **Puntos de venta** | del **cliente** | **este sistema**, llamando al SIAT | ❌ nunca |
-| **Tokens de API** | del **cliente** (uno por sistema que conecta) | **este sistema**, en *Acceso API* de la empresa | ❌ nunca |
+| **Token de API** | del **cliente** (uno por empresa; `siat_test_` en piloto, `siat_live_` en producción) | **este sistema**, en *Acceso API* de la empresa | ❌ nunca |
 | URLs, timeouts, nombre del sistema | del **proveedor** | vos, en el `.env` | ✅ sí |
 
 ### El token delegado, en una frase
@@ -221,6 +221,12 @@ para que integre mientras corrés las pruebas.
 Al cambiar el **ambiente a Producción** en *Editar*, los tokens de API se **revocan solos**: generá
 uno nuevo (sale `siat_live_`) y entregáselo. Así un token de pruebas nunca emite facturas reales.
 
+> Antes de facturar en producción, el certificado activo tiene que ser el de la entidad
+> certificadora: con un autofirmado de prueba la emisión se rechaza. Después de pedir el CUIS
+> de producción, tocá **Sincronizar ahora** en la tarjeta *Catálogos del NIT* de la ficha: sin
+> productos homologados la emisión no puede resolver la actividad de cada ítem. De ahí en más
+> se sincronizan solos cada día a las 03:30.
+
 ### Paso 8 — Sandbox para un cliente que ya está en producción
 
 Una vez en producción el cliente se queda sin ambiente de pruebas. En su ficha, **Crear sandbox**
@@ -236,11 +242,16 @@ Después:
 > PENDIENTE DE VERIFICAR: que el SIN siga aceptando facturas del piloto para un NIT que ya pasó a
 > producción.
 
-> Antes de facturar en producción, el certificado activo tiene que ser el de la entidad
-> certificadora: con un autofirmado de prueba la emisión se rechaza. Después de pedir el CUIS
-> de producción, tocá **Sincronizar ahora** en la tarjeta *Catálogos del NIT* de la ficha: sin
-> productos homologados la emisión no puede resolver la actividad de cada ítem. De ahí en más
-> se sincronizan solos cada día a las 03:30.
+### Paso 9 — Qué entregarle al cliente
+
+| Qué | Dónde lo saca | Para qué |
+|---|---|---|
+| **Token de API** | *Acceso API* de la empresa (se ve una sola vez) | `siat_test_…` mientras está en piloto o en su sandbox; `siat_live_…` en producción (al cambiar el ambiente el anterior se revoca solo) |
+| **Documentación** | `https://{dominio}/docs/api` | Guías, cada endpoint con ejemplos en cURL, JavaScript, PHP y Python, buscador y descargas de Postman/OpenAPI. Pública: no lleva nada privado |
+| **Carpeta `docs/integracion/`** | este repositorio | Lo mismo en archivos (`API.md`, `openapi.yaml`, colección y entorno de Postman), por si la quiere offline |
+| **Webhooks** | *Acceso API* (el webhook único) o el propio cliente por la API (`/webhooks`, con un token de *Administración*) | Enterarse de validaciones, rechazos, caídas del SIAT y vencimientos sin consultar |
+
+Los interesados que escriben desde el sitio público (`/`) llegan al panel → **Solicitudes**.
 
 ---
 
@@ -387,7 +398,10 @@ sucursales · certificado digital
 por ambiente
 
 **En el panel:** crear empresa → certificado → sucursales → puntos de venta → CUIS → CUFD
-→ piloto → producción
+→ piloto (el cliente ya integra con su token `siat_test_`) → producción (token `siat_live_` nuevo)
+→ si hace falta, *Crear sandbox*
+
+**Para el cliente:** su token + `https://{dominio}/docs/api`
 
 **Soporte del SIN:** https://siatinfo.impuestos.gob.bo/ · siat.facturacion@impuestos.gob.bo
 · 800-10-3444

@@ -12,7 +12,7 @@
 | PHP | 8.3+ con `soap`, `openssl`, `dom`, `bcmath`, `gd`, `zlib`, `pdo_mysql` |
 | MySQL | 8.x (base `siat_api`) |
 | Composer | 2.x |
-| Node / npm | **No hace falta**: el panel y las páginas públicas no tienen build de frontend |
+| Node / npm | Node 20+ y npm, **solo para compilar** el sitio público (`/`) y la documentación (`/docs/api`), las dos en React + Vite (`npm run build`). El panel y las facturas públicas no lo usan. En el servidor alcanza con compilar al desplegar: no queda ningún proceso de Node corriendo |
 | Zona horaria | **`America/La_Paz`** — en UTC el SIN rechaza por `fechaEnvio` (código 935) y el CUF sale mal |
 
 ### Levantar el sistema: los 3 procesos
@@ -22,7 +22,7 @@ tres procesos a la vez:
 
 | # | Comando (desarrollo) | Qué es | Qué hace | Si no está corriendo |
 |---|---|---|---|---|
-| 1 | `php artisan serve` | **Servidor web** | Recibe las peticiones: la API, el servidor MCP `/mcp`, el panel `/admin`, `/docs/api` y las facturas públicas | No se puede entrar a nada |
+| 1 | `php artisan serve` | **Servidor web** | Recibe las peticiones: el sitio `/`, la API, el servidor MCP `/mcp`, el panel `/admin`, `/docs/api` y las facturas públicas | No se puede entrar a nada |
 | 2 | `php artisan queue:work --queue=facturas,default,piloto` | **Worker** (el trabajador) | Hace en segundo plano lo lento: **envía las facturas al SIN**, verifica si quedaron validadas, anula, manda los paquetes, avisa por webhook, renueva el CUFD y corre el piloto | La API entrega el CUF pero **la factura nunca llega al SIN**: queda en `PENDIENTE` |
 | 3 | `php artisan schedule:work` | **Scheduler** (el reloj) | Cada minuto revisa si toca una tarea y la lanza: reintentar pendientes, verificar enviadas, renovar CUFD y CUIS, sincronizar catálogos, avisar vencimientos, limpiar logs | El CUFD vence y nadie lo renueva; nada se reintenta ni se avisa |
 
@@ -38,8 +38,12 @@ las facturas no se enviarían.**
 **¿Están corriendo?** El panel lo dice: Dashboard y **Trabajos** muestran 🟢/🔴 para el worker y el
 scheduler (cada uno deja un "latido"; si es viejo, está apagado), y cuántos trabajos esperan.
 
-> ⚠️ Después de **cada cambio de código** reinicie el worker (Ctrl+C y volver a lanzarlo, o
-> `php artisan queue:restart`): un worker viejo sigue ejecutando el código anterior.
+> ⚠️ Con `queue:work`, después de **cada cambio de código** reinicie el worker (Ctrl+C y volver a
+> lanzarlo, o `php artisan queue:restart`): un worker viejo sigue ejecutando el código anterior.
+> Con `composer run dev` no hace falta: usa `queue:listen`, que recarga el código en cada trabajo.
+
+En desarrollo hay un cuarto proceso opcional, `npm run dev` (Vite), que recompila al instante el sitio
+y la documentación al editarlos. `composer run dev` levanta los cuatro juntos.
 
 ---
 
@@ -48,12 +52,23 @@ scheduler (cada uno deja un "latido"; si es viejo, está apagado), y cuántos tr
 ```bash
 git clone <repo> siat-api && cd siat-api
 composer install
+npm ci && npm run build      # sitio público (la portada /); genera public/build
 cp .env.example .env
 php artisan key:generate
 # editar .env (ver §3)
 php artisan migrate
 php artisan db:seed          # crea admin@admin.com / password y los casos del piloto
 ```
+
+`node_modules/` y `public/build/` no se suben a git (están en `.gitignore`): se generan en cada
+servidor.
+
+**En desarrollo**, `composer run dev` levanta todo en una terminal: servidor web, worker
+(`queue:listen --queue=facturas,default,piloto --timeout=0`, que recarga el código en cada
+trabajo; sin límite de 60 s por trabajo, porque una llamada al SIAT o la PC suspendida un rato lo
+superaban y tiraban abajo los cuatro procesos), reloj
+(`schedule:work`) y Vite con recarga en vivo del sitio. Ctrl+C los corta a todos. **En producción no
+se usa**: ahí van los procesos de §4 (Supervisor + cron) y `npm run build`.
 
 > ⚠️ **`APP_KEY` cifra el token delegado, los `.p12` y sus passphrases.** Si se pierde o se
 > cambia, esos datos no se pueden descifrar y hay que volver a cargarlos. Respáldela fuera del
@@ -80,6 +95,9 @@ Cambie la contraseña del administrador apenas instale.
 | `SIAT_WEBHOOK_SECRET` | — | Secreto maestro; de él se deriva el secreto de cada empresa. **Sin él los webhooks salen sin firmar.** Cambiarlo cambia el secreto de todos los clientes |
 | `SIAT_WEBHOOK_PERMITIR_PRIVADOS` | `false` | `true` solo en desarrollo (permite `http://localhost`) |
 | `SIAT_WEBHOOK_TIMEOUT` | `10` | Segundos por intento de webhook |
+| `SITIO_MARCA`, `SITIO_WHATSAPP`, `SITIO_CORREO` | `Solución Digital`, vacío, vacío | Lo que muestran el sitio público y la documentación. WhatsApp con código de país y sin signos (`591...`). Vacíos, no se muestran |
+| `SITIO_LOGO` | logo de soluciondigital.dev | URL del logo de la marca (sitio y documentación) |
+| `SITIO_LIMITE_CONTACTO` | `5` | Mensajes por minuto e IP en el formulario de contacto |
 | `APP_URL` | — | URL pública del servidor. La documentación `/docs/api` la usa como servidor de la API: debe ser la real |
 | `TRUSTED_PROXIES` | — | IPs de los proxies de confianza (`*` = cualquiera) |
 | `SIAT_RATE_LIMIT_TOKEN` | `60` | Peticiones por minuto por token |
@@ -219,6 +237,7 @@ curl -s -o /dev/null -w '%{http_code}' https://su-dominio/docs/api   # 200
 ```bash
 php artisan down
 git pull && composer install --no-dev --optimize-autoloader
+npm ci && npm run build
 php artisan migrate --force
 php artisan config:cache && php artisan route:cache && php artisan view:cache
 php artisan queue:restart
@@ -256,10 +275,12 @@ Ver lo programado: `php artisan schedule:list`. Probar una tarea:
 | Dónde | Qué mirar |
 |---|---|
 | **`/factura/{cuf}?signature=…`** (público) | Factura con enlace firmado: página, PDF carta (`/pdf`) y ticket 80 mm (`/rollo`). En el panel, detalle de la factura → *Vista pública* / *Ticket 80 mm*. Sin firma válida: 404 |
-| **`/docs/api`** (público) | Documentación de la API para los clientes, con Redoc sobre `docs/integracion/openapi.yaml`. Redoc está guardado en `public/vendor/redoc/` (v2.5.3, MIT): no depende de un CDN |
+| **`/docs/api`** (público) | Portal de documentación para los clientes (React, se compila con `npm run build`): guías, una página por endpoint con ejemplos en cURL, JavaScript, PHP y Python, buscador (Ctrl+K) y descargas de Postman y OpenAPI. Sale de `docs/integracion/API.md` y `openapi.yaml`: al editarlos hay que volver a compilar |
 | Panel → **Trabajos** | **Todo lo que hizo la cola**: pestañas Todos · En cola · En proceso · Exitosos · Reintentando · Fallidos (con contador), filtros por tipo, empresa y fecha (**por defecto, el mes actual**; *Ver todo* quita las fechas), el error de cada fallido, **Reintentar** / **Descartar** / *Reintentar todos*, y el semáforo del worker y del scheduler. Se actualiza cada 10 s. El piloto va oculto salvo *Mostrar piloto*. El menú muestra un globo rojo con los fallidos |
 | Panel → **Facturas** | Por defecto muestra **el mes actual** (*Ver todo* quita las fechas; una búsqueda por CUF, referencia o número busca en toda la historia). Buscar por CUF, referencia o número; ver estado, motivo de observación y anulación; descargar PDF/XML; **enviar** una PENDIENTE o **verificar** una RECIBIDA sin esperar a la tarea programada |
 | Panel → **Monitor** | Facturas por estado, últimas peticiones SOAP y **últimas llamadas a la API** (filtrables por empresa y solo errores) |
+| Panel → **Solicitudes** | Mensajes del formulario de contacto del sitio público, con globo de pendientes; *Atendida* / *Reabrir* |
+| **`/`** (público) | Sitio público de la marca. Sin precios ni planes (lo controla un test) |
 | Ficha de la empresa | Vencimiento del certificado y del **token delegado** (ámbar a 30 días, rojo vencido) |
 | Empresa → **Acceso API** | Datos de conexión para el cliente, su token (generar / regenerar / revocar, último uso), webhook y su secreto, últimas llamadas de esa empresa |
 | Panel → **Dashboard** | Tasa de éxito SOAP, facturas recientes |
@@ -306,6 +327,10 @@ SELECT created_at, servicio, operacion, mensaje_error FROM logs_siat WHERE exito
 | Todo da `429` en producción | `env()` fuera de config con `config:cache` | Ya resuelto; si reaparece, revisar código nuevo |
 | Una etapa del piloto falla tras cambiar código | Worker viejo | `php artisan queue:restart` |
 | MySQL no arranca en el equipo de desarrollo | Servicio parado | `sudo systemctl start mysql` |
+| `composer run dev` se cierra con `ProcessTimedOutException` (*exceeded the timeout of 60 seconds*) | Versión vieja del script: el worker tenía tope de 60 s por trabajo (una llamada lenta al SIAT o la PC suspendida lo superaban) y `-k` cerraba los cuatro procesos | Tomar el `composer.json` actual (`queue:listen ... --timeout=0`) y volver a correr `composer run dev` |
+| Sitio o documentación en blanco / *Unable to locate file in Vite manifest* | Falta compilar el frontend | `npm ci && npm run build` (o `npm run dev` en desarrollo) |
+| Cambios en `API.md` u `openapi.yaml` no se ven en `/docs/api` | La documentación se lee al compilar | `npm run build` (con `npm run dev` se actualiza solo) |
+| En producción el sitio intenta cargar `http://127.0.0.1:5173/...` | Quedó el archivo `public/hot` de `npm run dev` | Borrar `public/hot` (está en `.gitignore`, no debería subirse) |
 
 ---
 

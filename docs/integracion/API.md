@@ -10,10 +10,11 @@ Base: `https://{dominio-del-proveedor}/api/v1`
 |---|---|
 | **API.md** (este archivo) | Guía de integración, referencia de cada endpoint y cómo probar con Postman |
 | [openapi.yaml](openapi.yaml) | Especificación OpenAPI 3 (Postman, Insomnia, generadores de clientes) |
-| [postman/](postman/) | `coleccion.json` (las 18 peticiones en orden) y `entorno.json` (sus variables) |
+| [postman/](postman/) | `coleccion.json` (las peticiones en orden, en 10 carpetas) y `entorno.json` (sus variables) |
 
-La misma documentación, navegable y con buscador: **`https://{dominio}/docs/api`** (desde ahí también
-se descargan la colección, el entorno y el OpenAPI, ya apuntando al servidor correcto).
+La misma documentación como portal: **`https://{dominio}/docs/api`**. Tiene una página por endpoint
+con ejemplos en cURL, JavaScript, PHP y Python, buscador (Ctrl+K) y las descargas de la colección, el
+entorno y el OpenAPI, ya apuntando al servidor correcto.
 
 **Qué hace su sistema y qué hace esta API**
 
@@ -142,6 +143,8 @@ curl -s -X POST "$SIAT_API_URL/facturas/{cuf}/notas" \
 - [ ] Manejo de `503`: reintentar en unos minutos
 - [ ] Webhook verificando `X-Siat-Signature` y deduplicando por `cuf` + `evento`
 - [ ] Productos asociados a códigos homologados (`/catalogos/productos`)
+- [ ] Integrado y probado con el token de **pruebas** (`siat_test_`); en producción, cambiar solo el
+      token por el `siat_live_` (la URL es la misma)
 
 ---
 
@@ -901,7 +904,7 @@ Ejemplo de configuración de cliente:
 Para probar la API **antes de programar nada**: en 10 minutos va a haber emitido, consultado y
 descargado una factura haciendo clic. Necesita:
 
-- los dos archivos de [`postman/`](postman/) — `coleccion.json` (las **18 peticiones**, ordenadas y
+- los dos archivos de [`postman/`](postman/) — `coleccion.json` (todas las **peticiones**, ordenadas y
   con ejemplos) y `entorno.json` (sus **variables**). También se descargan, ya apuntando al
   servidor, desde `https://{dominio}/docs/api` → **Colección Postman** y **Entorno**;
 - los datos que le entregó el proveedor: **URL base**, **token**, **código de sucursal** y

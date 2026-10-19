@@ -519,14 +519,23 @@ test('un error al forzar vuelve a la misma pantalla y se muestra en rojo', funct
 
 // --- Documentacion publica (/docs/api) ------------------------------------------------
 
-test('la documentacion publica se abre sin sesion y carga Redoc con la especificacion', function () {
+test('la documentacion publica se abre sin sesion: app React con guias y referencia', function () {
+    $this->withoutVite();
+
     $this->get('/docs/api')
         ->assertOk()
-        ->assertSee('<redoc spec-url="'.route('docs.api.especificacion').'"', false)
-        ->assertSee(asset('vendor/redoc/redoc.standalone.js'), false)
-        ->assertSee('token de su empresa', false);
+        ->assertSee('<div id="docs"></div>', false)
+        ->assertSee('token de su empresa', false)
+        ->assertSee(route('docs.api.especificacion'), false);
 
-    expect(file_exists(public_path('vendor/redoc/redoc.standalone.js')))->toBeTrue();
+    // Cada pagina tiene su URL y abre la misma app.
+    $this->get('/docs/api/post-facturas')->assertOk()->assertSee('<div id="docs"></div>', false);
+    $this->get('/docs/api/webhooks')->assertOk();
+});
+
+test('la ruta comodin de la documentacion no tapa los archivos descargables', function () {
+    $this->get('/docs/api/openapi.yaml')->assertOk()->assertHeader('Content-Type', 'application/yaml; charset=utf-8');
+    $this->get(route('docs.api.postman.coleccion'))->assertOk()->assertHeader('Content-Type', 'application/json; charset=utf-8');
 });
 
 test('la especificacion publica apunta al servidor real de la instalacion', function () {
@@ -544,6 +553,7 @@ test('la especificacion publica apunta al servidor real de la instalacion', func
 });
 
 test('la documentacion publica no expone nada privado', function () {
+    $this->withoutVite();
     config(['siat.proveedor.nit' => '7633685015', 'siat.proveedor.codigo_sistema' => '22848EC6F66C9401C16F7']);
     $empresa = Empresa::factory()->create();
     $token = $empresa->emitirTokenApi('T', 'caja')->plainTextToken;
@@ -662,6 +672,7 @@ test('cada peticion de la coleccion funciona de punta a punta, en orden', functi
 });
 
 test('la coleccion y el entorno se descargan desde /docs/api con la URL real', function () {
+    $this->withoutVite();
     config(['app.url' => 'https://facturas.proveedor.bo']);
 
     $this->get('/docs/api')

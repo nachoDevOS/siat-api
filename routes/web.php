@@ -14,15 +14,14 @@ use App\Http\Controllers\Admin\FacturaController;
 use App\Http\Controllers\Admin\MonitorController;
 use App\Http\Controllers\Admin\PruebaPilotoController;
 use App\Http\Controllers\Admin\PuntoVentaController;
+use App\Http\Controllers\Admin\SolicitudContactoController;
 use App\Http\Controllers\Admin\SucursalController;
 use App\Http\Controllers\Admin\TokenApiController;
 use App\Http\Controllers\Admin\TrabajoController;
 use App\Http\Controllers\Auth\LoginController;
-use App\Http\Controllers\DocumentacionApiController;
+use App\Http\Controllers\Docs\DocumentacionApiController;
 use App\Http\Controllers\FacturaPublicaController;
 use Illuminate\Support\Facades\Route;
-
-Route::get('/', fn () => redirect()->route('admin.dashboard'));
 
 /*
 |--------------------------------------------------------------------------
@@ -49,6 +48,12 @@ Route::get('docs/api', [DocumentacionApiController::class, 'index'])->name('docs
 Route::get('docs/api/openapi.yaml', [DocumentacionApiController::class, 'especificacion'])->name('docs.api.especificacion');
 Route::get('docs/api/postman/coleccion.json', [DocumentacionApiController::class, 'coleccionPostman'])->name('docs.api.postman.coleccion');
 Route::get('docs/api/postman/entorno.json', [DocumentacionApiController::class, 'entornoPostman'])->name('docs.api.postman.entorno');
+// Cada pagina de la documentacion (guias y endpoints) tiene su URL; la app
+// React elige que mostrar. Va al final y sin puntos para no tapar los
+// archivos de arriba (openapi.yaml, coleccion.json...).
+Route::get('docs/api/{pagina}', [DocumentacionApiController::class, 'index'])
+    ->where('pagina', '[a-z0-9\-/]+')
+    ->name('docs.api.pagina');
 
 /*
 |--------------------------------------------------------------------------
@@ -187,6 +192,9 @@ Route::prefix('admin')->name('admin.')->middleware('auth')->group(function () {
         ->name('pruebas.payload');
 
     Route::get('monitor', [MonitorController::class, 'index'])->name('monitor');
+    // Formulario de contacto del sitio publico.
+    Route::get('solicitudes', [SolicitudContactoController::class, 'index'])->name('solicitudes.index');
+    Route::post('solicitudes/{solicitud}/atender', [SolicitudContactoController::class, 'atender'])->name('solicitudes.atender');
     // Comunicacion con el SIAT: cada llamada SOAP, que se mando, que respondio
     // el SIN y la comparacion contra la ultima aceptada.
     Route::get('comunicacion-siat', [ComunicacionSiatController::class, 'index'])->name('comunicacion.index');

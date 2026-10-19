@@ -23,9 +23,9 @@ una sola instalación.
 | Aspecto | Valor |
 |---|---|
 | Modalidad | Electrónica en línea (`codigoModalidad = 1`) |
-| Documento | **Sector 1 — Factura Compra Venta** (`codigoDocumentoSector = 1`), con derecho a crédito fiscal (`tipoFacturaDocumento = 1`) |
+| Documentos | **Sector 1, Factura Compra Venta** (`codigoDocumentoSector = 1`, `tipoFacturaDocumento = 1`) y **sector 24, Nota de crédito-débito** (`tipoFacturaDocumento = 3`, servicio de documentos de ajuste) |
 | Ambientes | 1 = producción, 2 = piloto (cada empresa tiene el suyo) |
-| Stack | PHP 8.3 · Laravel 13 · MySQL · colas en base de datos · Blade (panel) · Pest 4 |
+| Stack | PHP 8.3 · Laravel 13 · MySQL · colas en base de datos · Blade (panel) · React 18 + Vite (sitio público y documentación) · `laravel/mcp` (agentes de IA) · Pest 4 |
 
 El sistema de ventas del cliente **no habla SOAP ni firma nada**: manda un JSON a la API REST y
 recibe el CUF al toque. Todo lo demás —CUIS, CUFD, CUF, XML, firma digital, envío, verificación,
@@ -42,6 +42,11 @@ flowchart LR
     Q -- webhook firmado --> POS
     ADMIN[Panel /admin] --> DB
     ADMIN --> SOAP
+    AGENTE[Agente de IA] -- MCP + Bearer token --> MCP[Servidor /mcp]
+    MCP --> EMI
+    VISITA[Visitante] --> SITIO[Sitio / React]
+    SITIO -- formulario --> DB
+    DEV[Desarrollador del cliente] --> DOCS[Docs /docs/api React]
 ```
 
 ---
@@ -50,21 +55,26 @@ flowchart LR
 
 | Carpeta | Qué contiene |
 |---|---|
-| `app/Http/Controllers/Api/V1` | API REST para el sistema de ventas: facturas, puntos de venta, catálogos, estado |
-| `app/Http/Controllers/Admin` | Panel `/admin`: empresas, certificados, sucursales, puntos de venta, códigos, piloto, monitor |
+| `app/Http/Controllers/Api/V1` | API REST para el sistema de ventas: facturas, lote, notas, anulación, emisión masiva, webhooks, certificado, puntos de venta, catálogos, dashboard, estado |
+| `app/Http/Controllers/Sitio` | Sitio público `/` y su formulario de contacto (`routes/sitio.php`) |
+| `app/Http/Controllers/Docs` | Documentación pública `/docs/api` |
+| `app/Mcp` | Servidor MCP (`Servers/SiatServer`) y sus herramientas (`Tools/`), ruta en `routes/ai.php` |
+| `app/Models/Sitio` | `SolicitudContacto` (formulario del sitio) |
+| `resources/js/sitio`, `resources/js/docs` | Apps React del sitio y de la documentación (Vite) |
+| `app/Http/Controllers/Admin` | Panel `/admin`: empresas (con *Crear sandbox*), certificados, sucursales, puntos de venta, códigos, piloto, monitor, trabajos, comunicación SIAT, solicitudes de contacto |
 | `app/Http/Middleware` | `siat.registro`, `siat.token`, `siat.permiso`, `siat.rate`, `siat.produccion`, `siat.idempotencia` |
-| `app/Http/Requests` | Validación de forma del JSON (`EmitirFacturaRequest`, `AnularFacturaRequest`) |
-| `app/Services/Factura` | Emisión: validación, totales, CUF, XML, firma, PDF, QR |
+| `app/Http/Requests` | Validación de forma del JSON (emitir, lote, nota, anular, anulación administrativa; `Sitio/` para el contacto) |
+| `app/Services/Factura` | Emisión de facturas y notas, anulación, emisión masiva (`GestorMasiva`), carga de certificados, validación, totales, CUF, XML, firma, PDF, QR |
 | `app/Services/Siat` | **Única frontera SOAP**: cliente, servicios por WSDL, gestor de CUIS/CUFD, lectura de respuestas |
 | `app/Services/Contingencia` | Eventos significativos y armado de paquetes |
 | `app/Services/Catalogos` | Sincronización de catálogos globales y por NIT |
 | `app/Services/Pruebas` | Ejecutor del piloto ante el SIN |
-| `app/Services/Panel` | Lógica de presentación del panel (colores de estado, checklist de etapa, lectura de `logs_siat` y comparador de líneas para **Comunicación SIAT**) |
-| `app/Services/Webhooks` | Validación del destino de los webhooks (anti-SSRF) |
+| `app/Services/Panel` | Lógica del panel (colores de estado, checklist de etapa, **Comunicación SIAT**) y acciones compartidas con la API: `CreadorSandbox`, `RegistradorPuntoVenta` |
+| `app/Services/Webhooks` | Validación del destino (anti-SSRF) y `Notificador`, que reparte cada evento entre los destinos registrados por el cliente |
 | `app/Jobs` | Trabajo en segundo plano (envío, verificación, anulación, paquetes, webhooks, CUFD, piloto) |
 | `app/Console/Commands` | Comandos `siat:*` (ver [INSTALACION-Y-DESPLIEGUE.md](INSTALACION-Y-DESPLIEGUE.md#5-comandos-siat)) |
-| `app/Http/Controllers/FacturaPublicaController.php` | Factura pública con enlace firmado (`Factura::urlPublica`): página, PDF carta y ticket 80 mm |
-| `app/Http/Controllers/DocumentacionApiController.php` | Documentación pública `/docs/api` (Redoc + `openapi.yaml` con el servidor real) |
+| `app/Http/Controllers/FacturaPublicaController.php` | Factura pública con enlace firmado (`Factura::urlPublica`): página, PDF carta, ticket 80 mm, mini ticket y ZIP |
+| `app/Http/Controllers/Docs/DocumentacionApiController.php` | Documentación pública `/docs/api` y `/docs/api/{pagina}` (app React de `resources/js/docs`), más `openapi.yaml` con el servidor real y las descargas de Postman |
 | `routes/console.php` | Tareas programadas |
 | `config/siat.php` | Toda la configuración propia del dominio |
 
@@ -100,7 +110,7 @@ sequenceDiagram
     participant DB as MySQL
     participant Q as Cola
     POS->>MW: JSON + Authorization Bearer + X-Idempotency-Key
-    MW->>MW: logs_api · token → empresa (IP) · rate limit · permiso · ¿PRODUCCION? · idempotencia
+    MW->>MW: logs_api · token → empresa (IP) · rate limit · permiso · ¿puede emitir? · idempotencia
     MW->>E: venta validada (EmitirFacturaRequest)
     E->>DB: ¿ya existe esa referencia_externa? → devolverla
     E->>E: ValidadorFactura (reglas de negocio)
@@ -160,16 +170,19 @@ flowchart TD
 
 | Estado | Significado | Sale hacia |
 |---|---|---|
-| `PENDIENTE` | Emitida y firmada; todavía no viajó | `RECIBIDA`, `VALIDADA`, `OBSERVADA`, `CONTINGENCIA` |
+| `PENDIENTE` | Emitida y firmada; todavía no viajó | `RECIBIDA`, `VALIDADA`, `OBSERVADA`, `CONTINGENCIA` (una nota de crédito-débito nunca: queda `PENDIENTE` y se reintenta) |
 | `RECIBIDA` | El SIN acusó recibo individual, sin validar aún | `VALIDADA`, `OBSERVADA`, `ANULADA` |
 | `ENVIADA` | Viajó dentro de un paquete de contingencia | `VALIDADA`, `OBSERVADA`, `ANULADA` |
 | `VALIDADA` | El SIN la aceptó (908/690) | `ANULADA` |
 | `OBSERVADA` | El SIN la rechazó; no se reintenta (el documento no cambia) | — |
 | `CONTINGENCIA` | Válida e imprimible, pendiente de viajar en un paquete | `ENVIADA` |
+| `MASIVA` | Emitida con un lote de emisión masiva abierto (tipo de emisión 3); válida, espera el cierre del lote | `ENVIADA` → `VALIDADA` / `OBSERVADA` (por paquete) |
 | `ANULADA` | Anulación registrada (ver `facturas_anuladas.estado`) | vuelve al estado anterior si el SIN rechaza la anulación |
 
 Anulación (`facturas_anuladas.estado`): `PENDIENTE` → `CONFIRMADA` | `RECHAZADA` (la factura vuelve
-a su `estado_anterior`) | `REVERTIDA` (reversión hecha en el piloto).
+a su `estado_anterior`) | `REVERTIDA` (por el panel o `POST /facturas/{cuf}/revertir-anulacion`).
+Una anulación administrativa (`tipo = ADMINISTRATIVA`) nace `CONFIRMADA`, sin SOAP, y no se revierte.
+Las notas de crédito-débito usan los mismos estados.
 
 ---
 
@@ -188,8 +201,11 @@ demás. La cola se declara con el atributo `#[Queue('...')]` en cada job.
 | `VerificarEstadoFactura` | `EnviarFacturaAlSiat`, tarea `verificar-enviadas` | 5 · 60/120/300/600 s | Llama `verificacionEstadoFactura`. 901 (pendiente) o -1 (excepción interna del SIN) = reintenta; 902 = rechazada → `OBSERVADA`. En el último intento no se reencola: la retoma la tarea programada |
 | `AnularFacturaEnSiat` | `POST .../anular`, tarea `reintentar-anulaciones` | 5 · 30/120/300/900 s | Llama `anulacionFactura`. **Único por factura** (`ShouldBeUnique`, 1 h). Si el SIN rechaza, verifica antes el estado: si ya figura anulada (reintento tras timeout) la confirma; si sigue vigente revierte la factura; si no responde queda `PENDIENTE`. Agotados los intentos queda `PENDIENTE` |
 | `EnviarPaqueteContingencia` | `siat:recuperar-contingencia`, piloto | 3 · 60/300/900 s | Arma el TAR, llama `recepcionPaqueteFactura`, marca las facturas `ENVIADA` |
-| `NotificarWebhook` | Cambios de estado | 5 · 10/30/60/120 s | POST firmado al `webhook_url` del cliente, con IP fijada y sin seguir redirecciones (anti-SSRF) |
-| `RenovarCufd` | `siat:renovar-cufds` | 3 | Pide un CUFD nuevo (y el CUIS antes si venció). Ignora puntos de venta no registrados en el SIN y empresas sin token |
+| `NotificarWebhook` | Cambios de estado | 5 · 10/30/60/120 s | POST firmado al `webhook_url` del cliente, con IP fijada y sin seguir redirecciones (anti-SSRF). En el primer intento reparte además el evento entre los destinos registrados (`Notificador`) |
+| `EntregarWebhook` | `Notificador` | 8 · 10 s … 1 h | Entrega un aviso a un destino registrado por el cliente, firmado con el secreto de ese destino, y guarda el resultado en `webhook_entregas`. Agotado, queda `FALLIDA` (el cliente lo puede reenviar) |
+| `EnviarPaqueteMasivo` | Cierre de un lote masivo | 4 · 60/300/900 s | Arma el TAR y llama `recepcionMasivaFactura`; si el SIN lo recibe, agenda la validación |
+| `ValidarPaqueteMasivo` | `EnviarPaqueteMasivo`, tarea `validar-paquetes-masivos` | 6 · 60 s … 20 min | Llama `validacionRecepcionMasivaFactura`: valida u observa todas las facturas del paquete y avisa por webhook |
+| `RenovarCufd` | `siat:renovar-cufds` | 3 | Pide un CUFD nuevo (y el CUIS antes si venció). Ignora puntos de venta no registrados en el SIN y empresas sin token. Si falla del todo, avisa con el webhook `cufd.renovacion_fallida` |
 | `EjecutarCasoPrueba` | Panel del piloto | — | Ejecuta una llamada del piloto (etapas largas) |
 | `SincronizarCatalogosEmpresa` | Tarea `sincronizar-catalogos-empresas` | 3 · 300/900 s | Sincroniza actividades, productos homologados y leyendas del NIT con un punto de venta que tenga CUIS vigente (se salta la empresa si no hay). El panel tiene además el botón **Sincronizar ahora** (síncrono) |
 
@@ -212,10 +228,11 @@ Pantalla: `Admin\TrabajoController`. Limpieza: `siat:purgar-logs` (exitosos 7 d�
 | cada 10 min | `siat:recuperar-contingencia` | Si el SIAT responde: registra el evento, lo cierra y despacha el paquete |
 | cada 15 min | `verificar-enviadas` | Reencola la verificación de `ENVIADA`/`RECIBIDA` con más de 20 min |
 | cada 15 min | `reintentar-anulaciones` | Reencola anulaciones `PENDIENTE` con más de 30 min |
+| cada 15 min | `validar-paquetes-masivos` | Vuelve a pedir el resultado de los paquetes masivos `ENVIADO` con más de 45 min |
 | cada hora | `siat:renovar-cufds` | Renueva los CUFD que vencen en menos de 2 h |
 | diario 02:00 | `siat:revisar-codigos` | Pide un CUIS nuevo a los puntos de venta que lo perdieron (no se puede antes: con uno vigente el SIN devuelve el mismo) |
 | diario 04:00 | `siat:purgar-logs` | Borra `logs_siat` más viejos que la retención |
-| diario 07:00 | `siat:avisar-certificados` | Alerta certificados y tokens delegados vencidos o que vencen en menos de 30 días (también al log) |
+| diario 07:00 | `siat:avisar-certificados` | Alerta certificados y tokens delegados vencidos o que vencen en menos de 30 días (al log) y manda el webhook `certificado.por_vencer` a los 30, 15, 7, 3 y 1 días |
 | diario 03:30 | `sincronizar-catalogos-empresas` | Despacha `SincronizarCatalogosEmpresa` por cada empresa con token |
 | domingo 03:00 | `siat:sincronizar-globales` | Catálogos paramétricos globales |
 
@@ -541,7 +558,16 @@ erDiagram
     empresas ||--o{ leyendas_factura : catalogo
     empresas ||--o{ logs_siat : auditoria
     casos_prueba ||--o{ ejecuciones_prueba : ejecuta
+    facturas ||--o{ facturas : "nota ajusta"
+    empresas ||--o| empresas : sandbox
+    empresas ||--o{ webhook_endpoints : registra
+    webhook_endpoints ||--o{ webhook_entregas : historial
+    puntos_venta ||--o{ lotes_masivos : abre
+    lotes_masivos ||--o{ paquetes : arma
+    lotes_masivos ||--o{ facturas : agrupa
 ```
+
+`solicitudes_contacto` (formulario del sitio público) no se relaciona con nada.
 
 ---
 
@@ -629,8 +655,9 @@ código: pedirlo de nuevo no duplica.
 | `leyenda`, `usuario` | |
 | `codigo_documento_sector` | 1 factura, 24 nota de crédito-débito |
 | `factura_origen_id` | Solo en una nota: la factura que ajusta |
+| `lote_masivo_id` | Solo si se emitió con un lote de emisión masiva abierto |
 | `monto_efectivo_credito_debito` | Solo en una nota: 13% de lo devuelto. En la nota, `subtotal` = suma de líneas devueltas y `descuento_global` = descuento prorrateado |
-| `tipo_emision` | 1 en línea, 2 contingencia (entra al CUF) |
+| `tipo_emision` | 1 en línea, 2 contingencia, 3 masiva (entra al CUF) |
 | `estado` | Ver [Máquina de estados](#máquina-de-estados-de-la-factura). Índice `(estado, id)` |
 | `codigo_recepcion`, `codigo_estado_siat` | Respuesta del SIN |
 | `motivo_observacion` | Por qué el SIN la observó (`[código] descripción`); null si no fue observada |
@@ -673,6 +700,38 @@ que se firman y reenvían) · `estado` (`PENDIENTE`, `ENTREGADA`, `FALLIDA`) · 
 `facturas.lote_masivo_id` y `paquetes.lote_masivo_id` / `paquetes.tipo` (`CONTINGENCIA`, `MASIVA`)
 / `paquetes.motivo_observacion` lo completan.
 
+### Sitio público (portada `/`)
+
+App React (Vite) separada del resto, todo en su propia carpeta:
+
+| Pieza | Dónde |
+|---|---|
+| Rutas | `routes/sitio.php` (cargado en `bootstrap/app.php` con el grupo `web`): `GET /` y `POST /contacto` (throttle `sitio-contacto`) |
+| Controladores | `app/Http/Controllers/Sitio/` (`InicioController`, `ContactoController`) |
+| Request | `app/Http/Requests/Sitio/EnviarContactoRequest` (campo trampa `sitio_web` para bots) |
+| Modelo | `app/Models/Sitio/SolicitudContacto` → tabla `solicitudes_contacto` (`nombre`, `empresa`, `correo`, `telefono`, `interes`, `mensaje`, `ip`, `atendida_en`) |
+| Vista | `resources/views/sitio/app.blade.php`: monta React y le pasa los datos en un JSON incrustado |
+| App React | `resources/js/sitio/` (`main.jsx`, `App.jsx`, `componentes/*.jsx`, `sitio.css` sin Tailwind). Identidad de Solución Digital (soluciondigital.dev): fondo azul noche, cian + violeta, Poppins/Inter. Animaciones con `motion` (todas respetan "reducir movimiento"); íconos `@phosphor-icons/react`; logos de la franja desde Simple Icons |
+| Configuración | `config/sitio.php` (`SITIO_*` del `.env`; el logo por defecto es el de soluciondigital.dev) |
+| Panel | *Solicitudes* (`/admin/solicitudes`, `Admin\SolicitudContactoController`) |
+
+El sitio **no publica precios ni planes** (lo controla un test). WhatsApp y correo solo se muestran si
+están en el `.env`.
+
+### Documentación de la API (`/docs/api`)
+
+App React aparte del sitio, en su propia carpeta: `resources/js/docs/` (`App.jsx`, `componentes/`,
+`contenido/`, `docs.css`), vista `resources/views/docs/app.blade.php`, controlador
+`Controllers/Docs/DocumentacionApiController`. **Fuente única**, leída al compilar:
+
+- `contenido/guia.js` parte `docs/integracion/API.md` en páginas por cada `## `. De la sección de
+  endpoints, cada `### `METODO /ruta`` se pega como "Detalle y reglas" a la página de ese endpoint.
+- `contenido/referencia.js` arma una página por operación de `openapi.yaml` (parámetros, cuerpo,
+  respuestas, ejemplos de petición en 4 lenguajes y de respuesta desde los esquemas).
+
+Cada página tiene su URL (`/docs/api/post-facturas`, `/docs/api/webhooks`...). Editar `API.md` u
+`openapi.yaml` exige `npm run build` (en desarrollo, `npm run dev` lo recarga solo).
+
 ### Servidor MCP
 
 `routes/ai.php` → `App\Mcp\Servers\SiatServer` en `POST /mcp`, detrás de `siat.registro`,
@@ -687,8 +746,9 @@ toma la empresa del request y exige el permiso del endpoint REST equivalente.
 (`ABIERTO`, `CERRADO`).
 
 #### `paquetes`
-`empresa_id` · `punto_venta_id` · `evento_id` · `cantidad_facturas` · `codigo_recepcion` ·
-`estado` (`PENDIENTE`, `ENVIADO`) · `enviado_en`.
+`empresa_id` · `punto_venta_id` · `tipo` (`CONTINGENCIA` o `MASIVA`) · `evento_id` (contingencia) ·
+`lote_masivo_id` (masiva) · `cantidad_facturas` · `codigo_recepcion` · `estado` (`PENDIENTE`,
+`ENVIADO`; los masivos además `VALIDADO` u `OBSERVADO`) · `motivo_observacion` · `enviado_en`.
 
 #### `logs_api`
 `empresa_id` · `token_id` (sin FK: el historial sobrevive al token revocado) · `metodo` · `ruta` ·
