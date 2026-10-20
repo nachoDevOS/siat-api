@@ -171,7 +171,7 @@ test('las facturas del panel exigen sesion', function () {
 test('el historial de codigos pagina los CUFD con la vista propia del panel', function () {
     $this->actingAs(User::factory()->create());
     $puntoVenta = PuntoVenta::factory()->create();
-    Cufd::factory()->count(30)->for($puntoVenta)->create();
+    Cufd::factory()->count(30)->for($puntoVenta)->create(['version' => 'v3']);
 
     $this->get(route('admin.puntos-venta.codigos', $puntoVenta))
         ->assertOk()
@@ -399,16 +399,6 @@ test('el vencimiento de un certificado se toma en hora de Bolivia', function () 
 
     expect($vence->getTimezone()->getName())->toBe('America/La_Paz')
         ->and($vence->getTimestamp())->toBe(openssl_x509_parse($pem)['validTo_time_t']);
-});
-
-test('la migracion corrige el vencimiento de los certificados ya guardados', function () {
-    $certificado = Certificado::factory()->firmable()->create(['vence_el' => '2000-01-01']);
-    $real = $certificado->vencimientoDelP12();
-
-    (require database_path('migrations/2026_10_11_200456_recalcular_vencimiento_de_certificados.php'))->up();
-
-    expect($real)->not->toBeNull()
-        ->and($certificado->fresh()->vence_el->toDateString())->toBe($real->toDateString());
 });
 
 // --- Filtro por defecto: este mes --------------------------------------------------
@@ -656,4 +646,34 @@ test('un CAFC con el rango consumido se ve agotado', function () {
     expect($cafc->usados())->toBe(1000)
         ->and($cafc->disponibles())->toBe(0)
         ->and($cafc->estaAgotado())->toBeTrue();
+});
+
+test('el formulario de empresa no pide el codigo interno, que el XML sigue llevando con su default', function () {
+    $this->actingAs(User::factory()->create());
+    $empresa = Empresa::factory()->create();
+
+    $this->get(route('admin.empresas.create'))->assertOk()->assertDontSee('name="codigo_interno"', false);
+    $this->get(route('admin.empresas.edit', $empresa))->assertOk()->assertDontSee('name="codigo_interno"', false);
+    expect($empresa->fresh()->codigo_interno)->toBe('A');
+});
+
+test('el alta de empresa sugiere el codigo de sistema del proveedor', function () {
+    $this->actingAs(User::factory()->create());
+    config(['siat.proveedor.codigo_sistema' => '228BABC372923E714D2F7']);
+
+    $this->get(route('admin.empresas.create'))->assertOk()
+        ->assertSee('name="codigo_sistema"', false)
+        ->assertSee('value="228BABC372923E714D2F7"', false);
+});
+
+test('la pantalla de codigos cierra todos sus contenedores', function () {
+    $this->actingAs(User::factory()->create());
+    $puntoVenta = PuntoVenta::factory()->create();
+    Cufd::factory()->for($puntoVenta)->create(['version' => 'v2']);
+
+    $html = $this->get(route('admin.puntos-venta.codigos', $puntoVenta))->assertOk()->getContent();
+
+    // Un </div> de mas cerraba el contenido antes de tiempo y las tarjetas
+    // de CUFD salian como columnas encima del encabezado.
+    expect(preg_match_all('/<div\b/', $html))->toBe(substr_count($html, '</div>'));
 });

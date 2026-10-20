@@ -17,6 +17,11 @@ return new class extends Migration
         Schema::create('empresas', function (Blueprint $table) {
             $table->id();
 
+            // Sandbox: copia en el piloto de una empresa de produccion, para que
+            // el cliente pruebe su integracion sin tocar la real. Null = no es
+            // copia de nadie.
+            $table->foreignId('sandbox_de_id')->nullable()->constrained('empresas')->nullOnDelete();
+
             $table->string('nombre_comercial');
             $table->string('razon_social');
             $table->string('nit', 20);
@@ -28,14 +33,13 @@ return new class extends Migration
             // porque son credenciales sensibles que jamas deben verse en claro.
             $table->text('token_delegado')->nullable();
 
-            // Solo guardamos el hash de la API key, nunca la clave en texto plano.
-            // Es unico para poder ubicar la empresa por su hash en el middleware.
-            $table->string('api_key_hash', 64)->nullable()->unique();
-
             // 1 = Produccion, 2 = Piloto. Un mismo servidor mezcla ambos.
             $table->unsignedTinyInteger('codigo_ambiente')->default(2);
             // 1 = Electronica, 2 = Computarizada.
             $table->unsignedTinyInteger('codigo_modalidad')->default(1);
+            // "Codigo Interno SIN" que el XSD V3 exige en la cabecera de la
+            // factura (de 1 a 10 caracteres). El SIN en sus ejemplos manda "A".
+            $table->string('codigo_interno', 10)->default('A');
 
             // Ciclo de vida ante el SIN, ver seccion 12.3 del documento maestro.
             $table->string('estado')->default('EN_REGISTRO');

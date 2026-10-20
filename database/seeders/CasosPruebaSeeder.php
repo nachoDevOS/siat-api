@@ -76,11 +76,18 @@ class CasosPruebaSeeder extends Seeder
     {
         // [etapa, orden, nombre, tipo, parametros del portal, pruebas esperadas]
         $pruebas = [
-            // Etapa I: un CUIS para cada punto de venta de la casa matriz.
-            [1, 1, 'CUIS sucursal 0 / punto de venta 1', 'solicitudCuis',
-                ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1], 1],
-            [1, 2, 'CUIS sucursal 0 / punto de venta 0', 'solicitudCuis',
-                ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0], 1],
+            // Etapa I: un CUIS para cada punto de venta de la casa matriz, en
+            // las dos versiones de los servicios (V3 /sfd y V2 /v2). El SIN
+            // comparte el CUIS entre versiones: el ultimo emitido es el que
+            // queda guardado para las etapas siguientes.
+            [1, 1, 'CUIS V3 sucursal 0 / punto de venta 1', 'solicitudCuis',
+                ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1, 'version' => 'v3'], 1],
+            [1, 2, 'CUIS V3 sucursal 0 / punto de venta 0', 'solicitudCuis',
+                ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0, 'version' => 'v3'], 1],
+            [1, 3, 'CUIS V2 sucursal 0 / punto de venta 1', 'solicitudCuis',
+                ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1, 'version' => 'v2'], 1],
+            [1, 4, 'CUIS V2 sucursal 0 / punto de venta 0', 'solicitudCuis',
+                ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0, 'version' => 'v2'], 1],
         ];
 
         // Etapa II: cada catalogo 50 veces, primero con el PV 1 y despues con el

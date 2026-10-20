@@ -129,6 +129,10 @@ class PuntoVenta extends Model
     {
         return $this->cufds()
             ->where('fecha_vigencia', '>', now())
+            // Un CUFD atado a un CUIS cerrado o vencido no sirve aunque siga
+            // dentro de sus 24 horas: el SIN lo rechaza con 913. Pasaba al
+            // cerrar operaciones para pedir un CUIS nuevo.
+            ->whereDoesntHave('cuis', fn ($cuis) => $cuis->where('fecha_vigencia', '<=', now()))
             ->latest('id')
             ->first();
     }

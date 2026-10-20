@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Exceptions\SiatException;
 use App\Http\Controllers\Controller;
 use App\Models\PuntoVenta;
+use App\Services\Panel\CuisEtapaUno;
 use App\Services\Siat\GestorCodigos;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\View\View;
@@ -37,7 +38,7 @@ class CodigoController extends Controller
      * SIN emite un CUFD por dia como minimo: en un ano son mas de 350 filas por
      * punto de venta, y ahi adentro no se podia ni mirar ni paginar.
      */
-    public function historial(PuntoVenta $puntoVenta): View
+    public function historial(PuntoVenta $puntoVenta, CuisEtapaUno $etapaUno): View
     {
         $puntoVenta->load('sucursal.empresa');
 
@@ -51,6 +52,15 @@ class CodigoController extends Controller
             'listaCuis' => $puntoVenta->cuis()->withCount('cufds')->latest('id')->get(),
             // El CUFD es el que crece: se pagina.
             'listaCufd' => $puntoVenta->cufds()->with('cuis')->latest('id')->paginate(25),
+            // El SIN comparte el CUIS entre V2 y V3: se aclara solo donde hay
+            // dos versiones (el piloto).
+            'compartidoEntreVersiones' => filled(config("siat.urls_v2.{$puntoVenta->sucursal->empresa->codigo_ambiente}")),
+            // Pruebas de CUIS de la etapa I de este punto de venta (solo piloto).
+            'pruebasEtapaUno' => $etapaUno->delPuntoVenta(
+                $puntoVenta->sucursal->empresa,
+                (int) $puntoVenta->sucursal->codigo_sucursal,
+                (int) $puntoVenta->codigo_punto_venta,
+            ),
         ]);
     }
 

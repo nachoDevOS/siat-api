@@ -80,6 +80,23 @@ class EstadosVisuales
     }
 
     /**
+     * Estado de un CUIS o un CUFD (ver Cuis::estadoFrente y Cufd::estadoFrente).
+     * Solo el vigente va en verde: el resto es historial, no un problema.
+     *
+     * @return array{etiqueta: string, color: string}
+     */
+    public static function codigo(string $estado): array
+    {
+        return [
+            'vigente' => ['etiqueta' => 'vigente', 'color' => 'verde'],
+            'cerrado' => ['etiqueta' => 'cerrado', 'color' => 'gris'],
+            'vencido' => ['etiqueta' => 'vencido', 'color' => 'gris'],
+            'reemplazado' => ['etiqueta' => 'reemplazado', 'color' => 'gris'],
+            'cuis_cerrado' => ['etiqueta' => 'su CUIS ya no sirve', 'color' => 'gris'],
+        ][$estado] ?? ['etiqueta' => $estado, 'color' => 'gris'];
+    }
+
+    /**
      * Estados de empresa para poblar filtros, con su etiqueta legible.
      *
      * @return array<string, string>

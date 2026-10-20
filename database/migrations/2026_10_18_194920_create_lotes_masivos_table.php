@@ -36,11 +36,8 @@ return new class extends Migration
         });
 
         Schema::table('paquetes', function (Blueprint $table) {
-            $table->string('tipo')->default('CONTINGENCIA')->after('evento_id');
             $table->foreignId('lote_masivo_id')->nullable()->after('tipo')
                 ->constrained('lotes_masivos')->nullOnDelete();
-            // Por que el SIN observo el paquete, si lo observo.
-            $table->text('motivo_observacion')->nullable()->after('estado');
         });
     }
 
@@ -48,7 +45,6 @@ return new class extends Migration
     {
         Schema::table('paquetes', function (Blueprint $table) {
             $table->dropConstrainedForeignId('lote_masivo_id');
-            $table->dropColumn(['tipo', 'motivo_observacion']);
         });
 
         Schema::table('facturas', function (Blueprint $table) {

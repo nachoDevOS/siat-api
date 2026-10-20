@@ -27,6 +27,22 @@ class Cufd extends Model
         ];
     }
 
+    /**
+     * Estado para el panel. Un CUFD dentro de sus 24 horas pero atado a un
+     * CUIS que ya no sirve tampoco sirve: el SIN lo rechaza con 913.
+     *
+     * @return 'vigente'|'cuis_cerrado'|'vencido'|'reemplazado'
+     */
+    public function estadoFrente(?self $enUso): string
+    {
+        return match (true) {
+            $enUso !== null && $this->id === $enUso->id => 'vigente',
+            $this->fecha_vigencia->isPast() => 'vencido',
+            $this->cuis?->fecha_vigencia?->isPast() ?? false => 'cuis_cerrado',
+            default => 'reemplazado',
+        };
+    }
+
     public function puntoVenta(): BelongsTo
     {
         return $this->belongsTo(PuntoVenta::class);

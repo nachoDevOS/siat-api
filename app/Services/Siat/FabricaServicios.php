@@ -29,14 +29,22 @@ class FabricaServicios
         return new ServicioFacturacion($empresa, new SiatClient($empresa));
     }
 
-    public function codigos(Empresa $empresa): ServicioCodigos
+    /**
+     * La version solo cambia en las pruebas del piloto que el portal pide
+     * tambien contra las rutas /v2 (CUIS de la etapa I).
+     */
+    public function codigos(Empresa $empresa, string $version = SiatClient::VERSION_V3): ServicioCodigos
     {
-        return new ServicioCodigos($empresa, new SiatClient($empresa));
+        return new ServicioCodigos($empresa, new SiatClient($empresa, $version));
     }
 
-    public function operaciones(Empresa $empresa): ServicioOperaciones
+    /**
+     * Con version solo la pide el cierre de operaciones de la etapa I, que se
+     * hace por la misma ruta (/v2 o /sfd) que la prueba que destraba.
+     */
+    public function operaciones(Empresa $empresa, string $version = SiatClient::VERSION_V3): ServicioOperaciones
     {
-        return new ServicioOperaciones($empresa, new SiatClient($empresa));
+        return new ServicioOperaciones($empresa, new SiatClient($empresa, $version));
     }
 
     public function sincronizacion(Empresa $empresa): ServicioSincronizacion

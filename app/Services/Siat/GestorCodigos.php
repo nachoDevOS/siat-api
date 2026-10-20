@@ -10,6 +10,7 @@ use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Sleep;
 
 /**
  * Pide un CUIS o un CUFD al SIN y lo guarda.
@@ -23,7 +24,119 @@ use Illuminate\Support\Facades\Log;
  */
 class GestorCodigos
 {
+    /**
+     * Codigo con el que el SIN avisa que ya habia un CUIS vigente: devuelve
+     * ese mismo en vez de emitir uno.
+     */
+    private const CUIS_YA_VIGENTE = 980;
+
+    /**
+     * Pedidos de CUIS despues de cerrar operaciones, y segundos de pausa antes
+     * de cada uno. Tras un cierre por /sfd el primer pedido por /sfd se cuelga
+     * hasta el timeout: paso en las tres corridas del piloto del 19/10/2026
+     * (por /v2 nunca), y un solo reintento no siempre alcanzo.
+     */
+    public const INTENTOS_TRAS_CIERRE = 3;
+
+    public const PAUSA_TRAS_CIERRE = 5;
+
     public function __construct(private readonly FabricaServicios $fabrica) {}
+
+    /**
+     * Deja el punto de venta con un CUIS NUEVO pedido por cada version de los
+     * servicios que tenga el ambiente: V2 (/v2) si esta configurada y despues
+     * V3 (/sfd). La V3 va al final porque el SIN comparte el CUIS entre
+     * versiones y el ultimo emitido es el que queda vigente: el sistema
+     * factura con la V3. Solo CUIS: el CUFD lo pide la emision o la tarea
+     * horaria cuando haga falta.
+     *
+     * Si el SIN ya tenia un CUIS vigente (980, por ejemplo de un alta
+     * anterior), cierra las operaciones del sistema en ese punto de venta y
+     * lo vuelve a pedir: es la unica forma de que emita uno nuevo. Comprobado
+     * en el piloto (etapa I, 19/10/2026) en las dos versiones.
+     *
+     * @return list<string> una linea por version con lo que se obtuvo.
+     *
+     * @throws SiatException en la primera version que falle; las anteriores
+     *                       quedan guardadas.
+     */
+    public function pedirCuisNuevoEnTodasLasVersiones(PuntoVenta $puntoVenta): array
+    {
+        $empresa = $puntoVenta->sucursal->empresa;
+        $versiones = filled(config("siat.urls_v2.{$empresa->codigo_ambiente}"))
+            ? [SiatClient::VERSION_V2, SiatClient::VERSION_V3]
+            : [SiatClient::VERSION_V3];
+
+        $resumen = [];
+
+        foreach ($versiones as $version) {
+            $etiqueta = strtoupper($version);
+
+            try {
+                $cuis = $this->cuisNuevoPorVersion($puntoVenta, $version);
+            } catch (SiatException $e) {
+                throw new SiatException(implode(' ', [...$resumen, "{$etiqueta}: {$e->getMessage()}"]), $e);
+            }
+
+            $resumen[] = "{$etiqueta}: CUIS nuevo {$cuis->codigo}.";
+        }
+
+        return $resumen;
+    }
+
+    /**
+     * Pide el CUIS por una version y, si el SIN devuelve el vigente (980),
+     * cierra las operaciones con ese codigo y lo pide otra vez.
+     *
+     * @throws SiatException si no cierra, no entrega CUIS o repite el mismo.
+     */
+    private function cuisNuevoPorVersion(PuntoVenta $puntoVenta, string $version): Cuis
+    {
+        $empresa = $puntoVenta->sucursal->empresa;
+        $codigos = $this->fabrica->codigos($empresa, $version);
+
+        $respuesta = $codigos->solicitarCuis($puntoVenta);
+        $leida = RespuestaSiat::desde($respuesta, 'RespuestaCuis');
+        $yaVigente = collect($leida->mensajes)->contains(fn (array $m): bool => (int) $m['codigo'] === self::CUIS_YA_VIGENTE);
+
+        if ($yaVigente) {
+            $anterior = (string) data_get($respuesta, 'RespuestaCuis.codigo');
+
+            $cierre = RespuestaSiat::desde(
+                $this->fabrica->operaciones($empresa, $version)->cerrarOperacionesSistema(
+                    (int) $puntoVenta->sucursal->codigo_sucursal,
+                    (int) $puntoVenta->codigo_punto_venta,
+                    $anterior,
+                ),
+                'RespuestaCierreSistemas',
+            );
+
+            if (! $cierre->aceptada) {
+                throw new SiatException("el SIN no cerro las operaciones del CUIS {$anterior}: {$cierre->motivo()}");
+            }
+
+            // Cerrado del lado del SIN ya no sirve tampoco en la base.
+            $puntoVenta->cuis()->where('codigo', $anterior)->get()->each->marcarCerrado();
+
+            // Tras el cierre el punto de venta queda SIN CUIS hasta que llegue el
+            // nuevo: un timeout aca lo dejaba asi. Ver INTENTOS_TRAS_CIERRE.
+            $respuesta = retry(
+                self::INTENTOS_TRAS_CIERRE,
+                function () use ($codigos, $puntoVenta) {
+                    Sleep::for(self::PAUSA_TRAS_CIERRE)->seconds();
+
+                    return $codigos->solicitarCuis($puntoVenta);
+                },
+                when: fn (\Throwable $e): bool => $e instanceof SiatException,
+            );
+
+            if ((string) data_get($respuesta, 'RespuestaCuis.codigo') === $anterior) {
+                throw new SiatException("se cerraron las operaciones, pero el SIN devolvio el mismo CUIS ({$anterior}).");
+            }
+        }
+
+        return $this->guardarCuis($puntoVenta, $respuesta, $version);
+    }
 
     /**
      * CUIS vigente del punto de venta; si no hay, lo pide al SIN.
@@ -155,7 +268,7 @@ class GestorCodigos
 
         // Cerrado del lado del SIN, el CUIS ya no sirve: si queda vigente en la
         // base, asegurarCuis() lo seguiria usando y todo volveria con 913.
-        $actual->update(['fecha_vigencia' => now()]);
+        $actual->marcarCerrado();
 
         try {
             $nuevo = $this->renovarCuis($puntoVenta);
@@ -193,7 +306,7 @@ class GestorCodigos
      *
      * @throws SiatException si la respuesta no trae codigo.
      */
-    public function guardarCuis(PuntoVenta $puntoVenta, mixed $respuesta): Cuis
+    public function guardarCuis(PuntoVenta $puntoVenta, mixed $respuesta, string $version = SiatClient::VERSION_V3): Cuis
     {
         $codigo = (string) data_get($respuesta, 'RespuestaCuis.codigo');
 
@@ -216,10 +329,15 @@ class GestorCodigos
         // MISMO codigo. Con create() cada clic dejaba una fila identica mas y el
         // historial se llenaba de duplicados que no existen del lado del SIN.
         // La identidad del codigo es el codigo: si ya esta, se refresca.
-        return Cuis::updateOrCreate(
-            ['punto_venta_id' => $puntoVenta->id, 'codigo' => $codigo],
-            ['fecha_vigencia' => $this->vigencia($respuesta, 'RespuestaCuis', now()->addYear())],
-        );
+        $cuis = Cuis::firstOrNew(['punto_venta_id' => $puntoVenta->id, 'codigo' => $codigo]);
+        $cuis->fecha_vigencia = $this->vigencia($respuesta, 'RespuestaCuis', now()->addYear());
+        // Ruta por la que se pidio (/v2 o /sfd). El SIN comparte el codigo
+        // entre versiones: si otra version lo devuelve con el 980, sigue siendo
+        // el que emitio la primera, asi que la version no se pisa.
+        $cuis->version ??= $version;
+        $cuis->save();
+
+        return $cuis;
     }
 
     /**
@@ -228,7 +346,7 @@ class GestorCodigos
      * @throws SiatException si no hay CUIS vigente o si el SIN no devuelve
      *                       codigo y codigo de control.
      */
-    public function solicitarCufd(PuntoVenta $puntoVenta): Cufd
+    public function solicitarCufd(PuntoVenta $puntoVenta, string $version = SiatClient::VERSION_V3): Cufd
     {
         $cuis = $puntoVenta->cuisVigente();
 
@@ -239,10 +357,10 @@ class GestorCodigos
         }
 
         $respuesta = $this->fabrica
-            ->codigos($puntoVenta->sucursal->empresa)
+            ->codigos($puntoVenta->sucursal->empresa, $version)
             ->solicitarCufd($puntoVenta, $cuis->codigo);
 
-        return $this->guardarCufd($puntoVenta, $cuis, $respuesta);
+        return $this->guardarCufd($puntoVenta, $cuis, $respuesta, $version);
     }
 
     /**
@@ -256,7 +374,7 @@ class GestorCodigos
      *
      * @throws SiatException si faltan codigo o codigo de control.
      */
-    public function guardarCufd(PuntoVenta $puntoVenta, Cuis $cuis, mixed $respuesta): Cufd
+    public function guardarCufd(PuntoVenta $puntoVenta, Cuis $cuis, mixed $respuesta, string $version = SiatClient::VERSION_V3): Cufd
     {
         $codigo = (string) data_get($respuesta, 'RespuestaCufd.codigo');
         $codigoControl = (string) data_get($respuesta, 'RespuestaCufd.codigoControl');
@@ -283,6 +401,8 @@ class GestorCodigos
                 // Queda atado al CUIS con el que el SIN lo emitio: es lo que
                 // permite reconstruir de que CUIS salio cada CUF.
                 'cuis_id' => $cuis->id,
+                // Ruta por la que se pidio (/v2 o /sfd), para el panel.
+                'version' => $version,
                 'codigo_control' => $codigoControl,
                 'direccion' => (string) data_get($respuesta, 'RespuestaCufd.direccion'),
                 // El CUFD dura 24 horas desde su emision.

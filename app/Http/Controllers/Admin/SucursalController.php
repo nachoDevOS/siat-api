@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Empresa;
 use App\Models\PuntoVenta;
 use App\Models\Sucursal;
+use App\Services\Pruebas\EjecutorPruebas;
 use App\Services\Siat\GestorCodigos;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -21,7 +22,10 @@ use Illuminate\Http\Request;
  */
 class SucursalController extends Controller
 {
-    public function __construct(private readonly GestorCodigos $gestor) {}
+    public function __construct(
+        private readonly GestorCodigos $gestor,
+        private readonly EjecutorPruebas $pruebas,
+    ) {}
 
     public function store(Request $request, Empresa $empresa): RedirectResponse
     {
@@ -33,7 +37,9 @@ class SucursalController extends Controller
     }
 
     /**
-     * Deja la sucursal lista para facturar con su punto de venta 0.
+     * Deja la sucursal con su punto de venta 0 y un CUIS NUEVO por cada
+     * version de los servicios. Solo CUIS: el CUFD lo pide la emision o la
+     * tarea horaria cuando haga falta.
      *
      * OJO con la palabra "crear": en el SIN NO se crea nada. El punto de venta
      * 0 ya existe alla desde que el contribuyente registro la sucursal en la
@@ -42,6 +48,12 @@ class SucursalController extends Controller
      *
      * Por eso no se llama a registroPuntoVenta —que si crearia uno nuevo en el
      * SIN, con otro codigo, y es irreversible—: solo se le piden los codigos.
+     *
+     * En el piloto corre las pruebas de la etapa I de la sucursal
+     * (EjecutorPruebas::pedirCuisDeEtapaUno): PV 1 y PV 0, V2 y V3, y quedan
+     * contadas en la etapa. Si el SIN ya tenia un CUIS vigente, cierra
+     * operaciones y lo pide de nuevo. Fuera del piloto, o si la sucursal no
+     * tiene pruebas, va por GestorCodigos::pedirCuisNuevoEnTodasLasVersiones().
      *
      * Es BEST-EFFORT: si el SIAT no responde, la sucursal igual queda creada y
      * el operador reintenta con los botones de siempre. Una caida del SIN no
@@ -57,19 +69,28 @@ class SucursalController extends Controller
             'activo' => true,
         ]);
 
-        try {
-            $this->gestor->solicitarCuis($puntoVenta);
-        } catch (SiatException $e) {
-            return "Se preparo su punto de venta 0, pero el CUIS no se pudo pedir: {$e->getMessage()}";
+        $empresa = $sucursal->empresa;
+
+        $resumen = $empresa->esSandbox()
+            ? $this->pruebas->pedirCuisDeEtapaUno($empresa, (int) $sucursal->codigo_sucursal)
+            : null;
+
+        if ($resumen !== null) {
+            // El detalle por prueba esta en la tarjeta "CUIS de la etapa I" de
+            // la ficha; aca va el total y lo que fallo.
+            $contadas = collect($resumen)->where('contada', true)->count();
+            $fallas = collect($resumen)->where('contada', false)->pluck('texto')->implode(' ');
+
+            return "CUIS de la etapa I: {$contadas} de ".count($resumen).' contados.'.($fallas !== '' ? " {$fallas}" : '');
         }
 
         try {
-            $this->gestor->solicitarCufd($puntoVenta);
+            $resumen = $this->gestor->pedirCuisNuevoEnTodasLasVersiones($puntoVenta);
         } catch (SiatException $e) {
-            return "CUIS obtenido. El CUFD no se pudo pedir: {$e->getMessage()}";
+            return "Se preparo su punto de venta 0, pero no se obtuvo su CUIS: {$e->getMessage()}";
         }
 
-        return 'Su punto de venta 0 —el que ya tenia en el SIN— quedo configurado con CUIS y CUFD vigentes: ya puede facturar.';
+        return 'Su punto de venta 0 —el que ya tenia en el SIN— quedo configurado. '.implode(' ', $resumen);
     }
 
     /**

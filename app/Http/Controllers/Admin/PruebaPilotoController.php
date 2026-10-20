@@ -156,6 +156,27 @@ class PruebaPilotoController extends Controller
     }
 
     /**
+     * "Reintentar" del resumen de CUIS de la etapa I en la ficha: pide el CUIS
+     * nuevo de esa prueba, cerrando operaciones si el SIN devuelve el vigente.
+     * Vuelve a la pantalla desde la que se apreto.
+     */
+    public function cuisNuevo(Empresa $empresa, CasoPrueba $caso, EjecutorPruebas $ejecutor): RedirectResponse
+    {
+        abort_unless($caso->tipo === 'solicitudCuis', 404);
+
+        if (($bloqueo = $this->bloqueo($empresa, false)) !== null) {
+            return back()->with('error', $bloqueo);
+        }
+
+        $ejecucion = $ejecutor->pedirCuisNuevoDePrueba($empresa, $caso);
+        $etiqueta = $ejecutor->etiquetaDeCuis($caso);
+
+        return $ejecucion->estado === EjecucionPrueba::ESTADO_EXITOSO
+            ? back()->with('estado', "{$etiqueta}: CUIS nuevo ".data_get($ejecucion->respuesta, 'cuis').', contado en la etapa I.')
+            : back()->with('error', "{$etiqueta}: ".data_get($ejecucion->respuesta, 'error', 'sin detalle'));
+    }
+
+    /**
      * Borra el registro LOCAL de ejecuciones de una etapa (o de todas) y los
      * jobs de esas pruebas que sigan en cola, para volver a contar desde cero.
      *

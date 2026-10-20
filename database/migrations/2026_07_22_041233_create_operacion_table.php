@@ -37,13 +37,25 @@ return new class extends Migration
             $table->foreignId('empresa_id')->constrained('empresas')->cascadeOnDelete();
             $table->foreignId('punto_venta_id')->constrained('puntos_venta')->cascadeOnDelete();
             $table->foreignId('evento_id')->nullable()->constrained('eventos_significativos')->nullOnDelete();
+            // CONTINGENCIA o MASIVA. lote_masivo_id se agrega en la migracion
+            // que crea lotes_masivos.
+            $table->string('tipo')->default('CONTINGENCIA');
 
             $table->unsignedInteger('cantidad_facturas')->default(0);
             $table->string('codigo_recepcion')->nullable();
             $table->string('estado')->default('PENDIENTE');
+            // Por que el SIN observo el paquete, si lo observo.
+            $table->text('motivo_observacion')->nullable();
             $table->dateTime('enviado_en')->nullable();
 
             $table->timestamps();
+        });
+
+        // La factura apunta al paquete en el que viajo. Va aca y no en la
+        // migracion de facturas porque paquetes se crea despues.
+        Schema::table('facturas', function (Blueprint $table) {
+            $table->foreignId('paquete_id')->nullable()->after('cufd_id')
+                ->constrained('paquetes')->nullOnDelete();
         });
 
         // Auditoria: cada llamada SOAP guarda su XML enviado y recibido. Es la
@@ -70,6 +82,9 @@ return new class extends Migration
     public function down(): void
     {
         Schema::dropIfExists('logs_siat');
+        Schema::table('facturas', function (Blueprint $table) {
+            $table->dropConstrainedForeignId('paquete_id');
+        });
         Schema::dropIfExists('paquetes');
         Schema::dropIfExists('eventos_significativos');
     }

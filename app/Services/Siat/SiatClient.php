@@ -27,7 +27,21 @@ class SiatClient
      */
     private ?SoapClient $ultimoCliente = null;
 
-    public function __construct(private readonly Empresa $empresa) {}
+    /**
+     * Version de los servicios SOAP que usa el sistema para operar.
+     */
+    public const VERSION_V3 = 'v3';
+
+    /**
+     * Version anterior: solo la piden las pruebas del piloto que el portal
+     * exige tambien contra las rutas /v2.
+     */
+    public const VERSION_V2 = 'v2';
+
+    public function __construct(
+        private readonly Empresa $empresa,
+        private readonly string $version = self::VERSION_V3,
+    ) {}
 
     /**
      * Devuelve un SoapClient listo para invocar operaciones de un servicio.
@@ -70,6 +84,8 @@ class SiatClient
 
     /**
      * Arma la URL del WSDL: {base_del_ambiente}/{NombreServicio}?wsdl
+     *
+     * La base sale del ambiente de la empresa y de la version pedida.
      */
     public function urlWsdl(string $claveServicio): string
     {
@@ -79,11 +95,12 @@ class SiatClient
             throw new SiatException("Servicio SIAT desconocido: '{$claveServicio}'.");
         }
 
-        $base = config("siat.urls.{$this->empresa->codigo_ambiente}");
+        $urls = $this->version === self::VERSION_V2 ? 'siat.urls_v2' : 'siat.urls';
+        $base = config("{$urls}.{$this->empresa->codigo_ambiente}");
 
         if ($base === null) {
             throw new SiatException(
-                "Ambiente SIAT sin URL configurada: {$this->empresa->codigo_ambiente}.",
+                "Ambiente SIAT sin URL configurada para la version {$this->version}: {$this->empresa->codigo_ambiente}.",
             );
         }
 

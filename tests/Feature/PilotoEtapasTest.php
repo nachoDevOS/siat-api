@@ -29,12 +29,15 @@ use Database\Seeders\CasosPruebaSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Sleep;
 
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
     $this->actingAs(User::factory()->create());
     $this->seed(CasosPruebaSeeder::class);
+    // La pausa tras cerrar operaciones no espera de verdad en las pruebas.
+    Sleep::fake();
 });
 
 /**
@@ -90,12 +93,14 @@ function empresaDeEtapaUno(): Empresa
 test('el seeder carga la etapa I con los parametros del portal', function () {
     $casos = CasoPrueba::where('etapa', 1)->orderBy('orden')->get();
 
-    expect($casos)->toHaveCount(2)
+    expect($casos)->toHaveCount(4)
         ->and($casos->pluck('payload_ejemplo')->all())->toBe([
-            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1],
-            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0],
+            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1, 'version' => 'v3'],
+            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0, 'version' => 'v3'],
+            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1, 'version' => 'v2'],
+            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0, 'version' => 'v2'],
         ])
-        ->and($casos->pluck('pruebas_esperadas')->all())->toBe([1, 1]);
+        ->and($casos->pluck('pruebas_esperadas')->all())->toBe([1, 1, 1, 1]);
 
     // Los 17 pasos viejos siguen y no se pisaron con los de la etapa.
     expect(CasoPrueba::whereNull('etapa')->count())->toBe(17);
@@ -111,13 +116,40 @@ test('la etapa I pide un CUIS por cada punto de venta del portal, sin certificad
     // Cada CUIS nuevo trae su CUFD atado a el.
     $codigos->shouldReceive('solicitarCufd')->once()->with(Mockery::any(), 'CUIS-PV1')->andReturn(respuestaCufd('CUFD-PV1'));
     $codigos->shouldReceive('solicitarCufd')->once()->with(Mockery::any(), 'CUIS-PV0')->andReturn(respuestaCufd('CUFD-PV0'));
-    codigosSimulados($codigos);
+
+    // Las mismas pruebas contra las rutas /v2. El SIN comparte el CUIS entre
+    // versiones: el de la V2 queda como vigente y se le ata un CUFD, pedido
+    // tambien por V2.
+    $codigosV2 = Mockery::mock(ServicioCodigos::class);
+    $codigosV2->shouldReceive('solicitarCuisPara')->once()->with(0, 1)->andReturn(respuestaCuis('CUIS-V2-PV1'));
+    $codigosV2->shouldReceive('solicitarCuisPara')->once()->with(0, 0)->andReturn(respuestaCuis('CUIS-V2-PV0'));
+    $codigosV2->shouldReceive('solicitarCufd')->once()->with(Mockery::any(), 'CUIS-V2-PV1')->andReturn(respuestaCufd('CUFD-V2-PV1'));
+    $codigosV2->shouldReceive('solicitarCufd')->once()->with(Mockery::any(), 'CUIS-V2-PV0')->andReturn(respuestaCufd('CUFD-V2-PV0'));
+
+    test()->mock(FabricaServicios::class, function ($mock) use ($codigos, $codigosV2) {
+        // Mockery usa la primera que coincide: la de V2 va antes que la general.
+        $mock->shouldReceive('codigos')->with(Mockery::any(), SiatClient::VERSION_V2)->andReturn($codigosV2);
+        $mock->shouldReceive('codigos')->andReturn($codigos);
+    });
 
     $this->post(route('admin.pruebas.etapa', [$empresa, 1]))
         ->assertRedirect(route('admin.pruebas.show', $empresa))
-        ->assertSessionHas('estado', fn (string $m) => str_contains($m, '2 prueba(s) enviadas, todas OK'));
+        ->assertSessionHas('estado', fn (string $m) => str_contains($m, '4 prueba(s) enviadas, todas OK'));
 
-    expect(EjecucionPrueba::where('estado', EjecucionPrueba::ESTADO_EXITOSO)->count())->toBe(2);
+    expect(EjecucionPrueba::where('estado', EjecucionPrueba::ESTADO_EXITOSO)->count())->toBe(4)
+        ->and(PuntoVenta::where('codigo_punto_venta', 1)->sole()->cuisVigente()->codigo)->toBe('CUIS-V2-PV1')
+        ->and(PuntoVenta::where('codigo_punto_venta', 0)->sole()->cuisVigente()->codigo)->toBe('CUIS-V2-PV0')
+        ->and(Cuis::pluck('version', 'codigo')->all())->toEqual([
+            'CUIS-PV1' => 'v3', 'CUIS-PV0' => 'v3', 'CUIS-V2-PV1' => 'v2', 'CUIS-V2-PV0' => 'v2',
+        ]);
+
+    // La pantalla de codigos: una sola tabla (el CUIS es compartido), el mas
+    // nuevo arriba con su version, y la etapa I de este punto de venta completa.
+    $this->get(route('admin.puntos-venta.codigos', PuntoVenta::where('codigo_punto_venta', 0)->sole()))
+        ->assertOk()
+        ->assertSee('sirve para V2 y V3')
+        ->assertSee('un solo CUIS vigente por punto de venta para las dos versiones', false)
+        ->assertSeeInOrder(['etapa I de este punto de venta', '(2 de 2 contadas)', 'CUIS (2)', 'CUIS-V2-PV0', 'V2', 'vigente', 'CUIS-PV0', 'V3', 'reemplazado']);
 
     // El PV 1 no estaba en local: se configuro solo. Cada CUIS quedo guardado
     // con la vigencia del SIN y con su CUFD atado.
@@ -137,15 +169,17 @@ test('reejecutar una etapa completa no vuelve a llamar al SIN', function () {
     $empresa = empresaDeEtapaUno();
 
     $codigos = Mockery::mock(ServicioCodigos::class);
-    $codigos->shouldReceive('solicitarCuisPara')->twice()->andReturn(respuestaCuis('CUIS-PV1'), respuestaCuis('CUIS-PV0'));
-    $codigos->shouldReceive('solicitarCufd')->twice()->andReturn(respuestaCufd('CUFD-PV1'), respuestaCufd('CUFD-PV0'));
+    $codigos->shouldReceive('solicitarCuisPara')->times(4)
+        ->andReturn(respuestaCuis('CUIS-PV1'), respuestaCuis('CUIS-PV0'), respuestaCuis('CUIS-V2-PV1'), respuestaCuis('CUIS-V2-PV0'));
+    $codigos->shouldReceive('solicitarCufd')->times(4)
+        ->andReturn(respuestaCufd('CUFD-PV1'), respuestaCufd('CUFD-PV0'), respuestaCufd('CUFD-V2-PV1'), respuestaCufd('CUFD-V2-PV0'));
     codigosSimulados($codigos);
 
     $this->post(route('admin.pruebas.etapa', [$empresa, 1]));
     $this->post(route('admin.pruebas.etapa', [$empresa, 1]))
         ->assertSessionHas('estado', fn (string $m) => str_contains($m, 'ya estaba completa'));
 
-    expect(EjecucionPrueba::count())->toBe(2);
+    expect(EjecucionPrueba::count())->toBe(4);
 });
 
 test('un rechazo del SIN queda FALLIDO con su motivo y no suma como correcta', function () {
@@ -263,6 +297,34 @@ test('cerrar operaciones manda al SIN el CUIS vigente del punto de venta de la p
     expect(EjecucionPrueba::sole()->estado)->toBe(EjecucionPrueba::ESTADO_EXITOSO);
 });
 
+test('la prueba V2 cierra operaciones y pide el CUIS nuevo por las rutas /v2', function () {
+    $empresa = empresaDeEtapaUno();
+    $caso = CasoPrueba::where('etapa', 1)->where('orden', 4)->sole();
+
+    $codigosV2 = Mockery::mock(ServicioCodigos::class);
+    $codigosV2->shouldReceive('solicitarCuisPara')->twice()->with(0, 0)
+        ->andReturn(respuestaCuisYaVigente('D66814EB'), respuestaCuis('CUIS-V2-NUEVO'));
+    $operacionesV2 = Mockery::mock(ServicioOperaciones::class);
+    $operacionesV2->shouldReceive('cerrarOperacionesSistema')->once()->with(0, 0, 'D66814EB')
+        ->andReturn((object) ['RespuestaCierreSistemas' => (object) ['codigoSistema' => 'X', 'transaccion' => true]]);
+
+    // El CUFD del CUIS nuevo se pide por la misma version.
+    $codigosV2->shouldReceive('solicitarCufd')->once()->with(Mockery::any(), 'CUIS-V2-NUEVO')->andReturn(respuestaCufd('CUFD-NUEVO'));
+    $codigos = Mockery::mock(ServicioCodigos::class);
+
+    test()->mock(FabricaServicios::class, function ($mock) use ($codigos, $codigosV2, $operacionesV2) {
+        $mock->shouldReceive('codigos')->with(Mockery::any(), SiatClient::VERSION_V2)->andReturn($codigosV2);
+        $mock->shouldReceive('codigos')->andReturn($codigos);
+        $mock->shouldReceive('operaciones')->with(Mockery::any(), SiatClient::VERSION_V2)->andReturn($operacionesV2);
+    });
+
+    $this->post(route('admin.pruebas.cerrar-operaciones', [$empresa, $caso]))
+        ->assertSessionHas('estado', fn (string $m) => str_contains($m, 'CUIS nuevo CUIS-V2-NUEVO, contado'));
+
+    expect(EjecucionPrueba::sole()->estado)->toBe(EjecucionPrueba::ESTADO_EXITOSO)
+        ->and(PuntoVenta::where('codigo_punto_venta', 0)->sole()->cuisVigente()->codigo)->toBe('CUIS-V2-NUEVO');
+});
+
 test('si el SIN no cierra las operaciones se muestra su motivo', function () {
     $empresa = empresaDeEtapaUno();
     $caso = CasoPrueba::where('etapa', 1)->where('orden', 2)->sole();
@@ -330,7 +392,7 @@ test('el seeder carga la etapa II: 18 catalogos x 2 puntos de venta, 50 cada uno
         ->and($casos[35]->payload_ejemplo['operacion'])->toBe('sincronizarParametricaUnidadMedida');
 
     // La etapa I no se toco.
-    expect(CasoPrueba::where('etapa', 1)->count())->toBe(2);
+    expect(CasoPrueba::where('etapa', 1)->count())->toBe(4);
 });
 
 test('una prueba de catalogo usa el CUIS del punto de venta de la prueba y cuenta los registros', function () {
@@ -1284,4 +1346,48 @@ test('cuisDe cae al CUIS vigente si el CUFD no tiene vinculo guardado', function
 
     expect($pv->cuisDe($conVinculo)->is($viejo))->toBeTrue()
         ->and($pv->cuisDe($sinVinculo)->is($nuevo))->toBeTrue();
+});
+
+test('el cliente SOAP arma el WSDL del piloto con /sfd (V3) o /v2 segun la version', function () {
+    $empresa = Empresa::factory()->create(['codigo_ambiente' => 2]);
+
+    expect((new SiatClient($empresa))->urlWsdl('codigos'))
+        ->toBe('https://pilotosiatservicios.impuestos.gob.bo/sfd/FacturacionCodigos?wsdl')
+        ->and((new SiatClient($empresa, SiatClient::VERSION_V2))->urlWsdl('codigos'))
+        ->toBe('https://pilotosiatservicios.impuestos.gob.bo/v2/FacturacionCodigos?wsdl');
+});
+
+test('la tabla de CUIS distingue vigente, cerrado, vencido y reemplazado', function () {
+    $this->actingAs(User::factory()->create());
+    $puntoVenta = PuntoVenta::factory()->create();
+    // De mas viejo a mas nuevo. El sin version es anterior a que se guardara.
+    Cuis::factory()->for($puntoVenta)->create(['codigo' => 'CUIS-VENCIDO', 'version' => null, 'fecha_vigencia' => now()->subDay()]);
+    Cuis::factory()->for($puntoVenta)->create(['codigo' => 'CUIS-REEMPLAZADO', 'version' => 'v3', 'fecha_vigencia' => now()->addYear()]);
+    $cerrado = Cuis::factory()->for($puntoVenta)->create(['codigo' => 'CUIS-CERRADO', 'version' => 'v2', 'fecha_vigencia' => now()->addYear()]);
+    $cerrado->marcarCerrado();
+    Cuis::factory()->for($puntoVenta)->create(['codigo' => 'CUIS-VIGENTE', 'version' => 'v3', 'fecha_vigencia' => now()->addYear()]);
+
+    $this->get(route('admin.puntos-venta.codigos', $puntoVenta))
+        ->assertOk()->assertSeeInOrder([
+            'CUIS (4)',
+            'CUIS-VIGENTE', 'V3', 'vigente', 'hasta',
+            'CUIS-CERRADO', 'V2', 'cerrado', 'cerrado '.now()->format('d/m/Y'),
+            'CUIS-REEMPLAZADO', 'V3', 'reemplazado', 'reemplazado por uno mas nuevo',
+            'CUIS-VENCIDO', '—', 'vencido',
+        ]);
+});
+
+test('un CUFD atado a un CUIS cerrado deja de ser vigente aunque siga dentro de sus 24 horas', function () {
+    $puntoVenta = PuntoVenta::factory()->create();
+    $cuis = Cuis::factory()->for($puntoVenta)->create(['fecha_vigencia' => now()->addYear()]);
+    $cufd = Cufd::factory()->for($puntoVenta)->create(['cuis_id' => $cuis->id, 'fecha_vigencia' => now()->addDay()]);
+
+    expect($puntoVenta->cufdVigente()?->id)->toBe($cufd->id);
+
+    $cuis->marcarCerrado();
+
+    // Con el CUIS cerrado el SIN lo rechaza con 913: no hay CUFD que usar.
+    expect($puntoVenta->cufdVigente())->toBeNull()
+        ->and($cufd->fresh()->estadoFrente(null))->toBe('cuis_cerrado')
+        ->and($cuis->fresh()->cerrado_en)->not->toBeNull();
 });

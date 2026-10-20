@@ -2,6 +2,7 @@
 
 namespace App\Services\Pruebas;
 
+use App\Exceptions\CuisYaVigenteException;
 use App\Exceptions\FacturaInvalidaException;
 use App\Exceptions\SiatException;
 use App\Jobs\AnularFacturaEnSiat;
@@ -24,7 +25,9 @@ use App\Services\Factura\EmisorFactura;
 use App\Services\Siat\FabricaServicios;
 use App\Services\Siat\GestorCodigos;
 use App\Services\Siat\RespuestaSiat;
+use App\Services\Siat\SiatClient;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Sleep;
 use Throwable;
 
 /**
@@ -55,6 +58,12 @@ class EjecutorPruebas
         private readonly GestorCodigos $codigos,
         private readonly GeneradorPaquetePrueba $paquetes,
     ) {}
+
+    /**
+     * Apagado solo mientras el alta de sucursal corre la etapa I: ahi se pide
+     * el CUIS y nada mas (ver pedirCuisDeEtapaUno).
+     */
+    private bool $pedirCufdConCuisNuevo = true;
 
     /**
      * Corre las pruebas de UNA etapa del portal del SIN.
@@ -133,6 +142,12 @@ class EjecutorPruebas
             $datos = ['error' => $e instanceof FacturaInvalidaException
                 ? $e->getMessage().' '.implode(' | ', $e->errores)
                 : $e->getMessage()];
+
+            // Marca para quien tenga que destrabarlo cerrando operaciones.
+            if ($e instanceof CuisYaVigenteException) {
+                $datos['cuis_ya_vigente'] = true;
+                $datos['cuis_vigente'] = $e->codigo;
+            }
         }
 
         return EjecucionPrueba::create([
@@ -259,13 +274,20 @@ class EjecutorPruebas
      * No hace falta tener el punto de venta configurado aca. Si existe, el
      * codigo se guarda igual (es valido) para las etapas siguientes.
      *
+     * El portal pide la etapa en las dos versiones de los servicios. El CUIS
+     * es el mismo en las dos: comprobado en el piloto (19/10/2026), /v2
+     * devolvio con 980 los mismos codigos vigentes que /sfd. Por eso el que
+     * emite la V2 tambien se guarda: pasa a ser el vigente del punto de venta
+     * y la V3 opera con el.
+     *
      * @return array<string, mixed>
      */
     private function solicitarCuisDeEtapa(Empresa $empresa, CasoPrueba $caso): array
     {
         [$codigoSucursal, $codigoPuntoVenta] = $this->codigosDePrueba($caso);
+        $version = (string) ($caso->payload_ejemplo['version'] ?? SiatClient::VERSION_V3);
 
-        $respuesta = $this->fabrica->codigos($empresa)->solicitarCuisPara($codigoSucursal, $codigoPuntoVenta);
+        $respuesta = $this->fabrica->codigos($empresa, $version)->solicitarCuisPara($codigoSucursal, $codigoPuntoVenta);
         $leida = RespuestaSiat::desde($respuesta, 'RespuestaCuis');
         $codigo = (string) data_get($respuesta, 'RespuestaCuis.codigo');
 
@@ -283,14 +305,15 @@ class EjecutorPruebas
         $cufdRenovado = false;
 
         if ($local !== null) {
-            $cuis = $this->codigos->guardarCuis($local, $respuesta);
+            $cuis = $this->codigos->guardarCuis($local, $respuesta, $version);
 
             // Un CUIS nuevo deja al CUFD vigente atado al anterior, y el SIN
             // rechaza con 913 las facturas de la etapa IV. Se pide uno atado
-            // al nuevo; si falla, la prueba de CUIS igual vale.
-            if ($cuis->wasRecentlyCreated && $leida->aceptada) {
+            // al nuevo; si falla, la prueba de CUIS igual vale. Se pide por la
+            // misma version que el CUIS.
+            if ($this->pedirCufdConCuisNuevo && $cuis->wasRecentlyCreated && $leida->aceptada) {
                 try {
-                    $this->codigos->solicitarCufd($local);
+                    $this->codigos->solicitarCufd($local, $version);
                     $cufdRenovado = true;
                 } catch (SiatException) {
                     // Lo renueva la tarea horaria o la emision, al necesitarlo.
@@ -301,13 +324,19 @@ class EjecutorPruebas
         if (! $leida->aceptada) {
             $yaVigente = collect($leida->mensajes)->contains(fn (array $m): bool => (int) $m['codigo'] === self::CUIS_YA_VIGENTE);
 
-            throw new SiatException($yaVigente
-                ? "El SIN devolvio el CUIS que ya estaba vigente ({$codigo}) en vez de emitir uno: el portal NO lo cuenta como prueba. ".
-                  'Para que emita uno nuevo hay que cerrar antes las operaciones del sistema en este punto de venta.'
-                : "El SIN no emitio el CUIS: {$leida->motivo()}");
+            if ($yaVigente) {
+                throw new CuisYaVigenteException(
+                    "El SIN devolvio el CUIS que ya estaba vigente ({$codigo}) en vez de emitir uno: el portal NO lo cuenta como prueba. ".
+                    'Para que emita uno nuevo hay que cerrar antes las operaciones del sistema en este punto de venta.',
+                    $codigo,
+                );
+            }
+
+            throw new SiatException("El SIN no emitio el CUIS: {$leida->motivo()}");
         }
 
         return [
+            'version' => $version,
             'codigoSucursal' => $codigoSucursal,
             'codigoPuntoVenta' => $codigoPuntoVenta,
             'cuis' => $codigo,
@@ -1072,6 +1101,145 @@ class EjecutorPruebas
     }
 
     /**
+     * Pide CUIS NUEVOS para los puntos de venta de una sucursal corriendo sus
+     * pruebas de la etapa I (PV 1 y PV 0 de la casa matriz): es lo que hace el
+     * alta de sucursal en el piloto, para que el CUIS de cada version quede
+     * pedido Y contado en la etapa. Solo CUIS: el CUFD lo pide la emision o
+     * la tarea horaria cuando haga falta.
+     *
+     * Por punto de venta va primero la V2 y al final la V3: el SIN comparte el
+     * CUIS entre versiones y el ultimo emitido es el que queda vigente, y el
+     * sistema factura con la V3. Si el SIN ya tenia un CUIS vigente (980),
+     * cierra las operaciones y repite la prueba; si tras el cierre el SIN no
+     * responde (timeout, visto el 19/10/2026), la repite una vez mas, porque
+     * el punto de venta queda sin CUIS hasta que llegue el nuevo.
+     *
+     * @return list<array{contada: bool, texto: string}>|null una por prueba, o
+     *                                                        null si la sucursal no tiene pruebas en la etapa I.
+     */
+    public function pedirCuisDeEtapaUno(Empresa $empresa, int $codigoSucursal): ?array
+    {
+        $casos = CasoPrueba::where('fase', CasoPrueba::FASE_PILOTO)
+            ->where('etapa', 1)
+            ->where('tipo', 'solicitudCuis')
+            ->orderBy('orden')
+            ->get()
+            ->filter(fn (CasoPrueba $caso): bool => $this->codigosDePrueba($caso)[0] === $codigoSucursal)
+            // Orden del portal entre puntos de venta; dentro de cada uno, V2 antes que V3.
+            ->sortBy([
+                fn (CasoPrueba $a, CasoPrueba $b): int => array_search($this->codigosDePrueba($a)[1], [1, 0], true) <=> array_search($this->codigosDePrueba($b)[1], [1, 0], true),
+                fn (CasoPrueba $a, CasoPrueba $b): int => $this->esV2($a) === $this->esV2($b) ? 0 : ($this->esV2($a) ? -1 : 1),
+            ]);
+
+        if ($casos->isEmpty()) {
+            return null;
+        }
+
+        // CUIS que acaba de emitir la prueba anterior del mismo punto de venta:
+        // es el vigente (el SIN lo comparte entre versiones), asi que la V3 lo
+        // cierra directo sin volver a preguntar (y sin otro 980 en el log).
+        $vigentePorPuntoVenta = [];
+
+        return $casos
+            ->map(function (CasoPrueba $caso) use ($empresa, &$vigentePorPuntoVenta): array {
+                $puntoVenta = $this->codigosDePrueba($caso)[1];
+                $ejecucion = $this->pedirCuisNuevoDePrueba($empresa, $caso, $vigentePorPuntoVenta[$puntoVenta] ?? null);
+                $contada = $ejecucion->estado === EjecucionPrueba::ESTADO_EXITOSO;
+
+                if ($contada) {
+                    $vigentePorPuntoVenta[$puntoVenta] = (string) data_get($ejecucion->respuesta, 'cuis');
+                }
+
+                return [
+                    'contada' => $contada,
+                    'texto' => $this->etiquetaDeCuis($caso).': '.($contada
+                        ? 'CUIS nuevo '.data_get($ejecucion->respuesta, 'cuis').', contado en la etapa I.'
+                        : data_get($ejecucion->respuesta, 'error', 'sin detalle')),
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Corre una prueba de CUIS de la etapa I hasta que el SIN emita uno nuevo:
+     * si devolvio el vigente (980), cierra las operaciones y la repite, con un
+     * reintento si tras el cierre no responde. Solo CUIS, sin CUFD.
+     *
+     * Lo usan el alta de sucursal y el boton "Reintentar" del resumen de la
+     * etapa I en la ficha.
+     */
+    public function pedirCuisNuevoDePrueba(Empresa $empresa, CasoPrueba $caso, ?string $cuisVigente = null): EjecucionPrueba
+    {
+        $this->pedirCufdConCuisNuevo = false;
+
+        try {
+            // Sin saber cual es el vigente, se le pregunta al SIN pidiendolo:
+            // o lo emite (la prueba cuenta y listo) o responde 980 con el
+            // vigente, que es justo el que hay que cerrar.
+            if ($cuisVigente === null) {
+                $ejecucion = $this->ejecutarCaso($empresa, $caso);
+
+                if (! data_get($ejecucion->respuesta, 'cuis_ya_vigente')) {
+                    return $ejecucion;
+                }
+
+                $cuisVigente = (string) data_get($ejecucion->respuesta, 'cuis_vigente');
+                // Esa consulta no fue un intento de la prueba: era para saber
+                // que cerrar. Si quedara, el historial mostraria un FALLIDO
+                // que no lo es.
+                $ejecucion->delete();
+            }
+
+            try {
+                $cierre = $this->cerrarConCuis($empresa, $caso, $cuisVigente);
+            } catch (SiatException $e) {
+                $cierre = ['cerrado' => false, 'motivo' => $e->getMessage()];
+            }
+
+            if (! $cierre['cerrado']) {
+                // Queda registrado como intento fallido con el motivo real.
+                return EjecucionPrueba::create([
+                    'empresa_id' => $empresa->id,
+                    'caso_id' => $caso->id,
+                    'estado' => EjecucionPrueba::ESTADO_FALLIDO,
+                    'respuesta' => ['error' => "El SIN no cerro las operaciones: {$cierre['motivo']}"],
+                    'ejecutado_en' => now(),
+                ]);
+            }
+
+            // Tras un cierre por /sfd el primer pedido de CUIS por /sfd se
+            // cuelga hasta el timeout (las tres corridas del 19/10/2026; por
+            // /v2 nunca). Una pausa y hasta tres intentos le dan tiempo.
+            for ($intento = 1; $intento <= GestorCodigos::INTENTOS_TRAS_CIERRE; $intento++) {
+                Sleep::for(GestorCodigos::PAUSA_TRAS_CIERRE)->seconds();
+                $ejecucion = $this->ejecutarCaso($empresa, $caso);
+
+                if ($ejecucion->estado === EjecucionPrueba::ESTADO_EXITOSO || data_get($ejecucion->respuesta, 'cuis_ya_vigente')) {
+                    break;
+                }
+            }
+
+            return $ejecucion;
+        } finally {
+            $this->pedirCufdConCuisNuevo = true;
+        }
+    }
+
+    /**
+     * "PV 1 V2": como se nombra una prueba de CUIS en los mensajes.
+     */
+    public function etiquetaDeCuis(CasoPrueba $caso): string
+    {
+        return 'PV '.$this->codigosDePrueba($caso)[1].' '.($this->esV2($caso) ? 'V2' : 'V3');
+    }
+
+    private function esV2(CasoPrueba $caso): bool
+    {
+        return ($caso->payload_ejemplo['version'] ?? SiatClient::VERSION_V3) === SiatClient::VERSION_V2;
+    }
+
+    /**
      * Cierra las operaciones del sistema en el punto de venta de una prueba
      * (cierreOperacionesSistema del WSDL de FacturacionOperaciones).
      *
@@ -1081,16 +1249,18 @@ class EjecutorPruebas
      * operador para que decida el paso siguiente.
      *
      * El CUIS que exige la operacion se obtiene pidiendolo: el SIN devuelve el
-     * vigente con el 980, que es justo el que hay que cerrar.
+     * vigente con el 980, que es justo el que hay que cerrar. Se cierra con la
+     * misma version de servicios que usa la prueba.
      *
      * @return array{cerrado: bool, cuis: string, motivo: string}
      */
     public function cerrarOperacionesDePrueba(Empresa $empresa, CasoPrueba $caso): array
     {
         [$codigoSucursal, $codigoPuntoVenta] = $this->codigosDePrueba($caso);
+        $version = (string) ($caso->payload_ejemplo['version'] ?? SiatClient::VERSION_V3);
 
         $cuis = (string) data_get(
-            $this->fabrica->codigos($empresa)->solicitarCuisPara($codigoSucursal, $codigoPuntoVenta),
+            $this->fabrica->codigos($empresa, $version)->solicitarCuisPara($codigoSucursal, $codigoPuntoVenta),
             'RespuestaCuis.codigo',
         );
 
@@ -1098,10 +1268,32 @@ class EjecutorPruebas
             throw new SiatException('No hay CUIS que cerrar: el SIN no devolvio ninguno para ese punto de venta.');
         }
 
+        return $this->cerrarConCuis($empresa, $caso, $cuis);
+    }
+
+    /**
+     * Cierra las operaciones del punto de venta de una prueba con un CUIS ya
+     * conocido, por la misma version que la prueba.
+     *
+     * @return array{cerrado: bool, cuis: string, motivo: string}
+     */
+    private function cerrarConCuis(Empresa $empresa, CasoPrueba $caso, string $cuis): array
+    {
+        [$codigoSucursal, $codigoPuntoVenta] = $this->codigosDePrueba($caso);
+        $version = (string) ($caso->payload_ejemplo['version'] ?? SiatClient::VERSION_V3);
+
         $respuesta = RespuestaSiat::desde(
-            $this->fabrica->operaciones($empresa)->cerrarOperacionesSistema($codigoSucursal, $codigoPuntoVenta, $cuis),
+            $this->fabrica->operaciones($empresa, $version)->cerrarOperacionesSistema($codigoSucursal, $codigoPuntoVenta, $cuis),
             'RespuestaCierreSistemas',
         );
+
+        // Cerrado del lado del SIN ya no sirve: si quedara vigente en la base,
+        // se seguiria usando y todo volveria con 913. Pasaba cuando el pedido
+        // del CUIS nuevo no respondia tras el cierre.
+        if ($respuesta->aceptada) {
+            $this->puntoVentaLocal($empresa, $codigoSucursal, $codigoPuntoVenta)
+                ?->cuis()->where('codigo', $cuis)->get()->each->marcarCerrado();
+        }
 
         return [
             'cerrado' => $respuesta->aceptada,

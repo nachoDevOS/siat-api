@@ -11,6 +11,7 @@ use App\Models\Factura;
 use App\Models\LeyendaFactura;
 use App\Models\ProductoServicio;
 use App\Services\Panel\CreadorSandbox;
+use App\Services\Panel\CuisEtapaUno;
 use App\Services\Panel\EstadosVisuales;
 use App\Services\Panel\PuntosVentaSiat;
 use App\Services\Panel\RequisitosEtapa;
@@ -92,7 +93,7 @@ class EmpresaController extends Controller
      * Ficha del cliente: todo lo que necesita para poder facturar, en una sola
      * pantalla, con el checklist de lo que le falta para la siguiente etapa.
      */
-    public function show(Empresa $empresa, RequisitosEtapa $requisitos, PuntosVentaSiat $puntosVentaSiat): View
+    public function show(Empresa $empresa, RequisitosEtapa $requisitos, PuntosVentaSiat $puntosVentaSiat, CuisEtapaUno $etapaUno): View
     {
         // withCount evita una consulta por tarjeta de punto de venta al pintar
         // cuantas facturas lleva emitidas cada uno.
@@ -118,6 +119,8 @@ class EmpresaController extends Controller
             'cafc' => $empresa->cafcActivo,
             'requisitos' => $requisitos->para($empresa),
             'progresoPiloto' => $requisitos->progresoPiloto($empresa),
+            // Solo piloto: los CUIS de la etapa I que pidio el alta de sucursal.
+            'cuisEtapaUno' => $etapaUno->porPuntoVenta($empresa),
             // Resumen del acceso API; el detalle esta en su propia pantalla.
             'tokensActivos' => $empresa->tokens()->where(fn ($q) => $q->whereNull('expires_at')->orWhere('expires_at', '>', now()))->count(),
             // Cuanto hay de cada catalogo del NIT: sin productos homologados
@@ -245,9 +248,6 @@ class EmpresaController extends Controller
             'razon_social' => ['required', 'string', 'max:255'],
             'nit' => ['required', 'string', 'max:20'],
             'codigo_sistema' => ['nullable', 'string', 'max:255'],
-            // codigoInterno de la cabecera del XML V3: de 1 a 10 caracteres.
-            // Si no viene, queda el que tenia (o el default "A").
-            'codigo_interno' => ['sometimes', 'required', 'string', 'max:10'],
             'token_delegado' => ['nullable', 'string'],
             'codigo_ambiente' => ['required', 'integer', 'in:1,2'],
             // Solo electronica en linea (1). La computarizada usa otro nodo

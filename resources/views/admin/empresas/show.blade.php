@@ -262,6 +262,37 @@
             @endif
         </div>
 
+        {{-- ---- Solo piloto: CUIS de la etapa I ---- --}}
+        {{-- Lo pide el alta de la sucursal 0. Va arriba de las sucursales para
+             que, si una prueba no conto, el "Reintentar" este a la vista. --}}
+        @if ($cuisEtapaUno && $empresa->sucursales->isNotEmpty())
+            @php
+                $pruebasCuis = collect($cuisEtapaUno)->flatMap(fn ($g) => $g['pruebas']);
+                $contadasCuis = $pruebasCuis->where('contada', true)->count();
+            @endphp
+            <div class="tarjeta" style="border-left:4px solid {{ $contadasCuis === $pruebasCuis->count() ? 'var(--ok)' : 'var(--no)' }};">
+                <div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap;">
+                    <h2 style="margin:0;">CUIS de la etapa I</h2>
+                    <span style="font-size:13px; color:var(--suave);">
+                        {{ $contadasCuis }} de {{ $pruebasCuis->count() }} contadas ·
+                        <a href="{{ route('admin.pruebas.show', $empresa) }}">ver el piloto</a>
+                    </span>
+                </div>
+                <p style="font-size:13px; color:var(--suave); margin:6px 0 12px;">
+                    El portal pide un CUIS por cada version (V2 y V3) en cada punto de venta. El SIN tiene uno
+                    solo vigente por punto de venta: el ultimo emitido, que es el de V3, es con el que se factura.
+                </p>
+                @foreach ($cuisEtapaUno as $grupo)
+                    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+                        <strong style="min-width:48px;">PV {{ $grupo['codigo_punto_venta'] }}</strong>
+                        <div style="flex:1; min-width:0;">
+                            @include('admin.puntos-venta._cuis-etapa-uno', ['pruebas' => $grupo['pruebas']])
+                        </div>
+                    </div>
+                @endforeach
+            </div>
+        @endif
+
         {{-- ---- Estructura fisica y codigos del SIN ---- --}}
         <div class="tarjeta">
             <h2>Sucursales y puntos de venta</h2>

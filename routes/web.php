@@ -181,6 +181,10 @@ Route::prefix('admin')->name('admin.')->middleware('auth')->group(function () {
     // vigente. Cierra las operaciones del sistema en ese punto de venta.
     Route::post('empresas/{empresa}/pruebas/{caso}/cerrar-operaciones', [PruebaPilotoController::class, 'cerrarOperaciones'])
         ->name('pruebas.cerrar-operaciones');
+    // Pide el CUIS nuevo de una prueba de la etapa I hasta que el SIN lo emita
+    // (cierra operaciones si hace falta). Es el "Reintentar" de la ficha.
+    Route::post('empresas/{empresa}/pruebas/{caso}/cuis-nuevo', [PruebaPilotoController::class, 'cuisNuevo'])
+        ->name('pruebas.cuis-nuevo');
     // Encola lo que le falta a una prueba de etapa (ej: las 50 de un catalogo).
     Route::post('empresas/{empresa}/pruebas/{caso}/completar', [PruebaPilotoController::class, 'completarCaso'])
         ->name('pruebas.completar');

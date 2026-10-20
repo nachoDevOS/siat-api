@@ -63,7 +63,11 @@ return new class extends Migration
             $table->unsignedTinyInteger('tipo_punto_venta')->default(1);
 
             $table->unsignedBigInteger('siguiente_factura')->default(1);
+            // Correlativo propio de las notas de credito-debito (sector 24).
+            $table->unsignedBigInteger('siguiente_nota')->default(1);
             $table->boolean('activo')->default(true);
+            // Cuando se registro ante el SIN. Null = todavia es solo local.
+            $table->timestamp('registrado_en_siat')->nullable();
 
             $table->timestamps();
 

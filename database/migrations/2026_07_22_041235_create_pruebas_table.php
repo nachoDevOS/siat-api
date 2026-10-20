@@ -16,6 +16,9 @@ return new class extends Migration
             $table->id();
             // Fase 1 = pruebas del sistema (tu NIT), Fase 3 = piloto por cliente.
             $table->unsignedTinyInteger('fase');
+            // Etapa del portal del SIN (I, II, ... XI). Null = pasos viejos
+            // de la fase 1, que no son de ninguna etapa.
+            $table->unsignedTinyInteger('etapa')->nullable();
             $table->unsignedInteger('orden');
             $table->string('nombre');
             $table->text('descripcion')->nullable();
@@ -23,6 +26,8 @@ return new class extends Migration
             $table->string('tipo');
             $table->json('payload_ejemplo')->nullable();
             $table->boolean('obligatorio')->default(true);
+            // Cuantas solicitudes correctas pide el portal para esta prueba.
+            $table->unsignedInteger('pruebas_esperadas')->default(1);
 
             $table->timestamps();
 

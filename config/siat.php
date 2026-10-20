@@ -57,6 +57,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | URLs base de la version 2 de los servicios SOAP
+    |--------------------------------------------------------------------------
+    | La solicitud de autorizacion R-1359 (19/10/2026) lista las rutas /v2 y
+    | /sfd del piloto, y el portal pide el CUIS de la etapa I en las dos
+    | versiones (el CUIS es el mismo en las dos). Solo las usan las pruebas de
+    | piloto marcadas con "version" => "v2": la facturacion real sigue en las
+    | URLs de arriba (V3).
+    */
+    'urls_v2' => [
+        2 => env('SIAT_URL_PILOTO_V2', 'https://pilotosiatservicios.impuestos.gob.bo/v2'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Servicios SOAP del SIAT
     |--------------------------------------------------------------------------
     | Nombres tal como aparecen en la ruta del WSDL. Se centralizan aqui para
