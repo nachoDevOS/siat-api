@@ -114,10 +114,12 @@ test('los totales redondean a 2 decimales por linea y en total', function () {
     ]);
 
     // 3 * 0.333 = 0.999 -> 1.00 ; 1.5 * 10.10 = 15.15 - 0.15 = 15.00
+    // Neto 16.00, IVA 13% = 2.08, a pagar 18.08.
     expect($totales['items'])->toBe([['subtotal' => 1.0], ['subtotal' => 15.0]])
-        ->and($totales['subtotal'])->toBe(16.15)
-        ->and($totales['monto_total'])->toBe(16.0)
-        ->and($totales['monto_total_sujeto_iva'])->toBe(16.0);
+        ->and($totales['subtotal'])->toBe(16.0)
+        ->and($totales['total_precio_neto'])->toBe(16.0)
+        ->and($totales['iva'])->toBe(2.08)
+        ->and($totales['monto_total'])->toBe(18.08);
 });
 
 // --- XML ---------------------------------------------------------------------------
@@ -138,7 +140,7 @@ function facturaParaXml(): Factura
         'gift_card' => 0,
     ]);
 
-    FacturaItem::factory()->for($factura)->create(['numero_serie' => null, 'numero_imei' => null]);
+    FacturaItem::factory()->for($factura)->create(['codigo_actividad' => '620100', 'numero_serie' => null, 'numero_imei' => null]);
 
     return $factura->fresh();
 }
@@ -154,9 +156,7 @@ test('el XML declara el esquema del SIN en la raiz', function () {
 test('los vacios viajan como xsi:nil, los ceros con su valor y el texto escapado', function () {
     $xml = app(ConstructorXml::class)->construir(facturaParaXml());
 
-    expect($xml)->toContain('<complemento xsi:nil="true"/>')
-        ->and($xml)->toContain('<numeroTarjeta xsi:nil="true"/>')
-        ->and($xml)->toContain('<cafc xsi:nil="true"/>')
+    expect($xml)->toContain('<numeroTarjeta xsi:nil="true"/>')
         ->and($xml)->toContain('<numeroSerie xsi:nil="true"/>')
         ->and($xml)->toContain('<montoGiftCard>0.00</montoGiftCard>')
         ->and($xml)->toContain('<codigoExcepcion>0</codigoExcepcion>')
@@ -164,6 +164,21 @@ test('los vacios viajan como xsi:nil, los ceros con su valor y el texto escapado
 
     // Y es XML bien formado.
     expect((new DOMDocument)->loadXML($xml))->toBeTrue();
+});
+
+test('el complemento vacio va como elemento vacio: el XSD V3 lo exige y no lo deja en xsi:nil', function () {
+    $xml = app(ConstructorXml::class)->construir(facturaParaXml());
+
+    expect($xml)->toContain('</numeroDocumento><complemento/><codigoCliente>');
+});
+
+test('el complemento con valor viaja en su lugar de la secuencia', function () {
+    $factura = facturaParaXml();
+    $factura->update(['comprador_complemento' => '1A']);
+
+    $xml = app(ConstructorXml::class)->construir($factura->fresh());
+
+    expect($xml)->toContain('</numeroDocumento><complemento>1A</complemento><codigoCliente>');
 });
 
 test('la cabecera y el detalle respetan la secuencia completa del XSD', function (string $nodo, array $orden) {
@@ -181,12 +196,33 @@ test('la cabecera y el detalle respetan la secuencia completa del XSD', function
     'cabecera' => ['cabecera', ['nitEmisor', 'razonSocialEmisor', 'municipio', 'telefono', 'numeroFactura',
         'cuf', 'cufd', 'codigoSucursal', 'direccion', 'codigoPuntoVenta', 'fechaEmision',
         'nombreRazonSocial', 'codigoTipoDocumentoIdentidad', 'numeroDocumento', 'complemento',
-        'codigoCliente', 'codigoMetodoPago', 'numeroTarjeta', 'montoTotal', 'montoTotalSujetoIva',
-        'codigoMoneda', 'tipoCambio', 'montoTotalMoneda', 'montoGiftCard', 'descuentoAdicional',
-        'codigoExcepcion', 'cafc', 'leyenda', 'usuario', 'codigoDocumentoSector']],
+        'codigoCliente', 'codigoMetodoPago', 'numeroTarjeta', 'subTotalNeto', 'totalPrecioNeto', 'iva',
+        'montoaPagar', 'codigoMoneda', 'tipoCambio', 'montoTotalMoneda', 'montoGiftCard', 'descuentoAdicional',
+        'codigoExcepcion', 'leyenda', 'usuario', 'codigoInterno', 'codigoDocumentoSector']],
     'detalle' => ['detalle', ['actividadEconomica', 'codigoProductoSin', 'codigoProducto', 'descripcion',
-        'cantidad', 'unidadMedida', 'precioUnitario', 'montoDescuento', 'subTotal', 'numeroSerie', 'numeroImei']],
+        'cantidad', 'unidadMedida', 'precioNetoUnitario', 'montoDescuento', 'subTotal', 'numeroSerie', 'numeroImei']],
 ]);
+
+test('el XML de la factura valida contra el XSD V3 oficial del SIN', function (array $cambios) {
+    $factura = facturaParaXml();
+    $factura->update($cambios);
+
+    $xml = app(ConstructorXml::class)->construir($factura->fresh());
+
+    expect(erroresContraXsdV3($xml, 'facturaElectronicaCompraVenta.xsd'))->toBe([]);
+})->with([
+    'sin complemento ni tarjeta' => [[]],
+    'con complemento' => [['comprador_complemento' => '1A']],
+]);
+
+test('el codigoInterno sale de la empresa', function () {
+    $factura = facturaParaXml();
+    $factura->empresa->update(['codigo_interno' => 'B7']);
+
+    $xml = app(ConstructorXml::class)->construir($factura->fresh());
+
+    expect($xml)->toContain('<usuario>caja-01</usuario><codigoInterno>B7</codigoInterno><codigoDocumentoSector>');
+});
 
 test('la fecha del XML lleva milisegundos y coincide con la de emision', function () {
     $factura = facturaParaXml();
@@ -233,7 +269,9 @@ test('una factura alterada despues de firmar ya no coincide con su digest', func
     $certificado = Certificado::factory()->firmable()->create();
     $firmado = app(FirmadorXml::class)->firmar(app(ConstructorXml::class)->construir(facturaParaXml()), $certificado);
 
-    $alterado = preg_replace('#<montoTotal>[^<]+</montoTotal>#', '<montoTotal>1.00</montoTotal>', $firmado);
+    $alterado = preg_replace('#<montoaPagar>[^<]+</montoaPagar>#', '<montoaPagar>1.00</montoaPagar>', $firmado);
+
+    expect($alterado)->not->toBe($firmado);
 
     $doc = new DOMDocument;
     $doc->loadXML($alterado);

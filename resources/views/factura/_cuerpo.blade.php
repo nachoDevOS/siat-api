@@ -5,8 +5,6 @@
 @php
     $empresa = $factura->empresa;
     $sucursal = $factura->puntoVenta->sucursal;
-    $subtotalItems = $factura->items->sum(fn ($i) => (float) $i->subtotal);
-    $montoPagar = (float) $factura->monto_total - (float) $factura->gift_card;
     $esPrueba = $empresa->codigo_ambiente === config('siat.codigos.ambiente.piloto');
     // El SIN escribe la unidad de medida en tipo oracion ("Bobinas").
     $enOracion = fn ($texto) => Illuminate\Support\Str::ucfirst(mb_strtolower((string) $texto));
@@ -34,6 +32,8 @@
                     <tr><td class="etiqueta">NIT</td><td>{{ $empresa->nit }}</td></tr>
                     <tr><td class="etiqueta">FACTURA N°</td><td>{{ $factura->numero_factura }}</td></tr>
                     <tr><td class="etiqueta">CÓD. AUTORIZACIÓN</td><td class="cuf">{!! implode('<br>', str_split((string) $factura->cuf, 16)) !!}</td></tr>
+                    {{-- El formato V3 muestra el codigoInterno debajo del CUF. --}}
+                    <tr><td></td><td style="text-align:center;">{{ $empresa->codigo_interno }}</td></tr>
                 </table>
             </td>
         </tr>
@@ -68,7 +68,7 @@
                 <th style="width:10.7%;">Cantidad</th>
                 <th style="width:10%;">Unidad de medida</th>
                 <th>Descripción</th>
-                <th style="width:12.7%;">Precio unitario</th>
+                <th style="width:12.7%;">Precio neto unitario</th>
                 <th style="width:12.5%;">Descuento</th>
                 <th style="width:13.5%;">Subtotal</th>
             </tr>
@@ -87,28 +87,29 @@
             @endforeach
             <tr>
                 <td class="literal" colspan="4" rowspan="6">Son: {{ mb_convert_case($montoLiteral, MB_CASE_TITLE) }}</td>
+                {{-- Totales y orden del formato grafico V3 (IVA Transparente). --}}
                 <td class="total-etiqueta" colspan="2">SUBTOTAL Bs</td>
-                <td class="total-valor">{{ number_format($subtotalItems, 2) }}</td>
-            </tr>
-            <tr>
-                <td class="total-etiqueta" colspan="2">DESCUENTO Bs</td>
-                <td class="total-valor">{{ number_format((float) $factura->descuento_global, 2) }}</td>
-            </tr>
-            <tr>
-                <td class="total-etiqueta" colspan="2">TOTAL Bs</td>
-                <td class="total-valor">{{ number_format((float) $factura->monto_total, 2) }}</td>
+                <td class="total-valor">{{ number_format((float) $factura->subtotal, 2) }}</td>
             </tr>
             <tr>
                 <td class="total-etiqueta" colspan="2">MONTO GIFT CARD Bs</td>
                 <td class="total-valor">{{ number_format((float) $factura->gift_card, 2) }}</td>
             </tr>
             <tr>
-                <td class="total-etiqueta fuerte" colspan="2">MONTO A PAGAR Bs</td>
-                <td class="total-valor fuerte">{{ number_format($montoPagar, 2) }}</td>
+                <td class="total-etiqueta" colspan="2">DESCUENTO Bs</td>
+                <td class="total-valor">{{ number_format((float) $factura->descuento_global, 2) }}</td>
             </tr>
             <tr>
-                <td class="total-etiqueta fuerte" colspan="2">IMPORTE BASE CRÉDITO FISCAL Bs</td>
-                <td class="total-valor fuerte">{{ number_format((float) $factura->monto_total_sujeto_iva, 2) }}</td>
+                <td class="total-etiqueta" colspan="2">TOTAL PRECIO NETO Bs</td>
+                <td class="total-valor">{{ number_format((float) $factura->total_precio_neto, 2) }}</td>
+            </tr>
+            <tr>
+                <td class="total-etiqueta" colspan="2">IVA Bs</td>
+                <td class="total-valor">{{ number_format((float) $factura->iva, 2) }}</td>
+            </tr>
+            <tr>
+                <td class="total-etiqueta fuerte" colspan="2">MONTO A PAGAR Bs</td>
+                <td class="total-valor fuerte">{{ number_format((float) $factura->monto_total, 2) }}</td>
             </tr>
         </tbody>
     </table>

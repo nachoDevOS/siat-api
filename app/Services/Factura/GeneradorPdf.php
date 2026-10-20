@@ -106,8 +106,9 @@ class GeneradorPdf
             'factura' => $factura,
             'qr' => $this->qr->dataUri($factura, 150, $formato),
             'urlVerificacion' => $this->qr->urlVerificacion($factura, $formato),
-            // "Son: ..." de la representacion grafica: sobre lo que se paga.
-            'montoLiteral' => $this->letras->bolivianos((float) $factura->monto_total - (float) $factura->gift_card),
+            // "Son: ..." de la representacion grafica: sobre lo que se paga. En
+            // V3 monto_total es el montoaPagar, que ya descuenta la gift card.
+            'montoLiteral' => $this->letras->bolivianos((float) $factura->monto_total),
             // Nombre de cada unidad de medida del catalogo del SIN; si no esta
             // sincronizado, la vista muestra el codigo.
             'unidades' => Catalogo::deTipo('unidades_medida')->pluck('descripcion', 'codigo_clasificador')->all(),

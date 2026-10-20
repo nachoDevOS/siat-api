@@ -34,6 +34,13 @@
     @endunless
 </div>
 <div class="campo">
+    <label>Codigo interno SIN (codigoInterno del XML)</label>
+    {{-- Obligatorio en la cabecera del XSD V3. El SIN solo lo describe como
+         "Codigo Interno SIN" y en sus ejemplos manda "A". --}}
+    <input name="codigo_interno" maxlength="10" required
+           value="{{ old('codigo_interno', $e?->codigo_interno ?? 'A') }}">
+</div>
+<div class="campo">
     <label>Token delegado</label>
     {{-- Nunca se devuelve al navegador: es la credencial con la que se firma
          cada llamada al SIN. En edicion el campo va vacio y solo se guarda si

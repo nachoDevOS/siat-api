@@ -43,21 +43,23 @@ class ValidadorFactura
                 $errores[] = "Item {$linea}: la cantidad debe ser mayor a cero.";
             }
 
-            if (($item['precio_unitario'] ?? 0) < 0) {
-                $errores[] = "Item {$linea}: el precio unitario no puede ser negativo.";
+            // El XSD V3 exige precioNetoUnitario y subTotal mayores a cero.
+            if (($item['precio_unitario'] ?? 0) <= 0) {
+                $errores[] = "Item {$linea}: el precio unitario neto debe ser mayor a cero.";
             }
 
             if (blank($item['descripcion'] ?? null)) {
                 $errores[] = "Item {$linea}: falta la descripcion.";
             }
 
-            // Un descuento mayor que la linea deja un subTotal negativo, que el
-            // SIN observa. Mejor cortarlo aca, antes de reservar numero.
+            // Un descuento igual o mayor que la linea deja un subTotal en cero o
+            // negativo, que el XSD V3 rechaza. Mejor cortarlo aca, antes de
+            // reservar numero.
             $bruto = round((float) ($item['cantidad'] ?? 0) * (float) ($item['precio_unitario'] ?? 0), 2);
             $descuento = (float) ($item['descuento'] ?? 0);
 
-            if ($descuento > $bruto) {
-                $errores[] = "Item {$linea}: el descuento ({$descuento}) supera el importe de la linea ({$bruto}).";
+            if ($descuento >= $bruto && $bruto > 0) {
+                $errores[] = "Item {$linea}: el descuento ({$descuento}) deja la linea ({$bruto}) sin importe.";
             }
 
             $brutoTotal += $bruto;
@@ -65,15 +67,13 @@ class ValidadorFactura
         }
 
         // Mismas cuentas que CalculadorTotales: el descuento global y la gift
-        // card no pueden dejar la factura en negativo.
-        $montoTotal = round($brutoTotal - $descuentoItems - (float) ($datos['descuento_global'] ?? 0), 2);
+        // card salen del neto, y el XSD V3 exige totalPrecioNeto mayor a cero.
+        $neto = round($brutoTotal - $descuentoItems - (float) ($datos['descuento_global'] ?? 0), 2);
 
-        if ($montoTotal < 0) {
-            $errores[] = 'Los descuentos superan el importe de la venta: el monto total quedaria negativo.';
-        }
-
-        if ((float) ($datos['gift_card'] ?? 0) > max(0.0, $montoTotal)) {
-            $errores[] = 'La gift card supera el monto total de la factura.';
+        if ($neto <= 0) {
+            $errores[] = 'Los descuentos dejan la venta sin importe: el total neto debe ser mayor a cero.';
+        } elseif ((float) ($datos['gift_card'] ?? 0) >= $neto) {
+            $errores[] = 'La gift card cubre todo el neto de la factura: el total neto debe quedar mayor a cero.';
         }
 
         // El comprador es obligatorio.

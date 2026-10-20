@@ -44,7 +44,33 @@ expect()->extend('toBeOne', function () {
 |
 */
 
-function something()
+/**
+ * Errores de validar un XML SIN FIRMAR contra un XSD V3 oficial del SIN
+ * (tests/Fixtures/xsd-v3, bajados del anexo tecnico de la Ley 1733). Vacio =
+ * el XML pasa la misma validacion que hace el piloto.
+ *
+ * Al XSD se le quita la firma (<ds:Signature> y su import): el XML se arma sin
+ * firmar y la firma la prueba FirmadorXml por su lado.
+ *
+ * @return list<string>
+ */
+function erroresContraXsdV3(string $xml, string $xsd): array
 {
-    // ..
+    $esquema = preg_replace(
+        ['/<xs:import[^>]*\/>/', '/<xs:element ref="ds:Signature"\/>/'],
+        '',
+        file_get_contents(base_path("tests/Fixtures/xsd-v3/{$xsd}")),
+    );
+
+    $doc = new DOMDocument;
+    $doc->loadXML($xml);
+
+    $previo = libxml_use_internal_errors(true);
+    libxml_clear_errors();
+    $doc->schemaValidateSource($esquema);
+    $errores = array_map(fn (LibXMLError $e): string => trim($e->message), libxml_get_errors());
+    libxml_clear_errors();
+    libxml_use_internal_errors($previo);
+
+    return $errores;
 }

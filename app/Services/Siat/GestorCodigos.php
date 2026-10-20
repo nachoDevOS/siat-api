@@ -123,11 +123,21 @@ class GestorCodigos
      * Ojo: las facturas que todavia no viajaron con el CUFD anterior pueden
      * volver con 913. El panel lo advierte antes de llamar.
      *
-     * @throws SiatException si el SIN no cierra las operaciones, si despues
-     *                       devuelve el mismo CUIS, o si falla el CUFD nuevo.
+     * No se permite en piloto: el 19/10/2026 el piloto acepto el cierre y al
+     * pedir el CUIS nuevo volvio a generar el MISMO codigo, su base lo rechazo
+     * por clave duplicada y desde ahi respondio 966 a todo pedido de CUIS en
+     * ese punto de venta. Las pruebas no lo necesitan.
+     *
+     * @throws SiatException si la empresa esta en piloto, si el SIN no cierra
+     *                       las operaciones, si despues no entrega CUIS o
+     *                       devuelve el mismo, o si falla el CUFD nuevo.
      */
     public function forzarCuisNuevo(PuntoVenta $puntoVenta): Cuis
     {
+        if ($puntoVenta->sucursal->empresa->esSandbox()) {
+            throw new SiatException('Forzar un CUIS nuevo no esta permitido en el ambiente piloto: el SIN puede dejar el punto de venta sin CUIS. Usa "Pedir CUIS".');
+        }
+
         $actual = $this->solicitarCuis($puntoVenta);
 
         $cierre = RespuestaSiat::desde(
@@ -143,7 +153,15 @@ class GestorCodigos
             throw new SiatException("El SIN no cerro las operaciones, el CUIS sigue siendo {$actual->codigo}: {$cierre->motivo()}");
         }
 
-        $nuevo = $this->renovarCuis($puntoVenta);
+        // Cerrado del lado del SIN, el CUIS ya no sirve: si queda vigente en la
+        // base, asegurarCuis() lo seguiria usando y todo volveria con 913.
+        $actual->update(['fecha_vigencia' => now()]);
+
+        try {
+            $nuevo = $this->renovarCuis($puntoVenta);
+        } catch (SiatException $e) {
+            throw new SiatException("Se cerraron las operaciones con el CUIS {$actual->codigo}, pero el SIN no entrego el nuevo: {$e->getMessage()} No vuelvas a forzar: reintenta \"Pedir CUIS\" mas tarde.", $e);
+        }
 
         if ($nuevo->codigo === $actual->codigo) {
             throw new SiatException("Se cerraron las operaciones, pero el SIN devolvio el mismo CUIS ({$actual->codigo}). Reintenta en unos minutos.");
@@ -179,9 +197,13 @@ class GestorCodigos
     {
         $codigo = (string) data_get($respuesta, 'RespuestaCuis.codigo');
 
+        // El motivo del SIN va en el mensaje: sin el, un 966 ("no se puede
+        // recuperar los datos del contribuyente") se veia igual que cualquier
+        // otro rechazo y habia que ir a buscarlo a logs_siat.
         if (blank($codigo)) {
             throw new SiatException(
-                "El SIAT no devolvio un codigo CUIS para el punto de venta {$puntoVenta->codigo_punto_venta}. No se guardo nada.",
+                "El SIAT no devolvio un codigo CUIS para el punto de venta {$puntoVenta->codigo_punto_venta}. No se guardo nada. "
+                .RespuestaSiat::desde($respuesta, 'RespuestaCuis')->motivo(),
             );
         }
 
@@ -245,7 +267,8 @@ class GestorCodigos
         // ultimo por id, el CUFD vacio le gana al bueno anterior.
         if (blank($codigo) || blank($codigoControl)) {
             throw new SiatException(
-                "El SIAT no devolvio codigo y codigo de control del CUFD para el punto de venta {$puntoVenta->codigo_punto_venta}. No se guardo nada.",
+                "El SIAT no devolvio codigo y codigo de control del CUFD para el punto de venta {$puntoVenta->codigo_punto_venta}. No se guardo nada. "
+                .RespuestaSiat::desde($respuesta, 'RespuestaCufd')->motivo(),
             );
         }
 

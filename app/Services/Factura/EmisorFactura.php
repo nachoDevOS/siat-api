@@ -404,9 +404,11 @@ class EmisorFactura
             'subtotal' => $totales['subtotal'],
             'descuento_global' => $totales['descuento_global'],
             'gift_card' => $totales['gift_card'],
+            'total_precio_neto' => $totales['total_precio_neto'],
+            'iva' => $totales['iva'],
+            // montoaPagar: neto + IVA, ya sin la gift card.
             'monto_total' => $totales['monto_total'],
             'monto_total_moneda' => $totales['monto_total'],
-            'monto_total_sujeto_iva' => $totales['monto_total_sujeto_iva'],
             // La leyenda la puede imponer el cliente; si no, sale del catalogo
             // de leyendas de la actividad del primer item, que es lo que el SIN
             // espera ver en la cabecera.

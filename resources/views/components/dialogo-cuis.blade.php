@@ -6,7 +6,8 @@
         venta, pide un CUIS nuevo y un CUFD atado a el. Puede hacer rechazar
         las facturas que todavia no viajaron, por eso se advierte cuantas hay.
 
-     Sin CUIS vigente solo aparece la primera opcion: no hay nada que cerrar. --}}
+     Sin CUIS vigente solo aparece la primera opcion: no hay nada que cerrar.
+     En piloto tampoco aparece la segunda (ver GestorCodigos::forzarCuisNuevo). --}}
 @props(['puntoVenta'])
 
 @php
@@ -46,7 +47,11 @@
         </form>
     </div>
 
-    @if ($cuisActual)
+    @if ($cuisActual && $puntoVenta->sucursal->empresa->esSandbox())
+        <p style="margin-bottom:0;">
+            En piloto no se puede forzar un CUIS nuevo: el SIN puede dejar el punto de venta sin CUIS.
+        </p>
+    @elseif ($cuisActual)
         <div class="opcion opcion-peligro">
             <strong>Forzar un CUIS nuevo</strong>
             <p>

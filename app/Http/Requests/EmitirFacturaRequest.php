@@ -61,10 +61,13 @@ class EmitirFacturaRequest extends FormRequest
             'items.*.codigo_producto_sin' => ['required', 'integer'],
             'items.*.codigo_interno' => ['nullable', 'string', 'max:100'],
             'items.*.descripcion' => ['required', 'string', 'max:500'],
-            'items.*.cantidad' => ['required', 'numeric', 'gt:0'],
+            // El XSD V3 (IVA Transparente) acepta 2 decimales en cantidad y en
+            // montos, y pide el precio NETO, sin IVA, mayor a cero: el 13% lo
+            // suma esta API (CalculadorTotales).
+            'items.*.cantidad' => ['required', 'numeric', 'gt:0', 'decimal:0,2'],
             'items.*.unidad_medida' => ['required', 'integer'],
-            'items.*.precio_unitario' => ['required', 'numeric', 'min:0'],
-            'items.*.descuento' => ['nullable', 'numeric', 'min:0'],
+            'items.*.precio_unitario' => ['required', 'numeric', 'gt:0', 'decimal:0,2'],
+            'items.*.descuento' => ['nullable', 'numeric', 'min:0', 'decimal:0,2'],
             'items.*.numero_serie' => ['nullable', 'string', 'max:100'],
             'items.*.numero_imei' => ['nullable', 'string', 'max:100'],
         ];

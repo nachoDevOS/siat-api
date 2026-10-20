@@ -24,7 +24,7 @@
     <div>NIT {{ $factura->empresa->nit }}</div>
     <div class="b" style="margin-top:4pt;">{{ $esNota ? 'NOTA CRÉDITO DÉBITO' : 'FACTURA' }} N° {{ $factura->numero_factura }}</div>
     <div>{{ $factura->fecha_emision?->format('d/m/Y H:i') }}</div>
-    <div class="monto">Bs {{ number_format($esNota ? (float) $factura->monto_total : (float) $factura->monto_total - (float) $factura->gift_card, 2) }}</div>
+    <div class="monto">Bs {{ number_format((float) $factura->monto_total, 2) }}</div>
     <img src="{{ $qr }}" alt="QR de verificación" width="96" height="96">
     <div class="chico" style="margin-top:4pt;">Escanee el QR para ver y verificar la factura completa en el SIN.</div>
 </body>

@@ -135,7 +135,7 @@
             <tr><th>Referencia externa</th><td>{{ $factura->referencia_externa ?? '—' }}</td></tr>
             <tr><th>Comprador</th><td>{{ $factura->comprador_razon_social }} · Doc. {{ $factura->comprador_tipo_documento }}: {{ $factura->comprador_numero_documento }}{{ $factura->comprador_complemento ? '-'.$factura->comprador_complemento : '' }}{{ $factura->codigo_excepcion ? ' · con excepcion de NIT' : '' }}</td></tr>
             <tr><th>Descuento global / gift card</th><td>Bs {{ number_format((float) $factura->descuento_global, 2) }} / Bs {{ number_format((float) $factura->gift_card, 2) }}</td></tr>
-            <tr><th>Total / sujeto a IVA</th><td>Bs {{ number_format((float) $factura->monto_total, 2) }} / Bs {{ number_format((float) $factura->monto_total_sujeto_iva, 2) }}</td></tr>
+            <tr><th>Neto / IVA / a pagar</th><td>Bs {{ number_format((float) $factura->total_precio_neto, 2) }} / Bs {{ number_format((float) $factura->iva, 2) }} / Bs {{ number_format((float) $factura->monto_total, 2) }}</td></tr>
             <tr><th>CUFD usado</th><td>{{ $factura->cufd?->codigo ?? '—' }}</td></tr>
             <tr><th>Codigo de recepcion</th><td>{{ $factura->codigo_recepcion ?? '—' }}</td></tr>
             <tr><th>Codigo de estado del SIN</th><td>{{ $factura->codigo_estado_siat ?? '—' }}</td></tr>

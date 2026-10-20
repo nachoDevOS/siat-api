@@ -242,11 +242,18 @@ class EmisorNotaCreditoDebito
     }
 
     /**
-     * Montos de la nota, todos derivados de la factura:
+     * Montos de la nota, todos derivados de la factura (precios NETOS, XSD V3):
      *   - cada linea devuelta, a su precio original y con la parte
      *     proporcional de su descuento;
-     *   - el descuento adicional de la factura, en la proporcion devuelta;
-     *   - el credito fiscal que se revierte: 13% de lo devuelto neto.
+     *   - devuelto (subTotalNetoDevuelto): la suma de esas lineas;
+     *   - descuento (montoDescuentoDevuelto): el descuento adicional de la
+     *     factura, en la proporcion devuelta;
+     *   - total (totalPrecioNetoDevuelto): devuelto - descuento;
+     *   - efectivo (ivaDevuelto): el 13% de total, el credito fiscal que se
+     *     revierte. total + efectivo es el montoaPagarDevuelto.
+     *
+     * Cuadra con el XML de ejemplo del SIN: 50 de descuento sobre 723.02,
+     * devolviendo 63.80 -> 4.41 de descuento, 59.39 neto, 7.72 de IVA.
      *
      * @param  list<array{item: FacturaItem, cantidad: float}>  $devueltos
      * @return array{lineas: list<array{descuento: float, subtotal: float}>, devuelto: float, descuento: float, total: float, efectivo: float}
@@ -338,12 +345,15 @@ class EmisorNotaCreditoDebito
             'codigo_excepcion' => $origen->codigo_excepcion,
             'moneda' => $origen->moneda,
             'tipo_cambio' => $origen->tipo_cambio,
+            // Lo DEVUELTO; lo original se lee de la factura (ver la migracion
+            // agregar_iva_transparente_a_facturas).
             'subtotal' => $montos['devuelto'],
             'descuento_global' => $montos['descuento'],
             'gift_card' => 0,
-            'monto_total' => $montos['total'],
-            'monto_total_moneda' => $montos['total'],
-            'monto_total_sujeto_iva' => $montos['total'],
+            'total_precio_neto' => $montos['total'],
+            'iva' => $montos['efectivo'],
+            'monto_total' => round($montos['total'] + $montos['efectivo'], 2),
+            'monto_total_moneda' => round($montos['total'] + $montos['efectivo'], 2),
             'monto_efectivo_credito_debito' => $montos['efectivo'],
             'leyenda' => $origen->leyenda,
             'usuario' => $devolucion['usuario'] ?? $origen->usuario,

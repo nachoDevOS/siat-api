@@ -481,6 +481,55 @@ test('forzar CUIS: si tras cerrar el SIN devuelve el mismo, se avisa', function 
         ->toThrow(SiatException::class, 'devolvio el mismo CUIS');
 });
 
+test('forzar CUIS: si tras cerrar el SIN no entrega el nuevo, el anterior queda vencido y se dice el motivo', function () {
+    $pv = pv0SinCufd();
+    [$codigos, $operaciones] = codigosYOperaciones();
+    $rechazo = (object) ['RespuestaCuis' => (object) [
+        'transaccion' => false,
+        'mensajesList' => (object) ['codigo' => 966, 'descripcion' => 'NO SE PUEDE RECUPERAR LOS DATOS DEL CONTRIBUYENTE'],
+    ]];
+    $codigos->shouldReceive('solicitarCuis')->twice()->andReturn(sinCuis('CUIS-VIGENTE'), $rechazo);
+    $operaciones->shouldReceive('cerrarOperacionesSistema')->andReturn(cierre(true));
+
+    expect(fn () => app(GestorCodigos::class)->forzarCuisNuevo($pv))
+        ->toThrow(SiatException::class, '[966] NO SE PUEDE RECUPERAR LOS DATOS DEL CONTRIBUYENTE No vuelvas a forzar')
+        ->and($pv->cuisVigente())->toBeNull();
+});
+
+test('forzar CUIS no esta permitido en piloto y no llama al SIN', function () {
+    $pv = pv0SinCufd();
+    $pv->sucursal->empresa->update(['codigo_ambiente' => 2]);
+    [$codigos, $operaciones] = codigosYOperaciones();
+    $codigos->shouldNotReceive('solicitarCuis');
+    $operaciones->shouldNotReceive('cerrarOperacionesSistema');
+
+    expect(fn () => app(GestorCodigos::class)->forzarCuisNuevo($pv->fresh()))
+        ->toThrow(SiatException::class, 'no esta permitido en el ambiente piloto');
+});
+
+test('en piloto el dialogo no ofrece forzar', function () {
+    $this->actingAs(User::factory()->create());
+    $pv = pv0SinCufd();
+    $pv->sucursal->empresa->update(['codigo_ambiente' => 2]);
+
+    $this->get(route('admin.puntos-venta.codigos', $pv))
+        ->assertSee('Revisar CUIS')
+        ->assertSee('En piloto no se puede forzar')
+        ->assertDontSee(route('admin.codigos.cuis-nuevo', $pv));
+});
+
+test('si el SIN no entrega el CUIS, el error dice su motivo', function () {
+    $pv = pv0SinCufd(conCuis: false);
+    [$codigos] = codigosYOperaciones();
+    $codigos->shouldReceive('solicitarCuis')->andReturn((object) ['RespuestaCuis' => (object) [
+        'transaccion' => false,
+        'mensajesList' => (object) ['codigo' => 966, 'descripcion' => 'NO SE PUEDE RECUPERAR LOS DATOS DEL CONTRIBUYENTE'],
+    ]]);
+
+    expect(fn () => app(GestorCodigos::class)->solicitarCuis($pv))
+        ->toThrow(SiatException::class, 'No se guardo nada. [966] NO SE PUEDE RECUPERAR LOS DATOS DEL CONTRIBUYENTE');
+});
+
 test('el dialogo ofrece revisar o forzar, y avisa de las facturas pendientes', function () {
     $this->actingAs(User::factory()->create());
     $pv = pv0SinCufd();

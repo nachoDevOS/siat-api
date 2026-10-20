@@ -35,6 +35,9 @@ class FacturaResource extends JsonResource
             // Por que el SIN la rechazo; null salvo en OBSERVADA.
             'motivo_observacion' => $this->motivo_observacion,
             'leyenda' => $this->leyenda,
+            // IVA Transparente: total = neto + iva (13%), lo que se cobra.
+            'neto' => (float) $this->total_precio_neto,
+            'iva' => (float) $this->iva,
             'total' => (float) $this->monto_total,
             // Solo en una nota: que factura ajusta y cuanto credito fiscal
             // revierte (13% del total devuelto).

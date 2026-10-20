@@ -37,6 +37,20 @@ class ConstructorXml
      */
     private const RAIZ_NOTA = 'notaFiscalElectronicaCreditoDebito';
 
+    /**
+     * Elementos obligatorios que el XSD NO declara nillable: vacios van como
+     * elemento vacio (<complemento/>), sin xsi:nil. Verificado en el piloto
+     * /sfd (V3, 19/10/2026), las dos formas vuelven con [920]:
+     *  - con xsi:nil: "Attribute xsi:nil must not appear on element
+     *    'complemento', because the {nillable} property ... is false";
+     *  - omitido: "Invalid content found starting with 'codigoCliente'. One
+     *    of '{complemento}' is expected".
+     * Si el SIN rechaza otro campo igual, va aca.
+     *
+     * @var list<string>
+     */
+    private const VACIO_SIN_NIL = ['complemento'];
+
     private const NS_XSI = 'http://www.w3.org/2001/XMLSchema-instance';
 
     private const NS_XMLNS = 'http://www.w3.org/2000/xmlns/';
@@ -47,7 +61,7 @@ class ConstructorXml
      */
     public function construir(Factura $factura): string
     {
-        $factura->loadMissing(['items', 'empresa', 'puntoVenta.sucursal', 'facturaOrigen']);
+        $factura->loadMissing(['items', 'empresa', 'puntoVenta.sucursal', 'facturaOrigen.items']);
 
         $esNota = $factura->esNotaCreditoDebito();
         $nombreRaiz = $esNota ? self::RAIZ_NOTA : self::RAIZ;
@@ -74,8 +88,12 @@ class ConstructorXml
         // Un nodo <detalle> por cada item. En la nota van primero los de la
         // factura original y despues los devueltos, en el orden en que se
         // guardaron.
+        $nroItem = $esNota ? $this->numerosDeItem($factura) : [];
+
         foreach ($factura->items as $item) {
-            $esNota ? $this->detalleNota($doc, $raiz, $item) : $this->detalle($doc, $raiz, $item);
+            $esNota
+                ? $this->detalleNota($doc, $raiz, $item, $nroItem[$item->item_origen_id] ?? null)
+                : $this->detalle($doc, $raiz, $item);
         }
 
         return $doc->saveXML();
@@ -86,7 +104,9 @@ class ConstructorXml
         $empresa = $factura->empresa;
         $sucursal = $factura->puntoVenta->sucursal;
 
-        // Orden y nombres tentativos segun el manual del SIN; verificar XSD.
+        // Orden y nombres del XSD V3 (IVA Transparente) de compra-venta, del
+        // anexo tecnico de la Ley 1733: siatanexo.impuestos.gob.bo, articulo
+        // 231, CompraVentaXML.zip. El de siatinfo sigue siendo el V2.
         $campos = [
             'nitEmisor' => $empresa->nit,
             'razonSocialEmisor' => $empresa->razon_social,
@@ -106,8 +126,12 @@ class ConstructorXml
             'codigoCliente' => $factura->comprador_numero_documento,
             'codigoMetodoPago' => $factura->metodo_pago,
             'numeroTarjeta' => $factura->numero_tarjeta,
-            'montoTotal' => $this->monto($factura->monto_total),
-            'montoTotalSujetoIva' => $this->monto($factura->monto_total_sujeto_iva),
+            // Montos V3: ver CalculadorTotales. Reemplazan a montoTotal y
+            // montoTotalSujetoIva del V2.
+            'subTotalNeto' => $this->monto($factura->subtotal),
+            'totalPrecioNeto' => $this->monto($factura->total_precio_neto),
+            'iva' => $this->monto($factura->iva),
+            'montoaPagar' => $this->monto($factura->monto_total),
             'codigoMoneda' => $factura->moneda,
             'tipoCambio' => $this->monto($factura->tipo_cambio),
             'montoTotalMoneda' => $this->monto($factura->monto_total_moneda),
@@ -115,13 +139,11 @@ class ConstructorXml
             'descuentoAdicional' => $this->monto($factura->descuento_global),
             // 0 normal, 1 = emitir aunque el NIT no valide. Va siempre con
             // valor y no nil, igual que el sistema que factura en produccion.
+            // En V3 va despues de los montos y el cafc ya no existe.
             'codigoExcepcion' => $factura->codigo_excepcion ?? 0,
-            // Siempre nil: el CAFC es de la modalidad computarizada y este
-            // sistema solo emite electronica en linea. El elemento igual va,
-            // porque el XSD lo declara en la secuencia de la cabecera.
-            'cafc' => null,
             'leyenda' => $factura->leyenda,
             'usuario' => $factura->usuario,
+            'codigoInterno' => $empresa->codigo_interno,
             'codigoDocumentoSector' => $factura->codigo_documento_sector,
         ];
 
@@ -138,9 +160,10 @@ class ConstructorXml
             'codigoProductoSin' => $item->codigo_producto_sin,
             'codigoProducto' => $item->codigo_interno,
             'descripcion' => $item->descripcion,
-            'cantidad' => $this->monto($item->cantidad, 4),
+            // El XSD V3 admite 2 decimales en la cantidad (el V2, 4).
+            'cantidad' => $this->monto($item->cantidad),
             'unidadMedida' => $item->unidad_medida,
-            'precioUnitario' => $this->monto($item->precio_unitario),
+            'precioNetoUnitario' => $this->monto($item->precio_unitario),
             'montoDescuento' => $this->monto($item->descuento),
             'subTotal' => $this->monto($item->subtotal),
             'numeroSerie' => $item->numero_serie,
@@ -151,13 +174,30 @@ class ConstructorXml
     }
 
     /**
+     * nroItem de la nota: la posicion (desde 1) de cada linea en la factura
+     * original, indexada por id de item. Un item devuelto lleva el numero de
+     * la linea de la que sale, como en el XML de ejemplo del SIN.
+     *
+     * @return array<int, int>
+     */
+    private function numerosDeItem(Factura $nota): array
+    {
+        return $nota->facturaOrigen->items
+            ->sortBy('id')
+            ->values()
+            ->mapWithKeys(fn (FacturaItem $item, int $i): array => [$item->id => $i + 1])
+            ->all();
+    }
+
+    /**
      * Cabecera de la nota de credito-debito. Repite los datos del emisor y
      * del comprador como una factura, y agrega la referencia a la factura
      * original (numero, CUF y fecha) y los montos del ajuste.
      *
-     * Orden de notaFiscalElectronicaCreditoDebito.xsd (contrastado con
-     * go-siat): a diferencia de la factura no lleva metodo de pago, moneda,
-     * gift card ni cafc.
+     * Orden del XSD V3 (IVA Transparente) notaElectronicaCreditoDebito, del
+     * anexo tecnico de la Ley 1733 (articulo 285, CreditoDebitoXML.zip): a
+     * diferencia de la factura no lleva metodo de pago, moneda ni gift card,
+     * y repite los montos de la factura (...Original) y los de lo devuelto.
      */
     private function cabeceraNota(DOMDocument $doc, \DOMElement $raiz, Factura $nota): void
     {
@@ -187,16 +227,29 @@ class ConstructorXml
             'numeroFactura' => $origen->numero_factura,
             'numeroAutorizacionCuf' => $origen->cuf,
             'fechaEmisionFactura' => $origen->fecha_emision?->format('Y-m-d\TH:i:s.v'),
-            'montoTotalOriginal' => $this->monto($origen->monto_total),
-            // subtotal de la nota = suma de los items devueltos.
-            'montoTotalDevuelto' => $this->monto($nota->subtotal),
+            // Los montos de la factura que se ajusta, tal como los emitio.
+            'subTotalNetoOriginal' => $this->monto($origen->subtotal),
+            'totalPrecioNetoOriginal' => $this->monto($origen->total_precio_neto),
+            'ivaOriginal' => $this->monto($origen->iva),
+            'montoaPagarOriginal' => $this->monto($origen->monto_total),
+            // Los de lo devuelto: ver EmisorNotaCreditoDebito::montos().
+            'subTotalNetoDevuelto' => $this->monto($nota->subtotal),
+            'totalPrecioNetoDevuelto' => $this->monto($nota->total_precio_neto),
+            'ivaDevuelto' => $this->monto($nota->iva),
+            'montoaPagarDevuelto' => $this->monto($nota->monto_total),
+            // PENDIENTE DE VERIFICAR: el XSD V3 publicado declara este y
+            // montoDescuentoDevuelto con minExclusive 0, sin nil, asi que una
+            // factura sin descuento adicional (0.00) no validaria contra el.
+            // Parece un error del esquema; se manda 0.00 hasta ver que acepta
+            // el piloto.
+            'descuentoAdicionalOriginal' => $this->monto($origen->descuento_global),
             // La parte del descuento adicional de la factura que corresponde a
             // lo devuelto (descuento_global de la nota).
-            'montoDescuentoCreditoDebito' => $this->monto($nota->descuento_global),
-            'montoEfectivoCreditoDebito' => $this->monto($nota->monto_efectivo_credito_debito),
+            'montoDescuentoDevuelto' => $this->monto($nota->descuento_global),
             'codigoExcepcion' => $nota->codigo_excepcion ?? 0,
             'leyenda' => $nota->leyenda,
             'usuario' => $nota->usuario,
+            'codigoInterno' => $empresa->codigo_interno,
             'codigoDocumentoSector' => $nota->codigo_documento_sector,
         ];
 
@@ -205,18 +258,20 @@ class ConstructorXml
 
     /**
      * Detalle de la nota: como el de la factura, sin numero de serie ni IMEI,
-     * y con codigoDetalleTransaccion (1 = item original, 2 = devuelto).
+     * con nroItem al principio (V3) y codigoDetalleTransaccion al final
+     * (1 = item original, 2 = devuelto).
      */
-    private function detalleNota(DOMDocument $doc, \DOMElement $raiz, FacturaItem $item): void
+    private function detalleNota(DOMDocument $doc, \DOMElement $raiz, FacturaItem $item, ?int $nroItem): void
     {
         $campos = [
+            'nroItem' => $nroItem,
             'actividadEconomica' => $item->codigo_actividad,
             'codigoProductoSin' => $item->codigo_producto_sin,
             'codigoProducto' => $item->codigo_interno,
             'descripcion' => $item->descripcion,
-            'cantidad' => $this->monto($item->cantidad, 4),
+            'cantidad' => $this->monto($item->cantidad),
             'unidadMedida' => $item->unidad_medida,
-            'precioUnitario' => $this->monto($item->precio_unitario),
+            'precioNetoUnitario' => $this->monto($item->precio_unitario),
             'montoDescuento' => $this->monto($item->descuento),
             'subTotal' => $this->monto($item->subtotal),
             'codigoDetalleTransaccion' => $item->codigo_detalle_transaccion,
@@ -228,6 +283,7 @@ class ConstructorXml
     /**
      * Crea un nodo con hijos a partir de un arreglo campo => valor.
      * Un campo vacio NO se omite: se escribe el elemento con xsi:nil="true".
+     * La excepcion son los de VACIO_SIN_NIL: van vacios, sin el atributo.
      *
      * Antes se saltaban los nulos, y eso rompe la validacion: el XSD del SIN
      * declara una secuencia de elementos, asi que faltar uno corre a todos los
@@ -243,10 +299,16 @@ class ConstructorXml
         $nodo = $padre->appendChild($doc->createElement($nombre));
 
         foreach ($campos as $etiqueta => $valor) {
+            // El cero es un valor, no un vacio: montoGiftCard = 0 debe viajar.
+            $vacio = $valor === null || $valor === '';
+
             $hijo = $nodo->appendChild($doc->createElement($etiqueta));
 
-            // El cero es un valor, no un vacio: montoGiftCard = 0 debe viajar.
-            if ($valor === null || $valor === '') {
+            if ($vacio && in_array($etiqueta, self::VACIO_SIN_NIL, true)) {
+                continue;
+            }
+
+            if ($vacio) {
                 $hijo->setAttributeNS(self::NS_XSI, 'xsi:nil', 'true');
 
                 continue;

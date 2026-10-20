@@ -399,25 +399,33 @@ Implementación: `app/Services/Factura/GeneradorCuf.php`.
 |---|---|---|
 | Raíz | `facturaElectronicaCompraVenta` (la computarizada es `facturaComputarizadaCompraVenta`) | ✅ |
 | Atributos raíz | `xmlns:xsi` + `xsi:noNamespaceSchemaLocation="facturaElectronicaCompraVenta.xsd"` | ✅ |
-| Vacíos | Siempre presentes con `xsi:nil="true"`, nunca omitidos (el XSD es una secuencia) | ✅ |
-| Orden de campos | El de `ConstructorXml` | ⚠️ contrastar con el XSD |
-| `codigoExcepcion` | `0` normal; `1` = NIT no validado (solo documento 5) | ✅ (`ventas`) |
-| `cafc` | Hoy siempre nil (ver Etapa VI) | ⚠️ |
-| `montoTotalSujetoIva` | `montoTotal − montoGiftCard` | ✅ (`ventas`, con gift card 0) |
-| `montoTotalMoneda` / `tipoCambio` | Hoy solo bolivianos: igual a `montoTotal`, cambio 1 | ✅ |
+| Vacíos | Presentes con `xsi:nil="true"` (el XSD es una secuencia), salvo `complemento`: en V3 es obligatorio y no nillable, vacío va como `<complemento/>` (`ConstructorXml::VACIO_SIN_NIL`) | ✅ |
+| XSD | V3 (IVA Transparente, Ley 1733): `CompraVentaXML.zip` del anexo técnico en **siatanexo**.impuestos.gob.bo (artículo 231). El de siatinfo sigue siendo V2. Copia en `tests/Fixtures/xsd-v3`, y los tests validan el XML contra ella | ✅ |
+| Orden de campos | El del XSD V3 | ✅ (validado contra el XSD) |
+| Precios | **Netos**, sin IVA: `precioNetoUnitario`. La API recibe `precio_unitario` neto | ✅ |
+| Montos | `subTotalNeto` = Σ `subTotal`; `totalPrecioNeto` = subTotalNeto − `descuentoAdicional` − `montoGiftCard`; `iva` = 13% de totalPrecioNeto; `montoaPagar` = totalPrecioNeto + iva (`CalculadorTotales`, cuadra con el ejemplo del SIN) | ✅ |
+| `codigoExcepcion` | `0` normal; `1` = NIT no validado (solo documento 5). En V3 va después de `descuentoAdicional` | ✅ (`ventas`) |
+| `cafc` | Ya no existe en V3 | ✅ |
+| `codigoInterno` | Obligatorio en V3 ("Código Interno SIN"). `empresas.codigo_interno`, por defecto `A` como en los ejemplos del SIN | ⚠️ confirmar el valor con el SIN |
+| `cantidad` | 2 decimales en V3 (antes 4) | ✅ |
+| `montoTotalMoneda` / `tipoCambio` | Hoy solo bolivianos: igual a `montoaPagar`, cambio 1 | ✅ |
 | `actividadEconomica` | Del catálogo de productos homologados del NIT | ✅ |
 | `leyenda` | Del catálogo de leyendas de la actividad, al azar | ✅ |
 
 Cabecera, en orden: `nitEmisor`, `razonSocialEmisor`, `municipio`, `telefono`, `numeroFactura`,
 `cuf`, `cufd`, `codigoSucursal`, `direccion`, `codigoPuntoVenta`, `fechaEmision`,
 `nombreRazonSocial`, `codigoTipoDocumentoIdentidad`, `numeroDocumento`, `complemento`,
-`codigoCliente`, `codigoMetodoPago`, `numeroTarjeta`, `montoTotal`, `montoTotalSujetoIva`,
-`codigoMoneda`, `tipoCambio`, `montoTotalMoneda`, `montoGiftCard`, `descuentoAdicional`,
-`codigoExcepcion`, `cafc`, `leyenda`, `usuario`, `codigoDocumentoSector`.
+`codigoCliente`, `codigoMetodoPago`, `numeroTarjeta`, `subTotalNeto`, `totalPrecioNeto`, `iva`,
+`montoaPagar`, `codigoMoneda`, `tipoCambio`, `montoTotalMoneda`, `montoGiftCard`,
+`descuentoAdicional`, `codigoExcepcion`, `leyenda`, `usuario`, `codigoInterno`,
+`codigoDocumentoSector`.
 
 Detalle, en orden: `actividadEconomica`, `codigoProductoSin`, `codigoProducto`, `descripcion`,
-`cantidad`, `unidadMedida`, `precioUnitario`, `montoDescuento`, `subTotal`, `numeroSerie`,
+`cantidad`, `unidadMedida`, `precioNetoUnitario`, `montoDescuento`, `subTotal`, `numeroSerie`,
 `numeroImei`.
+
+En la base, `facturas.subtotal` es el subTotalNeto, `total_precio_neto` e `iva` sus columnas, y
+`monto_total` el montoaPagar (ya sin la gift card). `monto_total_sujeto_iva` quedó sin uso.
 
 ---
 
@@ -432,10 +440,13 @@ PDF, webhook y panel. La emite `App\Services\Factura\EmisorNotaCreditoDebito`.
 | Servicio SOAP | `ServicioFacturacionDocumentoAjuste`: `recepcionDocumentoAjuste`, `anulacionDocumentoAjuste`, `reversionAnulacionDocumentoAjuste`, `verificacionEstadoDocumentoAjuste`; envoltorio `SolicitudServicio{Operación}DocumentoAjuste`; misma struct base que compra-venta | ✅ WSDL piloto `/sfd` (2026-10-18) |
 | Contingencia | El servicio **no tiene operaciones de paquete**: la nota solo se emite en línea; con evento abierto se rechaza y si el SIAT cae después queda `PENDIENTE` | ✅ WSDL |
 | CUF | Mismo algoritmo con `tipoFactura` = 3 (documento de ajuste) y sector 24 | ✅ (go-siat) |
+| XSD | V3: `CreditoDebitoXML.zip` del anexo técnico (siatanexo, artículo 285), copia en `tests/Fixtures/xsd-v3` | ✅ (validado contra el XSD) |
 | Raíz XML | `notaFiscalElectronicaCreditoDebito` + `.xsd` | ✅ (go-siat) |
 | `codigoDetalleTransaccion` | 1 = item de la factura original, 2 = item devuelto. Van todos los originales y después los devueltos | ✅ (go-siat) |
-| `montoEfectivoCreditoDebito` | 13% de (`montoTotalDevuelto` − `montoDescuentoCreditoDebito`) | ✅ (go-siat) |
-| `montoDescuentoCreditoDebito` | `descuentoAdicional` de la factura prorrateado por lo devuelto sobre la suma de las líneas | ⚠️ regla propia, contrastar en el piloto |
+| `nroItem` | Posición de la línea en la factura; el devuelto lleva el de la línea de la que sale | ✅ (ejemplo del SIN) |
+| Montos `...Original` | Los de la factura tal como se emitió | ✅ |
+| Montos `...Devuelto` | `subTotalNetoDevuelto` = Σ líneas devueltas; `montoDescuentoDevuelto` = `descuentoAdicional` prorrateado; `totalPrecioNetoDevuelto` = la resta; `ivaDevuelto` = 13%; `montoaPagarDevuelto` = neto + IVA | ✅ (cuadra con el ejemplo del SIN) |
+| Descuento en cero | El XSD declara `descuentoAdicionalOriginal` y `montoDescuentoDevuelto` con `minExclusive 0` y sin nil: una factura sin descuento adicional no validaría. Se manda `0.00` | ⚠️ ver qué acepta el piloto |
 | Correlativo | `puntos_venta.siguiente_nota`, aparte del de facturas | ⚠️ contrastar en el piloto |
 | Gift card | Facturas con gift card no admiten nota todavía | ⚠️ |
 | Certificación | El sector 24 se certifica aparte ante el SIN; no hay casos en el piloto del panel | ❌ pendiente |
@@ -444,11 +455,13 @@ Cabecera, en orden: `nitEmisor`, `razonSocialEmisor`, `municipio`, `telefono`,
 `numeroNotaCreditoDebito`, `cuf`, `cufd`, `codigoSucursal`, `direccion`, `codigoPuntoVenta`,
 `fechaEmision`, `nombreRazonSocial`, `codigoTipoDocumentoIdentidad`, `numeroDocumento`,
 `complemento`, `codigoCliente`, `numeroFactura`, `numeroAutorizacionCuf`, `fechaEmisionFactura`,
-`montoTotalOriginal`, `montoTotalDevuelto`, `montoDescuentoCreditoDebito`,
-`montoEfectivoCreditoDebito`, `codigoExcepcion`, `leyenda`, `usuario`, `codigoDocumentoSector`.
+`subTotalNetoOriginal`, `totalPrecioNetoOriginal`, `ivaOriginal`, `montoaPagarOriginal`,
+`subTotalNetoDevuelto`, `totalPrecioNetoDevuelto`, `ivaDevuelto`, `montoaPagarDevuelto`,
+`descuentoAdicionalOriginal`, `montoDescuentoDevuelto`, `codigoExcepcion`, `leyenda`, `usuario`,
+`codigoInterno`, `codigoDocumentoSector`.
 
-Detalle: como el de la factura sin `numeroSerie`/`numeroImei` y con `codigoDetalleTransaccion` al
-final.
+Detalle: `nroItem` primero, después como el de la factura sin `numeroSerie`/`numeroImei`, y con
+`codigoDetalleTransaccion` al final.
 
 ---
 

@@ -52,15 +52,25 @@ function validarVenta(array $extra = []): Illuminate\Validation\Validator
     ], $extra), $request->rules(), $request->messages());
 }
 
-test('el sujeto a IVA es monto total menos gift card, como valida el SIN en el sector 1', function () {
+test('IVA Transparente: los totales cuadran con el XML de ejemplo del SIN (V3)', function () {
+    // Los cuatro items, el descuento y la gift card del ejemplo oficial
+    // facturaElectronicaCompraVenta.xml del anexo de la Ley 1733.
     $totales = app(CalculadorTotales::class)->calcular(
-        [['cantidad' => 2, 'precio_unitario' => 50, 'descuento' => 10]],
-        descuentoGlobal: 5,
-        giftCard: 20,
+        [
+            ['cantidad' => 200, 'precio_unitario' => 0.54, 'descuento' => 7.52],
+            ['cantidad' => 100, 'precio_unitario' => 0.61, 'descuento' => 4.11],
+            ['cantidad' => 1, 'precio_unitario' => 0.83],
+            ['cantidad' => 3, 'precio_unitario' => 34.64],
+        ],
+        descuentoGlobal: 20,
+        giftCard: 100,
     );
 
-    expect($totales['monto_total'])->toBe(85.0)
-        ->and($totales['monto_total_sujeto_iva'])->toBe(65.0)
+    expect(array_column($totales['items'], 'subtotal'))->toBe([100.48, 56.89, 0.83, 103.92])
+        ->and($totales['subtotal'])->toBe(262.12)
+        ->and($totales['total_precio_neto'])->toBe(142.12)
+        ->and($totales['iva'])->toBe(18.48)
+        ->and($totales['monto_total'])->toBe(160.6)
         ->and($totales)->not->toHaveKey('anticipo');
 });
 
@@ -98,7 +108,7 @@ test('el envio en linea no toca una factura que ya no esta PENDIENTE', function 
     Factura::ESTADO_ENVIADA,
 ]);
 
-test('el validador corta descuentos y gift card que dejan montos negativos', function (array $venta, string $error) {
+test('el validador corta descuentos y gift card que dejan montos en cero o negativos', function (array $venta, string $error) {
     $errores = app(ValidadorFactura::class)->validar(array_merge([
         'comprador' => ['razon_social' => 'PEREZ', 'numero_documento' => '1234567'],
         'items' => [['descripcion' => 'X', 'cantidad' => 2, 'precio_unitario' => 50, 'descuento' => 0]],
@@ -108,17 +118,28 @@ test('el validador corta descuentos y gift card que dejan montos negativos', fun
 })->with([
     'descuento de linea mayor al importe' => [
         ['items' => [['descripcion' => 'X', 'cantidad' => 1, 'precio_unitario' => 10, 'descuento' => 15]]],
-        'supera el importe de la linea',
+        'deja la linea (10) sin importe',
     ],
-    'descuento global mayor al total' => [['descuento_global' => 150], 'monto total quedaria negativo'],
-    'gift card mayor al total' => [['gift_card' => 101], 'gift card supera el monto total'],
+    // El XSD V3 exige subTotal > 0: una linea regalada del todo no pasa.
+    'descuento de linea igual al importe' => [
+        ['items' => [['descripcion' => 'X', 'cantidad' => 1, 'precio_unitario' => 10, 'descuento' => 10]]],
+        'deja la linea (10) sin importe',
+    ],
+    'precio en cero' => [
+        ['items' => [['descripcion' => 'X', 'cantidad' => 1, 'precio_unitario' => 0]]],
+        'precio unitario neto debe ser mayor a cero',
+    ],
+    'descuento global mayor al total' => [['descuento_global' => 150], 'el total neto debe ser mayor a cero'],
+    'gift card mayor al total' => [['gift_card' => 101], 'gift card cubre todo el neto'],
+    // Y totalPrecioNeto > 0: la gift card no puede pagar todo.
+    'gift card igual al total' => [['gift_card' => 100], 'gift card cubre todo el neto'],
 ]);
 
 test('una venta con montos coherentes pasa el validador', function () {
     $errores = app(ValidadorFactura::class)->validar([
         'comprador' => ['razon_social' => 'PEREZ', 'numero_documento' => '1234567'],
         'descuento_global' => 10,
-        'gift_card' => 90,
+        'gift_card' => 89.99,
         'items' => [['descripcion' => 'X', 'cantidad' => 2, 'precio_unitario' => 50, 'descuento' => 0]],
     ]);
 

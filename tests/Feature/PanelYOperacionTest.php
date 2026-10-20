@@ -72,7 +72,8 @@ test('la representacion grafica lleva todo lo que espera el SIN', function () {
     $sucursal = Sucursal::factory()->for($empresa)->create(['codigo_sucursal' => 0, 'direccion' => 'Av. Arce 1', 'municipio' => 'La Paz']);
     $pv = PuntoVenta::factory()->for($sucursal)->create(['codigo_punto_venta' => 0]);
     $factura = Factura::factory()->for($empresa)->create([
-        'punto_venta_id' => $pv->id, 'monto_total' => 90, 'gift_card' => 0, 'monto_total_sujeto_iva' => 90, 'leyenda' => 'Ley N° 453',
+        'punto_venta_id' => $pv->id, 'subtotal' => 79.65, 'total_precio_neto' => 79.65, 'iva' => 10.35,
+        'monto_total' => 90, 'gift_card' => 0, 'leyenda' => 'Ley N° 453',
     ]);
     FacturaItem::factory()->for($factura)->create(['unidad_medida' => 58]);
 
@@ -90,8 +91,14 @@ test('la representacion grafica lleva todo lo que espera el SIN', function () {
         ->toContain('Av. Arce 1')
         ->toContain('1023456028')
         ->toContain('Unidad (servicios)')
+        // Totales del formato grafico V3 (IVA Transparente).
+        ->toContain('TOTAL PRECIO NETO Bs')
+        ->toContain('<td class="total-valor">79.65</td>')
+        ->toContain('IVA Bs')
+        ->toContain('<td class="total-valor">10.35</td>')
         ->toContain('MONTO A PAGAR Bs')
-        ->toContain('IMPORTE BASE CRÉDITO FISCAL Bs')
+        ->toContain('<td class="total-valor fuerte">90.00</td>')
+        ->not->toContain('IMPORTE BASE CRÉDITO FISCAL')
         ->toContain('Son: Noventa 00/100 Bolivianos')
         ->toContain('Ley N° 453')
         ->toContain('Representación Gráfica de un Documento Fiscal Digital emitido en una modalidad de facturación en línea')

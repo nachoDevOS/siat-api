@@ -54,7 +54,7 @@ class EmitirFactura extends HerramientaSiat
     {
         return [
             'venta' => $schema->object()
-                ->description('Venta: sucursal, punto_venta, referencia_externa, comprador {tipo_documento, numero_documento, razon_social, complemento?, email?}, metodo_pago, codigo_excepcion?, descuento_global?, items[] {codigo_producto_sin, descripcion, cantidad, unidad_medida, precio_unitario, descuento?, codigo_interno?}.')
+                ->description('Venta: sucursal, punto_venta, referencia_externa, comprador {tipo_documento, numero_documento, razon_social, complemento?, email?}, metodo_pago, codigo_excepcion?, descuento_global?, items[] {codigo_producto_sin, descripcion, cantidad, unidad_medida, precio_unitario (NETO, sin IVA: se suma el 13%), descuento?, codigo_interno?}.')
                 ->required(),
         ];
     }

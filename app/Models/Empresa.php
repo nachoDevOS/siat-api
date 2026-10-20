@@ -40,6 +40,16 @@ class Empresa extends Model
     protected $guarded = ['id'];
 
     /**
+     * Igual que el default de la columna, para que una empresa recien creada
+     * (sin volver a leerla) ya arme el XML V3 con su codigoInterno.
+     *
+     * @var array<string, mixed>
+     */
+    protected $attributes = [
+        'codigo_interno' => 'A',
+    ];
+
+    /**
      * El token delegado se cifra en reposo con la clave de la app.
      * El cast 'encrypted' lo descifra transparente al leerlo.
      */

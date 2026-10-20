@@ -97,7 +97,10 @@ test('la nota toma precio y descuento de la factura y revierte el 13% de lo devu
         ->and($nota->estado)->toBe(Factura::ESTADO_PENDIENTE)
         ->and((float) $nota->subtotal)->toBe(45.0)
         ->and((float) $nota->descuento_global)->toBe(0.0)
-        ->and((float) $nota->monto_total)->toBe(45.0)
+        // Neto devuelto 45 + IVA 13% (5.85) = 50.85 devueltos al comprador.
+        ->and((float) $nota->total_precio_neto)->toBe(45.0)
+        ->and((float) $nota->iva)->toBe(5.85)
+        ->and((float) $nota->monto_total)->toBe(50.85)
         ->and((float) $nota->monto_efectivo_credito_debito)->toBe(5.85)
         ->and($nota->comprador_razon_social)->toBe('FERRETERIA SOL');
 
@@ -120,7 +123,9 @@ test('el descuento adicional de la factura se prorratea en la nota', function ()
 
     expect((float) $nota->subtotal)->toBe(100.0)
         ->and((float) $nota->descuento_global)->toBe(10.0)
-        ->and((float) $nota->monto_total)->toBe(90.0)
+        ->and((float) $nota->total_precio_neto)->toBe(90.0)
+        ->and((float) $nota->iva)->toBe(11.7)
+        ->and((float) $nota->monto_total)->toBe(101.7)
         ->and((float) $nota->monto_efectivo_credito_debito)->toBe(11.7);
 });
 
@@ -199,9 +204,12 @@ test('la misma referencia devuelve la misma nota y no se reutiliza la de otro do
 
 // --- XML y SOAP --------------------------------------------------------------------
 
-test('el XML de la nota sigue la secuencia del XSD y referencia la factura', function () {
-    $factura = facturaParaNota();
-    $nota = devolver($factura, [['linea' => 1, 'cantidad' => 1]]);
+test('el XML de la nota sigue la secuencia del XSD V3 y referencia la factura', function () {
+    // Leyenda, usuario y actividad: sin catalogos sincronizados no se
+    // deducen, y el XSD los exige.
+    $factura = facturaParaNota(['descuento_global' => 19, 'leyenda' => 'Ley N° 453', 'usuario' => 'caja-01']);
+    $factura->items()->update(['codigo_actividad' => '620100']);
+    $nota = devolver($factura->fresh(), [['linea' => 1, 'cantidad' => 1]]);
 
     $doc = new DOMDocument;
     $doc->loadXML(app(ConstructorXml::class)->construir($nota->fresh()));
@@ -216,22 +224,37 @@ test('el XML de la nota sigue la secuencia del XSD y referencia la factura', fun
             'nitEmisor', 'razonSocialEmisor', 'municipio', 'telefono', 'numeroNotaCreditoDebito', 'cuf', 'cufd',
             'codigoSucursal', 'direccion', 'codigoPuntoVenta', 'fechaEmision', 'nombreRazonSocial',
             'codigoTipoDocumentoIdentidad', 'numeroDocumento', 'complemento', 'codigoCliente', 'numeroFactura',
-            'numeroAutorizacionCuf', 'fechaEmisionFactura', 'montoTotalOriginal', 'montoTotalDevuelto',
-            'montoDescuentoCreditoDebito', 'montoEfectivoCreditoDebito', 'codigoExcepcion', 'leyenda', 'usuario',
-            'codigoDocumentoSector',
+            'numeroAutorizacionCuf', 'fechaEmisionFactura', 'subTotalNetoOriginal', 'totalPrecioNetoOriginal',
+            'ivaOriginal', 'montoaPagarOriginal', 'subTotalNetoDevuelto', 'totalPrecioNetoDevuelto', 'ivaDevuelto',
+            'montoaPagarDevuelto', 'descuentoAdicionalOriginal', 'montoDescuentoDevuelto', 'codigoExcepcion',
+            'leyenda', 'usuario', 'codigoInterno', 'codigoDocumentoSector',
         ])
         ->and($hijos($doc->getElementsByTagName('detalle')->item(0)))->toBe([
-            'actividadEconomica', 'codigoProductoSin', 'codigoProducto', 'descripcion', 'cantidad', 'unidadMedida',
-            'precioUnitario', 'montoDescuento', 'subTotal', 'codigoDetalleTransaccion',
+            'nroItem', 'actividadEconomica', 'codigoProductoSin', 'codigoProducto', 'descripcion', 'cantidad',
+            'unidadMedida', 'precioNetoUnitario', 'montoDescuento', 'subTotal', 'codigoDetalleTransaccion',
         ])
         ->and($texto('numeroFactura'))->toBe((string) $factura->numero_factura)
         ->and($texto('numeroAutorizacionCuf'))->toBe($factura->cuf)
-        ->and($texto('montoTotalOriginal'))->toBe('190.00')
-        ->and($texto('montoTotalDevuelto'))->toBe('45.00')
-        ->and($texto('montoEfectivoCreditoDebito'))->toBe('5.85')
+        // Factura: 190 neto - 19 de descuento = 171, IVA 22.23, 193.23.
+        ->and($texto('subTotalNetoOriginal'))->toBe('190.00')
+        ->and($texto('totalPrecioNetoOriginal'))->toBe('171.00')
+        ->and($texto('ivaOriginal'))->toBe('22.23')
+        ->and($texto('montoaPagarOriginal'))->toBe('193.23')
+        // Devuelto: 45 de la linea 1, 4.50 del descuento (45/190 de 19).
+        ->and($texto('subTotalNetoDevuelto'))->toBe('45.00')
+        ->and($texto('montoDescuentoDevuelto'))->toBe('4.50')
+        ->and($texto('totalPrecioNetoDevuelto'))->toBe('40.50')
+        ->and($texto('ivaDevuelto'))->toBe('5.27')
+        ->and($texto('montoaPagarDevuelto'))->toBe('45.77')
+        ->and($texto('descuentoAdicionalOriginal'))->toBe('19.00')
+        ->and($texto('codigoInterno'))->toBe('A')
         ->and($texto('codigoDocumentoSector'))->toBe('24')
         ->and($doc->getElementsByTagName('detalle')->length)->toBe(3)
+        // nroItem: la linea de la factura; el devuelto sale de la linea 1.
+        ->and([$texto('nroItem', 0), $texto('nroItem', 1), $texto('nroItem', 2)])->toBe(['1', '2', '1'])
         ->and($texto('codigoDetalleTransaccion', 2))->toBe('2');
+
+    expect(erroresContraXsdV3($doc->saveXML(), 'notaElectronicaCreditoDebito.xsd'))->toBe([]);
 });
 
 test('la nota viaja al servicio de documentos de ajuste con tipo de documento 3', function (string $metodo, string $operacion, string $envoltorio) {

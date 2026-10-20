@@ -79,6 +79,8 @@ class Factura extends Model
             'subtotal' => 'decimal:2',
             'descuento_global' => 'decimal:2',
             'gift_card' => 'decimal:2',
+            'total_precio_neto' => 'decimal:2',
+            'iva' => 'decimal:2',
             'monto_total' => 'decimal:2',
             'monto_total_moneda' => 'decimal:2',
             'monto_total_sujeto_iva' => 'decimal:2',

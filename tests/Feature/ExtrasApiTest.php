@@ -117,7 +117,10 @@ test('el lote emite cada venta por separado y una rechazada no frena a las demas
         ->assertJsonPath('rechazadas', 1)
         ->assertJsonPath('resultados.0.exito', true)
         ->assertJsonPath('resultados.1.error', 'PUNTO_VENTA_NO_ENCONTRADO')
-        ->assertJsonPath('resultados.2.factura.total', 20);
+        // Precio neto 20 + IVA 13%.
+        ->assertJsonPath('resultados.2.factura.neto', 20)
+        ->assertJsonPath('resultados.2.factura.iva', 2.6)
+        ->assertJsonPath('resultados.2.factura.total', 22.6);
 
     Queue::assertPushed(EnviarFacturaAlSiat::class, 2);
 

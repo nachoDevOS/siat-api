@@ -408,22 +408,28 @@ Errores: `422 NIT_INVALIDO` (no son solo dígitos) · `503 SIAT_NO_DISPONIBLE`.
 | `items.*.codigo_producto_sin` | entero | sí | Producto **homologado** por el SIN para el NIT |
 | `items.*.codigo_interno` | texto ≤ 100 | no | Código en su sistema |
 | `items.*.descripcion` | texto ≤ 500 | sí | |
-| `items.*.cantidad` | número > 0 | sí | |
+| `items.*.cantidad` | número > 0, hasta 2 decimales | sí | |
 | `items.*.unidad_medida` | entero | sí | Catálogo `unidades_medida` |
-| `items.*.precio_unitario` | número ≥ 0 | sí | En bolivianos |
-| `items.*.descuento` | número ≥ 0 | no | Descuento de la línea; no puede superar cantidad × precio |
+| `items.*.precio_unitario` | número > 0, hasta 2 decimales | sí | Precio **neto, SIN IVA**, en bolivianos. La API suma el 13% |
+| `items.*.descuento` | número ≥ 0, hasta 2 decimales | no | Descuento de la línea; debe ser menor que cantidad × precio |
 | `items.*.numero_serie` | texto ≤ 100 | no | |
 | `items.*.numero_imei` | texto ≤ 100 | no | |
 
 #### Cálculo de montos
 
+Desde la versión 3 del SIAT (IVA Transparente, Ley 1733) los precios son **netos** y el IVA se
+suma aparte:
+
 ```
 subtotal línea   = cantidad × precio_unitario − descuento
-monto total      = Σ (cantidad × precio_unitario) − Σ descuentos de línea − descuento_global
-sujeto a IVA     = monto total − gift_card
+subtotal         = Σ subtotal línea
+neto             = subtotal − descuento_global − gift_card     (debe quedar > 0)
+iva              = 13% de neto
+total            = neto + iva                                    (lo que se cobra)
 ```
 
-Todo se redondea a 2 decimales.
+Todo se redondea a 2 decimales. Ejemplo: 2 × 45.50 = 91.00 neto, IVA 11.83, total 102.83.
+La respuesta trae `neto`, `iva` y `total`.
 
 #### Ejemplo
 
@@ -472,7 +478,9 @@ Content-Type: application/json
     "codigo_estado_siat": null,
     "motivo_observacion": null,
     "leyenda": "Ley N° 453: ...",
-    "total": 90.0,
+    "neto": 90.0,
+    "iva": 11.7,
+    "total": 101.7,
     "referencia_externa": "VENTA-000123",
     "url_verificacion": "https://siat.impuestos.gob.bo/consulta/QR?nit=...&cuf=...&numero=128&t=2",
     "url_publica": "https://{dominio}/factura/4A1B9C...F3E2?signature=a8f3...",

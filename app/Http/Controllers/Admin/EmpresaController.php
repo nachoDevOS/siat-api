@@ -245,6 +245,9 @@ class EmpresaController extends Controller
             'razon_social' => ['required', 'string', 'max:255'],
             'nit' => ['required', 'string', 'max:20'],
             'codigo_sistema' => ['nullable', 'string', 'max:255'],
+            // codigoInterno de la cabecera del XML V3: de 1 a 10 caracteres.
+            // Si no viene, queda el que tenia (o el default "A").
+            'codigo_interno' => ['sometimes', 'required', 'string', 'max:10'],
             'token_delegado' => ['nullable', 'string'],
             'codigo_ambiente' => ['required', 'integer', 'in:1,2'],
             // Solo electronica en linea (1). La computarizada usa otro nodo

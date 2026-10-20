@@ -1152,7 +1152,7 @@ components:
               descripcion: { type: string, maxLength: 500 }
               cantidad: { type: number, exclusiveMinimum: true, minimum: 0 }
               unidad_medida: { type: integer }
-              precio_unitario: { type: number, minimum: 0 }
+              precio_unitario: { type: number, exclusiveMinimum: true, minimum: 0, description: "Precio NETO, sin IVA (IVA Transparente): la API suma el 13%. Hasta 2 decimales." }
               descuento: { type: number, minimum: 0, description: "No puede superar cantidad × precio" }
               numero_serie: { type: string, maxLength: 100 }
               numero_imei: { type: string, maxLength: 100 }
@@ -1200,7 +1200,9 @@ components:
         codigo_estado_siat: { type: string, nullable: true, example: "908" }
         motivo_observacion: { type: string, nullable: true, description: "Por qué el SIN la observó (solo en OBSERVADA)", example: "[1001] HASH INVALIDO" }
         leyenda: { type: string, nullable: true }
-        total: { type: number }
+        neto: { type: number, description: "Total precio neto: subtotal - descuentos - gift card" }
+        iva: { type: number, description: "13% del neto" }
+        total: { type: number, description: "Monto a pagar: neto + iva" }
         factura_origen:
           type: object
           description: "Solo en una nota: la factura que ajusta"
