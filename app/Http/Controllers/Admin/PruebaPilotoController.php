@@ -94,6 +94,8 @@ class PruebaPilotoController extends Controller
         }
 
         $nombre = CasoPrueba::ETAPAS[$etapa];
+        // "Etapa I" o "Etapa I V.3", como en el portal.
+        $titulo = ucfirst(CasoPrueba::nombreCorto($etapa));
 
         // Etapa grande (la II son 1800 llamadas): no entra en un request, va a
         // la cola. Las chicas, como la I, siguen corriendo en el momento.
@@ -103,16 +105,16 @@ class PruebaPilotoController extends Controller
         if ($faltan > self::MAXIMO_SINCRONO) {
             $encolados = $ejecutor->encolarEtapa($empresa, $etapa);
 
-            return $this->volver($empresa, "Etapa {$etapa} ({$nombre}): {$encolados} prueba(s) en cola. ".
+            return $this->volver($empresa, "{$titulo} ({$nombre}): {$encolados} prueba(s) en cola. ".
                 'Necesita un worker corriendo (php artisan queue:work). Recarga para ver el avance.');
         }
 
         $resultado = $ejecutor->ejecutarEtapa($empresa, $etapa);
 
         $mensaje = match (true) {
-            $resultado['ejecutadas'] === 0 => "Etapa {$etapa} ({$nombre}): ya estaba completa, no se envio nada.",
-            $resultado['fallidas'] === 0 => "Etapa {$etapa} ({$nombre}): {$resultado['ejecutadas']} prueba(s) enviadas, todas OK.",
-            default => "Etapa {$etapa} ({$nombre}): {$resultado['fallidas']} de {$resultado['ejecutadas']} con error. Mira la respuesta de cada prueba.",
+            $resultado['ejecutadas'] === 0 => "{$titulo} ({$nombre}): ya estaba completa, no se envio nada.",
+            $resultado['fallidas'] === 0 => "{$titulo} ({$nombre}): {$resultado['ejecutadas']} prueba(s) enviadas, todas OK.",
+            default => "{$titulo} ({$nombre}): {$resultado['fallidas']} de {$resultado['ejecutadas']} con error. Mira la respuesta de cada prueba.",
         };
 
         return $this->volver($empresa, $mensaje);
@@ -172,7 +174,7 @@ class PruebaPilotoController extends Controller
         $etiqueta = $ejecutor->etiquetaDeCuis($caso);
 
         return $ejecucion->estado === EjecucionPrueba::ESTADO_EXITOSO
-            ? back()->with('estado', "{$etiqueta}: CUIS nuevo ".data_get($ejecucion->respuesta, 'cuis').', contado en la etapa I.')
+            ? back()->with('estado', "{$etiqueta}: CUIS nuevo ".data_get($ejecucion->respuesta, 'cuis').', contado en la '.CasoPrueba::nombreCorto($caso->etapa).'.')
             : back()->with('error', "{$etiqueta}: ".data_get($ejecucion->respuesta, 'error', 'sin detalle'));
     }
 
@@ -212,7 +214,7 @@ class PruebaPilotoController extends Controller
 
         DB::table('jobs')->whereIn('id', $jobs)->delete();
 
-        $alcance = isset($datos['etapa']) ? "Etapa {$datos['etapa']}" : 'Todas las etapas';
+        $alcance = isset($datos['etapa']) ? ucfirst(CasoPrueba::nombreCorto((int) $datos['etapa'])) : 'Todas las etapas';
 
         return $this->volver($empresa, "{$alcance}: {$borradas} ejecucion(es) borradas y {$jobs->count()} job(s) quitados de la cola.");
     }

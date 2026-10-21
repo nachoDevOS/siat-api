@@ -66,6 +66,29 @@ class CasosPruebaSeeder extends Seeder
     }
 
     /**
+     * Hasta el 20/10/2026 la etapa I tenia V2 y V3 juntas (orden 1 y 2 = V3,
+     * 3 y 4 = V2). Ahora el V.3 es una etapa aparte (101): se mueven las filas
+     * en lugar de crear otras, para que las pruebas ya contadas sigan atadas a
+     * su caso.
+     */
+    private function separarEtapaUnoPorRecorrido(): void
+    {
+        CasoPrueba::where('fase', CasoPrueba::FASE_PILOTO)
+            ->where('etapa', 1)
+            ->where('tipo', 'solicitudCuis')
+            ->get()
+            ->each(function (CasoPrueba $caso): void {
+                $version = $caso->payload_ejemplo['version'] ?? 'v2';
+                $orden = (int) ($caso->payload_ejemplo['codigoPuntoVenta'] ?? 0) === 1 ? 1 : 2;
+
+                $caso->update([
+                    'etapa' => $version === 'v3' ? 1 + CasoPrueba::DESPLAZAMIENTO_V3 : 1,
+                    'orden' => $orden,
+                ]);
+            });
+    }
+
+    /**
      * Pruebas por etapa, copiadas del portal del SIN (Seguimiento de
      * Autorizacion de Sistemas > Listado de Pruebas).
      *
@@ -74,20 +97,27 @@ class CasosPruebaSeeder extends Seeder
      */
     private function etapas(): void
     {
+        $this->separarEtapaUnoPorRecorrido();
+
+        // El portal tiene dos recorridos y cada uno cuenta su ruta (confirmado
+        // con la etapa I el 20/10/2026): el original las llamadas por /v2 y el
+        // V.3 las de /sfd. Las etapas V.3 van con CasoPrueba::DESPLAZAMIENTO_V3.
+        $v2 = ['version' => 'v2'];
+        $v3 = CasoPrueba::DESPLAZAMIENTO_V3;
+
         // [etapa, orden, nombre, tipo, parametros del portal, pruebas esperadas]
         $pruebas = [
-            // Etapa I: un CUIS para cada punto de venta de la casa matriz, en
-            // las dos versiones de los servicios (V3 /sfd y V2 /v2). El SIN
-            // comparte el CUIS entre versiones: el ultimo emitido es el que
+            // Etapa I: un CUIS para cada punto de venta de la casa matriz. El
+            // SIN comparte el CUIS entre versiones: el ultimo emitido es el que
             // queda guardado para las etapas siguientes.
-            [1, 1, 'CUIS V3 sucursal 0 / punto de venta 1', 'solicitudCuis',
+            [1, 1, 'CUIS sucursal 0 / punto de venta 1', 'solicitudCuis',
+                ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1] + $v2, 1],
+            [1, 2, 'CUIS sucursal 0 / punto de venta 0', 'solicitudCuis',
+                ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0] + $v2, 1],
+            [1 + $v3, 1, 'CUIS sucursal 0 / punto de venta 1', 'solicitudCuis',
                 ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1, 'version' => 'v3'], 1],
-            [1, 2, 'CUIS V3 sucursal 0 / punto de venta 0', 'solicitudCuis',
+            [1 + $v3, 2, 'CUIS sucursal 0 / punto de venta 0', 'solicitudCuis',
                 ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0, 'version' => 'v3'], 1],
-            [1, 3, 'CUIS V2 sucursal 0 / punto de venta 1', 'solicitudCuis',
-                ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1, 'version' => 'v2'], 1],
-            [1, 4, 'CUIS V2 sucursal 0 / punto de venta 0', 'solicitudCuis',
-                ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0, 'version' => 'v2'], 1],
         ];
 
         // Etapa II: cada catalogo 50 veces, primero con el PV 1 y despues con el
@@ -123,15 +153,19 @@ class CasosPruebaSeeder extends Seeder
                     'codigoPuntoVenta' => $puntoVenta,
                     'operacion' => $operacion,
                     'resultadoEsperado' => $resultado,
-                ], 50];
+                ] + $v2, 50];
             }
         }
 
         // Etapa III: 100 CUFD por punto de venta, con su CUIS vigente.
         $pruebas[] = [3, 1, 'CUFD sucursal 0 / punto de venta 1', 'solicitudCufd',
-            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1], 100];
+            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1] + $v2, 100];
         $pruebas[] = [3, 2, 'CUFD sucursal 0 / punto de venta 0', 'solicitudCufd',
-            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0], 100];
+            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0] + $v2, 100];
+
+        // Etapas IV, VI, VII, VIII y XI emiten facturas: siguen por /sfd con el
+        // XML V3, que es el que arma el sistema. Por /v2 harian falta el XML V2
+        // y que /v2 vuelva a registrar facturas (responde -1 desde el 17/10).
 
         // Etapa IV: 125 facturas de compra-venta en linea por punto de venta
         // (codigoEmision 1, tipoFacturaDocumento 1, documento sector 1).
@@ -161,7 +195,7 @@ class CasosPruebaSeeder extends Seeder
                     'codigoPuntoVenta' => $puntoVenta,
                     'codigoMotivoEvento' => $motivo,
                     'descripcion' => $descripcion,
-                ], 5];
+                ] + $v2, 5];
             }
         }
 

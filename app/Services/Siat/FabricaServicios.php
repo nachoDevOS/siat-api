@@ -47,8 +47,12 @@ class FabricaServicios
         return new ServicioOperaciones($empresa, new SiatClient($empresa, $version));
     }
 
-    public function sincronizacion(Empresa $empresa): ServicioSincronizacion
+    /**
+     * Con version la piden las pruebas del recorrido original del piloto, que
+     * el portal cuenta por las rutas /v2.
+     */
+    public function sincronizacion(Empresa $empresa, string $version = SiatClient::VERSION_V3): ServicioSincronizacion
     {
-        return new ServicioSincronizacion($empresa, new SiatClient($empresa));
+        return new ServicioSincronizacion($empresa, new SiatClient($empresa, $version));
     }
 }

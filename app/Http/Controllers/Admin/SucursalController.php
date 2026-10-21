@@ -81,7 +81,7 @@ class SucursalController extends Controller
             $contadas = collect($resumen)->where('contada', true)->count();
             $fallas = collect($resumen)->where('contada', false)->pluck('texto')->implode(' ');
 
-            return "CUIS de la etapa I: {$contadas} de ".count($resumen).' contados.'.($fallas !== '' ? " {$fallas}" : '');
+            return "CUIS de la etapa I (original y V.3): {$contadas} de ".count($resumen).' contados.'.($fallas !== '' ? " {$fallas}" : '');
         }
 
         try {

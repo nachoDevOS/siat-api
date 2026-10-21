@@ -5,6 +5,7 @@ namespace App\Services\Siat;
 use App\Exceptions\SiatException;
 use App\Models\Cufd;
 use App\Models\Cuis;
+use App\Models\Empresa;
 use App\Models\PuntoVenta;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Carbon;
@@ -32,13 +33,64 @@ class GestorCodigos
 
     /**
      * Pedidos de CUIS despues de cerrar operaciones, y segundos de pausa antes
-     * de cada uno. Tras un cierre por /sfd el primer pedido por /sfd se cuelga
-     * hasta el timeout: paso en las tres corridas del piloto del 19/10/2026
-     * (por /v2 nunca), y un solo reintento no siempre alcanzo.
+     * de cada uno. Respaldo para cuando el cierre no puede ir por /v2 (ver
+     * versionParaCerrar) o el SIN tarda igual.
      */
     public const INTENTOS_TRAS_CIERRE = 3;
 
-    public const PAUSA_TRAS_CIERRE = 5;
+    public const PAUSA_TRAS_CIERRE = 2;
+
+    /**
+     * Segundos minimos entre que el SIN emite un CUIS y se pide el siguiente
+     * en el mismo punto de venta.
+     *
+     * El SIN arma el codigo con la hora: pedido muy pronto, genera el MISMO y
+     * su base lo rechaza ("duplicate key value violates unique constraint
+     * isfe_cuiscon_idx", visto por /v2 el 20/10/2026). Por /sfd ese error no
+     * vuelve: el pedido se cuelga hasta el timeout. Medido: a los 20-25 s
+     * falla, a los 40 s sale. Era la causa del "Sin respuesta" y del 966.
+     */
+    public const SEGUNDOS_ENTRE_EMISIONES = 60;
+
+    /**
+     * Espera lo que falte para que el CUIS que se va a cerrar cumpla
+     * SEGUNDOS_ENTRE_EMISIONES desde su emision. La hora de emision sale de la
+     * vigencia que dio el SIN (emision + 1 ano), no de cuando se guardo aca:
+     * un CUIS viejo que vuelve con 980 se guarda recien, pero no hace esperar.
+     */
+    public function esperarVentanaDeEmision(PuntoVenta $puntoVenta, string $codigo): void
+    {
+        $cuis = $puntoVenta->cuis()->where('codigo', $codigo)->whereNull('cerrado_en')->latest('id')->first();
+
+        if ($cuis === null) {
+            return;
+        }
+
+        $transcurridos = $cuis->fecha_vigencia->copy()->subYear()->diffInSeconds(now());
+        $faltan = (int) ceil(self::SEGUNDOS_ENTRE_EMISIONES - $transcurridos);
+
+        if ($faltan > 0) {
+            Sleep::for($faltan)->seconds();
+        }
+    }
+
+    /**
+     * Version por la que se cierran las operaciones: V2 si el ambiente la
+     * tiene (el piloto), aunque el CUIS nuevo se pida por V3.
+     *
+     * Medido en el piloto el 20/10/2026: tras cerrar por /sfd, el primer
+     * pedido de CUIS por /sfd nunca responde (con 30 s de espera da timeout,
+     * con 90 s el propio SIN corta con "Gateway Time-out" a los 62 s, y una
+     * pausa de 20 s no cambia nada). Cerrando por /v2 el pedido por /sfd sale
+     * al primer intento. El CUIS es compartido entre versiones, asi que el
+     * cierre por /v2 lo cierra tambien para /sfd.
+     */
+    public static function versionParaCerrar(Empresa $empresa): string
+    {
+        return filled(config("siat.urls_v2.{$empresa->codigo_ambiente}"))
+            ? SiatClient::VERSION_V2
+            : SiatClient::VERSION_V3;
+    }
 
     public function __construct(private readonly FabricaServicios $fabrica) {}
 
@@ -101,9 +153,12 @@ class GestorCodigos
 
         if ($yaVigente) {
             $anterior = (string) data_get($respuesta, 'RespuestaCuis.codigo');
+            // Lo guarda (con la vigencia del SIN) para saber cuando se emitio.
+            $this->guardarCuis($puntoVenta, $respuesta, $version);
+            $this->esperarVentanaDeEmision($puntoVenta, $anterior);
 
             $cierre = RespuestaSiat::desde(
-                $this->fabrica->operaciones($empresa, $version)->cerrarOperacionesSistema(
+                $this->fabrica->operaciones($empresa, self::versionParaCerrar($empresa))->cerrarOperacionesSistema(
                     (int) $puntoVenta->sucursal->codigo_sucursal,
                     (int) $puntoVenta->codigo_punto_venta,
                     $anterior,
@@ -254,7 +309,7 @@ class GestorCodigos
         $actual = $this->solicitarCuis($puntoVenta);
 
         $cierre = RespuestaSiat::desde(
-            $this->fabrica->operaciones($puntoVenta->sucursal->empresa)->cerrarOperacionesSistema(
+            $this->fabrica->operaciones($puntoVenta->sucursal->empresa, self::versionParaCerrar($puntoVenta->sucursal->empresa))->cerrarOperacionesSistema(
                 (int) $puntoVenta->sucursal->codigo_sucursal,
                 (int) $puntoVenta->codigo_punto_venta,
                 $actual->codigo,

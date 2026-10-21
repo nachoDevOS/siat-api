@@ -370,7 +370,7 @@ class EjecutorPruebas
 
         $cuis = $this->puntoVentaConCuis($empresa, $codigoSucursal, $codigoPuntoVenta)->cuisVigente();
 
-        $respuesta = $this->fabrica->sincronizacion($empresa)
+        $respuesta = $this->fabrica->sincronizacion($empresa, $this->versionDe($caso))
             ->parametrica($operacion, $cuis->codigo, $codigoSucursal, $codigoPuntoVenta);
 
         // El SIN rechaza con HTTP 200 y transaccion = false.
@@ -404,7 +404,7 @@ class EjecutorPruebas
         $local = $this->puntoVentaConCuis($empresa, $codigoSucursal, $codigoPuntoVenta);
         $cuis = $local->cuisVigente();
 
-        $respuesta = $this->fabrica->codigos($empresa)->solicitarCufd($local, $cuis->codigo);
+        $respuesta = $this->fabrica->codigos($empresa, $this->versionDe($caso))->solicitarCufd($local, $cuis->codigo);
         $leida = RespuestaSiat::desde($respuesta, 'RespuestaCufd');
 
         // Sin codigo y codigo de control no hay CUFD que guardar: el gestor
@@ -413,7 +413,7 @@ class EjecutorPruebas
             throw new SiatException('El SIN no devolvio CUFD: '.$leida->motivo());
         }
 
-        $cufd = $this->codigos->guardarCufd($local, $cuis, $respuesta);
+        $cufd = $this->codigos->guardarCufd($local, $cuis, $respuesta, $this->versionDe($caso));
 
         if (! $leida->aceptada) {
             throw new SiatException("El SIN no emitio el CUFD ({$cufd->codigo}): {$leida->motivo()}");
@@ -551,7 +551,7 @@ class EjecutorPruebas
         // Sin uno anterior, el vigente pasa a ser el del evento y se pide otro.
         if ($delEvento === null) {
             $delEvento = $actual;
-            $actual = $this->codigos->solicitarCufd($local);
+            $actual = $this->codigos->solicitarCufd($local, $this->versionDe($caso));
         }
 
         // El CUIS va atado al CUFD vigente (ver PuntoVenta::cuisDe).
@@ -560,7 +560,7 @@ class EjecutorPruebas
         [$inicio, $fin] = $this->rangoDeEvento($empresa, $codigoPuntoVenta, $delEvento);
 
         $respuesta = RespuestaSiat::desde(
-            $this->fabrica->operaciones($empresa)->registrarEvento([
+            $this->fabrica->operaciones($empresa, $this->versionDe($caso))->registrarEvento([
                 'codigoSucursal' => $codigoSucursal,
                 'codigoPuntoVenta' => $codigoPuntoVenta,
                 'codigoMotivoEvento' => (int) data_get($caso->payload_ejemplo, 'codigoMotivoEvento'),
@@ -1107,9 +1107,10 @@ class EjecutorPruebas
      * pedido Y contado en la etapa. Solo CUIS: el CUFD lo pide la emision o
      * la tarea horaria cuando haga falta.
      *
-     * Por punto de venta va primero la V2 y al final la V3: el SIN comparte el
-     * CUIS entre versiones y el ultimo emitido es el que queda vigente, y el
-     * sistema factura con la V3. Si el SIN ya tenia un CUIS vigente (980),
+     * Va primero la V2 de cada punto de venta y al final la V3: el SIN
+     * comparte el CUIS entre versiones y el ultimo emitido es el que queda
+     * vigente, y el sistema factura con la V3. Entre dos CUIS del mismo punto
+     * de venta espera GestorCodigos::SEGUNDOS_ENTRE_EMISIONES. Si el SIN ya tenia un CUIS vigente (980),
      * cierra las operaciones y repite la prueba; si tras el cierre el SIN no
      * responde (timeout, visto el 19/10/2026), la repite una vez mas, porque
      * el punto de venta queda sin CUIS hasta que llegue el nuevo.
@@ -1120,15 +1121,18 @@ class EjecutorPruebas
     public function pedirCuisDeEtapaUno(Empresa $empresa, int $codigoSucursal): ?array
     {
         $casos = CasoPrueba::where('fase', CasoPrueba::FASE_PILOTO)
-            ->where('etapa', 1)
+            ->whereIn('etapa', CasoPrueba::ETAPAS_DE_CUIS)
             ->where('tipo', 'solicitudCuis')
             ->orderBy('orden')
             ->get()
             ->filter(fn (CasoPrueba $caso): bool => $this->codigosDePrueba($caso)[0] === $codigoSucursal)
-            // Orden del portal entre puntos de venta; dentro de cada uno, V2 antes que V3.
+            // Primero la V2 de todos los puntos de venta y despues la V3, en el
+            // orden del portal (PV 1, PV 0): la V3 de un punto de venta tiene
+            // que esperar SEGUNDOS_ENTRE_EMISIONES desde su CUIS de V2, y asi
+            // esa espera corre mientras se atiende el otro punto de venta.
             ->sortBy([
-                fn (CasoPrueba $a, CasoPrueba $b): int => array_search($this->codigosDePrueba($a)[1], [1, 0], true) <=> array_search($this->codigosDePrueba($b)[1], [1, 0], true),
                 fn (CasoPrueba $a, CasoPrueba $b): int => $this->esV2($a) === $this->esV2($b) ? 0 : ($this->esV2($a) ? -1 : 1),
+                fn (CasoPrueba $a, CasoPrueba $b): int => array_search($this->codigosDePrueba($a)[1], [1, 0], true) <=> array_search($this->codigosDePrueba($b)[1], [1, 0], true),
             ]);
 
         if ($casos->isEmpty()) {
@@ -1153,7 +1157,7 @@ class EjecutorPruebas
                 return [
                     'contada' => $contada,
                     'texto' => $this->etiquetaDeCuis($caso).': '.($contada
-                        ? 'CUIS nuevo '.data_get($ejecucion->respuesta, 'cuis').', contado en la etapa I.'
+                        ? 'CUIS nuevo '.data_get($ejecucion->respuesta, 'cuis').', contado en la '.CasoPrueba::nombreCorto($caso->etapa).'.'
                         : data_get($ejecucion->respuesta, 'error', 'sin detalle')),
                 ];
             })
@@ -1191,6 +1195,15 @@ class EjecutorPruebas
                 $ejecucion->delete();
             }
 
+            // Si el vigente se acaba de emitir (la prueba anterior de este punto
+            // de venta), el SIN repetiria el codigo: ver SEGUNDOS_ENTRE_EMISIONES.
+            [$codigoSucursal, $codigoPuntoVenta] = $this->codigosDePrueba($caso);
+            $local = $this->puntoVentaLocal($empresa, $codigoSucursal, $codigoPuntoVenta);
+
+            if ($local !== null) {
+                $this->codigos->esperarVentanaDeEmision($local, $cuisVigente);
+            }
+
             try {
                 $cierre = $this->cerrarConCuis($empresa, $caso, $cuisVigente);
             } catch (SiatException $e) {
@@ -1208,9 +1221,9 @@ class EjecutorPruebas
                 ]);
             }
 
-            // Tras un cierre por /sfd el primer pedido de CUIS por /sfd se
-            // cuelga hasta el timeout (las tres corridas del 19/10/2026; por
-            // /v2 nunca). Una pausa y hasta tres intentos le dan tiempo.
+            // El cierre va por /v2, que evita el cuelgue de /sfd (ver
+            // GestorCodigos::versionParaCerrar). Los reintentos quedan para
+            // donde no hay /v2 (produccion) o si el SIN tarda igual.
             for ($intento = 1; $intento <= GestorCodigos::INTENTOS_TRAS_CIERRE; $intento++) {
                 Sleep::for(GestorCodigos::PAUSA_TRAS_CIERRE)->seconds();
                 $ejecucion = $this->ejecutarCaso($empresa, $caso);
@@ -1236,7 +1249,17 @@ class EjecutorPruebas
 
     private function esV2(CasoPrueba $caso): bool
     {
-        return ($caso->payload_ejemplo['version'] ?? SiatClient::VERSION_V3) === SiatClient::VERSION_V2;
+        return $this->versionDe($caso) === SiatClient::VERSION_V2;
+    }
+
+    /**
+     * Ruta por la que viaja una prueba: el portal cuenta el recorrido original
+     * por /v2 y el V.3 por /sfd (confirmado con la etapa I el 20/10/2026). Las
+     * pruebas sin "version" en el payload van por V3, como el resto del sistema.
+     */
+    private function versionDe(CasoPrueba $caso): string
+    {
+        return (string) ($caso->payload_ejemplo['version'] ?? SiatClient::VERSION_V3);
     }
 
     /**
@@ -1283,7 +1306,8 @@ class EjecutorPruebas
         $version = (string) ($caso->payload_ejemplo['version'] ?? SiatClient::VERSION_V3);
 
         $respuesta = RespuestaSiat::desde(
-            $this->fabrica->operaciones($empresa, $version)->cerrarOperacionesSistema($codigoSucursal, $codigoPuntoVenta, $cuis),
+            // Por /v2 aunque la prueba sea de V3: ver GestorCodigos::versionParaCerrar.
+            $this->fabrica->operaciones($empresa, GestorCodigos::versionParaCerrar($empresa))->cerrarOperacionesSistema($codigoSucursal, $codigoPuntoVenta, $cuis),
             'RespuestaCierreSistemas',
         );
 

@@ -91,40 +91,42 @@ function empresaDeEtapaUno(): Empresa
 }
 
 test('el seeder carga la etapa I con los parametros del portal', function () {
-    $casos = CasoPrueba::where('etapa', 1)->orderBy('orden')->get();
+    // Dos recorridos, como el portal: la etapa I original cuenta /v2 y la
+    // etapa I V.3 (101) cuenta /sfd.
+    $original = CasoPrueba::where('etapa', 1)->orderBy('orden')->get();
+    $v3 = CasoPrueba::where('etapa', 101)->orderBy('orden')->get();
 
-    expect($casos)->toHaveCount(4)
-        ->and($casos->pluck('payload_ejemplo')->all())->toBe([
+    expect($original->pluck('payload_ejemplo')->all())->toBe([
+        ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1, 'version' => 'v2'],
+        ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0, 'version' => 'v2'],
+    ])
+        ->and($v3->pluck('payload_ejemplo')->all())->toBe([
             ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1, 'version' => 'v3'],
             ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0, 'version' => 'v3'],
-            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1, 'version' => 'v2'],
-            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0, 'version' => 'v2'],
         ])
-        ->and($casos->pluck('pruebas_esperadas')->all())->toBe([1, 1, 1, 1]);
+        ->and($original->concat($v3)->pluck('pruebas_esperadas')->all())->toBe([1, 1, 1, 1]);
 
     // Los 17 pasos viejos siguen y no se pisaron con los de la etapa.
     expect(CasoPrueba::whereNull('etapa')->count())->toBe(17);
 });
 
-test('la etapa I pide un CUIS por cada punto de venta del portal, sin certificado', function () {
+test('la etapa I pide el CUIS por /v2 y la etapa I V.3 por /sfd, cada punto de venta del portal, sin certificado', function () {
     $empresa = empresaDeEtapaUno();
 
-    $codigos = Mockery::mock(ServicioCodigos::class);
-    // Siempre con los codigos del portal, este o no el punto de venta en local.
-    $codigos->shouldReceive('solicitarCuisPara')->once()->with(0, 1)->andReturn(respuestaCuis('CUIS-PV1'));
-    $codigos->shouldReceive('solicitarCuisPara')->once()->with(0, 0)->andReturn(respuestaCuis('CUIS-PV0'));
-    // Cada CUIS nuevo trae su CUFD atado a el.
-    $codigos->shouldReceive('solicitarCufd')->once()->with(Mockery::any(), 'CUIS-PV1')->andReturn(respuestaCufd('CUFD-PV1'));
-    $codigos->shouldReceive('solicitarCufd')->once()->with(Mockery::any(), 'CUIS-PV0')->andReturn(respuestaCufd('CUFD-PV0'));
-
-    // Las mismas pruebas contra las rutas /v2. El SIN comparte el CUIS entre
-    // versiones: el de la V2 queda como vigente y se le ata un CUFD, pedido
-    // tambien por V2.
+    // Etapa I original: rutas /v2. Cada CUIS nuevo trae su CUFD por la misma ruta.
     $codigosV2 = Mockery::mock(ServicioCodigos::class);
     $codigosV2->shouldReceive('solicitarCuisPara')->once()->with(0, 1)->andReturn(respuestaCuis('CUIS-V2-PV1'));
     $codigosV2->shouldReceive('solicitarCuisPara')->once()->with(0, 0)->andReturn(respuestaCuis('CUIS-V2-PV0'));
     $codigosV2->shouldReceive('solicitarCufd')->once()->with(Mockery::any(), 'CUIS-V2-PV1')->andReturn(respuestaCufd('CUFD-V2-PV1'));
     $codigosV2->shouldReceive('solicitarCufd')->once()->with(Mockery::any(), 'CUIS-V2-PV0')->andReturn(respuestaCufd('CUFD-V2-PV0'));
+
+    // Etapa I V.3: rutas /sfd. Siempre con los codigos del portal, este o no
+    // el punto de venta en local.
+    $codigos = Mockery::mock(ServicioCodigos::class);
+    $codigos->shouldReceive('solicitarCuisPara')->once()->with(0, 1)->andReturn(respuestaCuis('CUIS-PV1'));
+    $codigos->shouldReceive('solicitarCuisPara')->once()->with(0, 0)->andReturn(respuestaCuis('CUIS-PV0'));
+    $codigos->shouldReceive('solicitarCufd')->once()->with(Mockery::any(), 'CUIS-PV1')->andReturn(respuestaCufd('CUFD-PV1'));
+    $codigos->shouldReceive('solicitarCufd')->once()->with(Mockery::any(), 'CUIS-PV0')->andReturn(respuestaCufd('CUFD-PV0'));
 
     test()->mock(FabricaServicios::class, function ($mock) use ($codigos, $codigosV2) {
         // Mockery usa la primera que coincide: la de V2 va antes que la general.
@@ -134,22 +136,29 @@ test('la etapa I pide un CUIS por cada punto de venta del portal, sin certificad
 
     $this->post(route('admin.pruebas.etapa', [$empresa, 1]))
         ->assertRedirect(route('admin.pruebas.show', $empresa))
-        ->assertSessionHas('estado', fn (string $m) => str_contains($m, '4 prueba(s) enviadas, todas OK'));
+        ->assertSessionHas('estado', 'Etapa I (Obtencion de CUIS): 2 prueba(s) enviadas, todas OK.');
+    $this->post(route('admin.pruebas.etapa', [$empresa, 101]))
+        ->assertSessionHas('estado', 'Etapa I V.3 (Obtencion de CUIS): 2 prueba(s) enviadas, todas OK.');
 
+    // La V.3 fue la ultima: sus CUIS son los vigentes.
     expect(EjecucionPrueba::where('estado', EjecucionPrueba::ESTADO_EXITOSO)->count())->toBe(4)
-        ->and(PuntoVenta::where('codigo_punto_venta', 1)->sole()->cuisVigente()->codigo)->toBe('CUIS-V2-PV1')
-        ->and(PuntoVenta::where('codigo_punto_venta', 0)->sole()->cuisVigente()->codigo)->toBe('CUIS-V2-PV0')
+        ->and(PuntoVenta::where('codigo_punto_venta', 1)->sole()->cuisVigente()->codigo)->toBe('CUIS-PV1')
+        ->and(PuntoVenta::where('codigo_punto_venta', 0)->sole()->cuisVigente()->codigo)->toBe('CUIS-PV0')
         ->and(Cuis::pluck('version', 'codigo')->all())->toEqual([
-            'CUIS-PV1' => 'v3', 'CUIS-PV0' => 'v3', 'CUIS-V2-PV1' => 'v2', 'CUIS-V2-PV0' => 'v2',
+            'CUIS-V2-PV1' => 'v2', 'CUIS-V2-PV0' => 'v2', 'CUIS-PV1' => 'v3', 'CUIS-PV0' => 'v3',
         ]);
 
+    // La pantalla del piloto separa los dos recorridos.
+    $this->get(route('admin.pruebas.show', $empresa))->assertOk()
+        ->assertSeeInOrder(['Recorrido original', '/v2', 'Etapa I — Obtencion de CUIS', 'Recorrido V.3', '/sfd', 'Etapa I · V.3 — Obtencion de CUIS']);
+
     // La pantalla de codigos: una sola tabla (el CUIS es compartido), el mas
-    // nuevo arriba con su version, y la etapa I de este punto de venta completa.
+    // nuevo arriba con su version, y las dos pruebas de este punto de venta.
     $this->get(route('admin.puntos-venta.codigos', PuntoVenta::where('codigo_punto_venta', 0)->sole()))
         ->assertOk()
         ->assertSee('sirve para V2 y V3')
         ->assertSee('un solo CUIS vigente por punto de venta para las dos versiones', false)
-        ->assertSeeInOrder(['etapa I de este punto de venta', '(2 de 2 contadas)', 'CUIS (2)', 'CUIS-V2-PV0', 'V2', 'vigente', 'CUIS-PV0', 'V3', 'reemplazado']);
+        ->assertSeeInOrder(['etapa I de este punto de venta', '(2 de 2 contadas)', 'CUIS (2)', 'CUIS-PV0', 'V3', 'vigente', 'CUIS-V2-PV0', 'V2', 'reemplazado']);
 
     // El PV 1 no estaba en local: se configuro solo. Cada CUIS quedo guardado
     // con la vigencia del SIN y con su CUFD atado.
@@ -165,21 +174,41 @@ test('la etapa I pide un CUIS por cada punto de venta del portal, sin certificad
     }
 });
 
+test('el seeder mueve la etapa I V3 vieja a la etapa 101 sin perder las pruebas contadas', function () {
+    // Como estaba hasta el 20/10/2026: etapa I con V3 en orden 1-2 y V2 en 3-4.
+    $empresa = empresaDeEtapaUno();
+    CasoPrueba::where('etapa', 101)->delete();
+    CasoPrueba::where('etapa', 1)->delete();
+    $viejos = collect([[1, 1, 'v3'], [2, 0, 'v3'], [3, 1, 'v2'], [4, 0, 'v2']])->map(fn ($f) => CasoPrueba::create([
+        'fase' => CasoPrueba::FASE_PILOTO, 'etapa' => 1, 'orden' => $f[0], 'nombre' => 'viejo', 'tipo' => 'solicitudCuis',
+        'payload_ejemplo' => ['codigoSucursal' => 0, 'codigoPuntoVenta' => $f[1], 'version' => $f[2]], 'pruebas_esperadas' => 1,
+    ]));
+    $contada = EjecucionPrueba::create(['empresa_id' => $empresa->id, 'caso_id' => $viejos[0]->id, 'estado' => EjecucionPrueba::ESTADO_EXITOSO, 'respuesta' => ['cuis' => 'X'], 'ejecutado_en' => now()]);
+
+    $this->seed(CasosPruebaSeeder::class);
+
+    expect(CasoPrueba::whereIn('etapa', [1, 101])->count())->toBe(4)
+        // La prueba V3 PV 1 que ya contaba sigue contada, ahora en la etapa I V.3.
+        ->and($contada->fresh()->caso_id)->toBe($viejos[0]->id)
+        ->and($viejos[0]->fresh()->only(['etapa', 'orden']))->toBe(['etapa' => 101, 'orden' => 1])
+        ->and($viejos[3]->fresh()->only(['etapa', 'orden']))->toBe(['etapa' => 1, 'orden' => 2]);
+});
+
 test('reejecutar una etapa completa no vuelve a llamar al SIN', function () {
     $empresa = empresaDeEtapaUno();
 
     $codigos = Mockery::mock(ServicioCodigos::class);
-    $codigos->shouldReceive('solicitarCuisPara')->times(4)
-        ->andReturn(respuestaCuis('CUIS-PV1'), respuestaCuis('CUIS-PV0'), respuestaCuis('CUIS-V2-PV1'), respuestaCuis('CUIS-V2-PV0'));
-    $codigos->shouldReceive('solicitarCufd')->times(4)
-        ->andReturn(respuestaCufd('CUFD-PV1'), respuestaCufd('CUFD-PV0'), respuestaCufd('CUFD-V2-PV1'), respuestaCufd('CUFD-V2-PV0'));
+    $codigos->shouldReceive('solicitarCuisPara')->twice()
+        ->andReturn(respuestaCuis('CUIS-PV1'), respuestaCuis('CUIS-PV0'));
+    $codigos->shouldReceive('solicitarCufd')->twice()
+        ->andReturn(respuestaCufd('CUFD-PV1'), respuestaCufd('CUFD-PV0'));
     codigosSimulados($codigos);
 
     $this->post(route('admin.pruebas.etapa', [$empresa, 1]));
     $this->post(route('admin.pruebas.etapa', [$empresa, 1]))
         ->assertSessionHas('estado', fn (string $m) => str_contains($m, 'ya estaba completa'));
 
-    expect(EjecucionPrueba::count())->toBe(4);
+    expect(EjecucionPrueba::count())->toBe(2);
 });
 
 test('un rechazo del SIN queda FALLIDO con su motivo y no suma como correcta', function () {
@@ -299,7 +328,7 @@ test('cerrar operaciones manda al SIN el CUIS vigente del punto de venta de la p
 
 test('la prueba V2 cierra operaciones y pide el CUIS nuevo por las rutas /v2', function () {
     $empresa = empresaDeEtapaUno();
-    $caso = CasoPrueba::where('etapa', 1)->where('orden', 4)->sole();
+    $caso = CasoPrueba::where('etapa', 1)->where('orden', 2)->sole();
 
     $codigosV2 = Mockery::mock(ServicioCodigos::class);
     $codigosV2->shouldReceive('solicitarCuisPara')->twice()->with(0, 0)
@@ -392,7 +421,7 @@ test('el seeder carga la etapa II: 18 catalogos x 2 puntos de venta, 50 cada uno
         ->and($casos[35]->payload_ejemplo['operacion'])->toBe('sincronizarParametricaUnidadMedida');
 
     // La etapa I no se toco.
-    expect(CasoPrueba::where('etapa', 1)->count())->toBe(4);
+    expect(CasoPrueba::whereIn('etapa', [1, 101])->count())->toBe(4);
 });
 
 test('una prueba de catalogo usa el CUIS del punto de venta de la prueba y cuenta los registros', function () {

@@ -29,7 +29,7 @@ class CuisEtapaUno
         }
 
         $casos = CasoPrueba::where('fase', CasoPrueba::FASE_PILOTO)
-            ->where('etapa', 1)
+            ->whereIn('etapa', CasoPrueba::ETAPAS_DE_CUIS)
             ->where('tipo', 'solicitudCuis')
             ->get();
 

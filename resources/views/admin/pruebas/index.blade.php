@@ -22,7 +22,6 @@
 
             return [$hechas, $esperadas, $esperadas === 0 ? 0 : (int) round($hechas / $esperadas * 100)];
         };
-        $romanos = [1 => 'I', 2 => 'II', 3 => 'III', 4 => 'IV', 5 => 'V', 6 => 'VI', 7 => 'VII', 8 => 'VIII', 9 => 'IX', 10 => 'X', 11 => 'XI', 12 => 'XII'];
         [$hechasTotal, $esperadasTotal, $porcentajeTotal] = $avance($etapas->flatten());
         $primeraIncompleta = $etapas->keys()->first(function ($numero) use ($etapas, $avance) {
             [$hechas, $esperadas] = $avance($etapas[$numero]);
@@ -84,7 +83,24 @@
         @php
             [$hechas, $esperadas, $porcentaje] = $avance($casosEtapa);
             $etapaCorrible = $casosEtapa->every($puedeCorrer);
+            $etiquetaEtapa = CasoPrueba::numeroRomano($numero).(CasoPrueba::esV3($numero) ? ' · V.3' : '');
         @endphp
+
+        {{-- El portal tiene dos recorridos y cada uno cuenta su ruta: se pinta
+             un encabezado al empezar cada uno. --}}
+        @if ($loop->first || CasoPrueba::esV3($numero) !== CasoPrueba::esV3($etapas->keys()[$loop->index - 1]))
+            @php
+                $delRecorrido = $etapas->filter(fn ($c, $n) => CasoPrueba::esV3($n) === CasoPrueba::esV3($numero))->flatten();
+                [$hechasRecorrido, $esperadasRecorrido] = $avance($delRecorrido);
+            @endphp
+            <div class="recorrido">
+                <h2 style="margin:0;">{{ CasoPrueba::esV3($numero) ? 'Recorrido V.3' : 'Recorrido original' }}</h2>
+                <span>
+                    rutas <code>{{ CasoPrueba::esV3($numero) ? '/sfd' : '/v2' }}</code> ·
+                    {{ $hechasRecorrido }}/{{ $esperadasRecorrido }}
+                </span>
+            </div>
+        @endif
         {{-- Cada etapa es desplegable: abierta solo la primera que falta, para
              que la pantalla no sea una pared de 40 filas. El navegador recuerda
              cuales abrio el operador (ver script al final). --}}
@@ -93,7 +109,7 @@
                 <div style="flex:1; min-width:240px;">
                     <h2 style="margin-bottom:8px;">
                         <span class="flecha-etapa" style="display:inline-block; transition:transform .15s;">▸</span>
-                        Etapa {{ $romanos[$numero] ?? $numero }} — {{ CasoPrueba::ETAPAS[$numero] ?? 'Sin nombre' }}
+                        Etapa {{ $etiquetaEtapa }} — {{ CasoPrueba::ETAPAS[$numero] ?? 'Sin nombre' }}
                         <span style="font-weight:normal; color:var(--suave);">{{ $hechas }}/{{ $esperadas }}</span>
                     </h2>
                     <div class="progreso"><span style="width: {{ $porcentaje }}%;"></span></div>
@@ -116,8 +132,8 @@
                     </button>
                 </form>
                 <form method="POST" action="{{ route('admin.pruebas.limpiar', $empresa) }}" style="margin:0;"
-                      data-titulo="Limpiar la etapa {{ $romanos[$numero] ?? $numero }}" data-boton="Limpiar etapa" data-peligro
-                      data-confirmar="Borra el conteo local de la etapa {{ $romanos[$numero] ?? $numero }} y sus jobs en cola. Lo que ya registró el SIN no se deshace.">
+                      data-titulo="Limpiar la etapa {{ $etiquetaEtapa }}" data-boton="Limpiar etapa" data-peligro
+                      data-confirmar="Borra el conteo local de la etapa {{ $etiquetaEtapa }} y sus jobs en cola. Lo que ya registró el SIN no se deshace.">
                     @csrf
                     @method('DELETE')
                     <input type="hidden" name="etapa" value="{{ $numero }}">
@@ -241,6 +257,9 @@
 
     <style>
         details.etapa > summary::-webkit-details-marker { display: none; }
+        .recorrido { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 28px 0 10px;
+            padding-bottom: 8px; border-bottom: 2px solid var(--borde); }
+        .recorrido span { font-size: 13px; color: var(--suave); }
         /* Acciones de cada prueba: mismo ancho y tamano, apiladas. */
         td.acciones-prueba { width: 130px; }
         td.acciones-prueba form { margin: 0 0 6px; }

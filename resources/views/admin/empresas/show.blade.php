@@ -279,8 +279,9 @@
                     </span>
                 </div>
                 <p style="font-size:13px; color:var(--suave); margin:6px 0 12px;">
-                    El portal pide un CUIS por cada version (V2 y V3) en cada punto de venta. El SIN tiene uno
-                    solo vigente por punto de venta: el ultimo emitido, que es el de V3, es con el que se factura.
+                    El portal pide un CUIS por punto de venta en la etapa I (cuenta las rutas <code>/v2</code>) y otro
+                    en la etapa I V.3 (cuenta <code>/sfd</code>). El SIN tiene uno solo vigente por punto de venta:
+                    el ultimo emitido, que es el de V3, es con el que se factura.
                 </p>
                 @foreach ($cuisEtapaUno as $grupo)
                     <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
