@@ -144,16 +144,21 @@ class CasosPruebaSeeder extends Seeder
             ['sincronizarParametricaUnidadMedida', 'LISTADO TOTAL DE UNIDAD DE MEDIDA'],
         ];
 
-        $orden = 1;
+        // Original: 50 de cada uno por /v2 (1800). V.3: 5 de cada uno por /sfd
+        // (180). Los WSDL de /v2 y /sfd exponen los mismos 18 catalogos
+        // (comparados el 20/10/2026); el reparto V.3 sale de 180 = 18 x 2 x 5.
+        foreach ([[2, ['version' => 'v2'], 50], [2 + $v3, ['version' => 'v3'], 5]] as [$etapa, $ruta, $veces]) {
+            $orden = 1;
 
-        foreach ($catalogos as [$operacion, $resultado]) {
-            foreach ([1, 0] as $puntoVenta) {
-                $pruebas[] = [2, $orden++, "{$resultado} (PV {$puntoVenta})", 'sincronizacionCatalogo', [
-                    'codigoSucursal' => 0,
-                    'codigoPuntoVenta' => $puntoVenta,
-                    'operacion' => $operacion,
-                    'resultadoEsperado' => $resultado,
-                ] + $v2, 50];
+            foreach ($catalogos as [$operacion, $resultado]) {
+                foreach ([1, 0] as $puntoVenta) {
+                    $pruebas[] = [$etapa, $orden++, "{$resultado} (PV {$puntoVenta})", 'sincronizacionCatalogo', [
+                        'codigoSucursal' => 0,
+                        'codigoPuntoVenta' => $puntoVenta,
+                        'operacion' => $operacion,
+                        'resultadoEsperado' => $resultado,
+                    ] + $ruta, $veces];
+                }
             }
         }
 
@@ -162,6 +167,13 @@ class CasosPruebaSeeder extends Seeder
             ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1] + $v2, 100];
         $pruebas[] = [3, 2, 'CUFD sucursal 0 / punto de venta 0', 'solicitudCufd',
             ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0] + $v2, 100];
+
+        // Etapa III V.3: 20 CUFD por /sfd. Reparto como el original (mitad por
+        // punto de venta): 10 y 10.
+        $pruebas[] = [3 + $v3, 1, 'CUFD sucursal 0 / punto de venta 1', 'solicitudCufd',
+            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1, 'version' => 'v3'], 10];
+        $pruebas[] = [3 + $v3, 2, 'CUFD sucursal 0 / punto de venta 0', 'solicitudCufd',
+            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0, 'version' => 'v3'], 10];
 
         // Etapas IV, VI, VII, VIII y XI emiten facturas: siguen por /sfd con el
         // XML V3, que es el que arma el sistema. Por /v2 harian falta el XML V2

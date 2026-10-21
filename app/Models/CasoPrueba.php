@@ -52,6 +52,8 @@ class CasoPrueba extends Model
         8 => 'Firma Digital',
         11 => 'Reversion',
         101 => 'Obtencion de CUIS',
+        102 => 'Sincronizacion de Catalogos',
+        103 => 'Obtencion CUFD',
     ];
 
     public static function esV3(int $etapa): bool

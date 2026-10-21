@@ -424,6 +424,69 @@ test('el seeder carga la etapa II: 18 catalogos x 2 puntos de venta, 50 cada uno
     expect(CasoPrueba::whereIn('etapa', [1, 101])->count())->toBe(4);
 });
 
+test('la etapa II original va por /v2 (50 de cada catalogo) y la V.3 por /sfd (5 de cada uno)', function () {
+    $original = CasoPrueba::where('etapa', 2)->orderBy('orden')->get();
+    $v3 = CasoPrueba::where('etapa', 102)->orderBy('orden')->get();
+
+    // Las mismas 18 operaciones y el mismo orden del portal en los dos recorridos.
+    expect($original->sum('pruebas_esperadas'))->toBe(1800)
+        ->and($v3->sum('pruebas_esperadas'))->toBe(180)
+        ->and($v3->pluck('pruebas_esperadas')->unique()->all())->toBe([5])
+        ->and($original->pluck('payload_ejemplo.version')->unique()->all())->toBe(['v2'])
+        ->and($v3->pluck('payload_ejemplo.version')->unique()->all())->toBe(['v3'])
+        ->and($v3->pluck('payload_ejemplo.operacion')->all())->toBe($original->pluck('payload_ejemplo.operacion')->all());
+});
+
+test('la etapa III original pide 100 CUFD por PV por /v2 y la V.3 10 por PV por /sfd', function () {
+    $original = CasoPrueba::where('etapa', 3)->orderBy('orden')->get();
+    $v3 = CasoPrueba::where('etapa', 103)->orderBy('orden')->get();
+
+    expect($original->pluck('pruebas_esperadas')->all())->toBe([100, 100])
+        ->and($original->pluck('payload_ejemplo.version')->unique()->all())->toBe(['v2'])
+        ->and($v3->pluck('pruebas_esperadas')->all())->toBe([10, 10])
+        ->and($v3->pluck('payload_ejemplo.codigoPuntoVenta')->all())->toBe([1, 0])
+        ->and($v3->pluck('payload_ejemplo.version')->unique()->all())->toBe(['v3']);
+});
+
+test('cada prueba de CUFD lo pide por la ruta de su recorrido y lo guarda con su version', function () {
+    $empresa = empresaConCuisEnPv1();
+
+    $codigosV2 = Mockery::mock(ServicioCodigos::class);
+    $codigosV2->shouldReceive('solicitarCufd')->once()->andReturn(respuestaCufd('CUFD-V2'));
+    $codigosV3 = Mockery::mock(ServicioCodigos::class);
+    $codigosV3->shouldReceive('solicitarCufd')->once()->andReturn(respuestaCufd('CUFD-V3'));
+
+    test()->mock(FabricaServicios::class, function ($mock) use ($codigosV2, $codigosV3) {
+        $mock->shouldReceive('codigos')->with(Mockery::any(), SiatClient::VERSION_V2)->andReturn($codigosV2);
+        $mock->shouldReceive('codigos')->with(Mockery::any(), SiatClient::VERSION_V3)->andReturn($codigosV3);
+    });
+
+    $this->post(route('admin.pruebas.caso', [$empresa, CasoPrueba::where('etapa', 3)->where('orden', 1)->sole()]));
+    $this->post(route('admin.pruebas.caso', [$empresa, CasoPrueba::where('etapa', 103)->where('orden', 1)->sole()]));
+
+    expect(Cufd::pluck('version', 'codigo')->all())->toEqual(['CUFD-V2' => 'v2', 'CUFD-V3' => 'v3'])
+        ->and(EjecucionPrueba::where('estado', EjecucionPrueba::ESTADO_EXITOSO)->count())->toBe(2);
+});
+
+test('cada prueba de catalogo consulta por la ruta de su recorrido', function () {
+    $empresa = empresaConCuisEnPv1();
+
+    $sincronizacionV2 = Mockery::mock(ServicioSincronizacion::class);
+    $sincronizacionV2->shouldReceive('parametrica')->once()->andReturn(catalogoAceptado());
+    $sincronizacionV3 = Mockery::mock(ServicioSincronizacion::class);
+    $sincronizacionV3->shouldReceive('parametrica')->once()->andReturn(catalogoAceptado());
+
+    test()->mock(FabricaServicios::class, function ($mock) use ($sincronizacionV2, $sincronizacionV3) {
+        $mock->shouldReceive('sincronizacion')->with(Mockery::any(), SiatClient::VERSION_V2)->andReturn($sincronizacionV2);
+        $mock->shouldReceive('sincronizacion')->with(Mockery::any(), SiatClient::VERSION_V3)->andReturn($sincronizacionV3);
+    });
+
+    $this->post(route('admin.pruebas.caso', [$empresa, CasoPrueba::where('etapa', 2)->where('orden', 1)->sole()]));
+    $this->post(route('admin.pruebas.caso', [$empresa, CasoPrueba::where('etapa', 102)->where('orden', 1)->sole()]));
+
+    expect(EjecucionPrueba::where('estado', EjecucionPrueba::ESTADO_EXITOSO)->count())->toBe(2);
+});
+
 test('una prueba de catalogo usa el CUIS del punto de venta de la prueba y cuenta los registros', function () {
     $empresa = empresaConCuisEnPv1();
     $caso = CasoPrueba::where('etapa', 2)->where('orden', 1)->sole();
