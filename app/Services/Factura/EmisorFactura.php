@@ -14,6 +14,7 @@ use App\Models\LoteMasivo;
 use App\Models\PuntoVenta;
 use App\Services\Contingencia\GestorContingencia;
 use App\Services\Siat\GestorCodigos;
+use App\Services\Siat\SiatClient;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
@@ -92,6 +93,7 @@ class EmisorFactura
             $venta['items'],
             (float) ($venta['descuento_global'] ?? 0),
             (float) ($venta['gift_card'] ?? 0),
+            $this->versionDe($venta),
         );
 
         try {
@@ -409,6 +411,7 @@ class EmisorFactura
             // montoaPagar: neto + IVA, ya sin la gift card.
             'monto_total' => $totales['monto_total'],
             'monto_total_moneda' => $totales['monto_total'],
+            'monto_total_sujeto_iva' => $totales['monto_total_sujeto_iva'],
             // La leyenda la puede imponer el cliente; si no, sale del catalogo
             // de leyendas de la actividad del primer item, que es lo que el SIN
             // espera ver en la cabecera.
@@ -416,6 +419,7 @@ class EmisorFactura
                 ?? $this->resolutor->leyendaDeActividad($empresa, $actividades[0] ?? null),
             'usuario' => $venta['usuario'] ?? null,
             'codigo_documento_sector' => config('siat.codigos.documento_sector'),
+            'version' => $this->versionDe($venta),
             'tipo_emision' => $tipoEmision,
             // Una factura emitida fuera de linea ya nace en contingencia: es
             // valida e imprimible, solo le falta viajar dentro de un paquete.
@@ -478,5 +482,14 @@ class EmisorFactura
         return Factura::where('empresa_id', $empresa->id)
             ->where('referencia_externa', $referencia)
             ->first();
+    }
+
+    /**
+     * Formato de la factura. Siempre V3, salvo las pruebas del recorrido
+     * original del piloto, que piden V2: la API no expone la opcion.
+     */
+    private function versionDe(array $venta): string
+    {
+        return ($venta['version'] ?? null) === SiatClient::VERSION_V2 ? SiatClient::VERSION_V2 : SiatClient::VERSION_V3;
     }
 }

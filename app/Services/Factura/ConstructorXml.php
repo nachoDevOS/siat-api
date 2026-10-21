@@ -4,6 +4,7 @@ namespace App\Services\Factura;
 
 use App\Models\Factura;
 use App\Models\FacturaItem;
+use App\Services\Siat\SiatClient;
 use DOMDocument;
 
 /**
@@ -51,6 +52,14 @@ class ConstructorXml
      */
     private const VACIO_SIN_NIL = ['complemento'];
 
+    /**
+     * Complemento cuando el comprador no tiene: el SIN V3 tampoco acepta el
+     * elemento vacio, responde [1068] COMPLEMENTO NO VALIDO "Complemento
+     * esperado 0 enviado " (piloto /sfd, 20/10/2026, con CI). Visto con CI;
+     * con otros tipos de documento falta confirmarlo.
+     */
+    private const SIN_COMPLEMENTO = '0';
+
     private const NS_XSI = 'http://www.w3.org/2001/XMLSchema-instance';
 
     private const NS_XMLNS = 'http://www.w3.org/2000/xmlns/';
@@ -79,8 +88,12 @@ class ConstructorXml
         $raiz->setAttributeNS(self::NS_XSI, 'xsi:noNamespaceSchemaLocation', $nombreRaiz.'.xsd');
         $doc->appendChild($raiz);
 
+        $esV2 = ! $esNota && $factura->version === SiatClient::VERSION_V2;
+
         if ($esNota) {
             $this->cabeceraNota($doc, $raiz, $factura);
+        } elseif ($esV2) {
+            $this->cabeceraV2($doc, $raiz, $factura);
         } else {
             $this->cabecera($doc, $raiz, $factura);
         }
@@ -91,12 +104,85 @@ class ConstructorXml
         $nroItem = $esNota ? $this->numerosDeItem($factura) : [];
 
         foreach ($factura->items as $item) {
-            $esNota
-                ? $this->detalleNota($doc, $raiz, $item, $nroItem[$item->item_origen_id] ?? null)
-                : $this->detalle($doc, $raiz, $item);
+            match (true) {
+                $esNota => $this->detalleNota($doc, $raiz, $item, $nroItem[$item->item_origen_id] ?? null),
+                $esV2 => $this->detalleV2($doc, $raiz, $item),
+                default => $this->detalle($doc, $raiz, $item),
+            };
         }
 
         return $doc->saveXML();
+    }
+
+    /**
+     * Cabecera en el formato V2 (antes de la Ley 1733), el que piden las
+     * etapas originales del piloto por /v2. Es la que armaba este sistema
+     * hasta el 12/10/2026 (commit 769f83a): precio con IVA incluido y
+     * montoTotal/montoTotalSujetoIva en lugar de los montos netos e iva; sin
+     * codigoInterno; con cafc (nil: es de la computarizada); el complemento
+     * vacio va en xsi:nil, como lo manda el sistema que factura en
+     * produccion en V2.
+     */
+    private function cabeceraV2(DOMDocument $doc, \DOMElement $raiz, Factura $factura): void
+    {
+        $empresa = $factura->empresa;
+        $sucursal = $factura->puntoVenta->sucursal;
+
+        $campos = [
+            'nitEmisor' => $empresa->nit,
+            'razonSocialEmisor' => $empresa->razon_social,
+            'municipio' => $sucursal->municipio,
+            'telefono' => $sucursal->telefono,
+            'numeroFactura' => $factura->numero_factura,
+            'cuf' => $factura->cuf,
+            'cufd' => optional($factura->cufd)->codigo,
+            'codigoSucursal' => $sucursal->codigo_sucursal,
+            'direccion' => $sucursal->direccion,
+            'codigoPuntoVenta' => $factura->puntoVenta->codigo_punto_venta,
+            'fechaEmision' => $factura->fecha_emision?->format('Y-m-d\TH:i:s.v'),
+            'nombreRazonSocial' => $factura->comprador_razon_social,
+            'codigoTipoDocumentoIdentidad' => $factura->comprador_tipo_documento,
+            'numeroDocumento' => $factura->comprador_numero_documento,
+            'complemento' => $factura->comprador_complemento,
+            'codigoCliente' => $factura->comprador_numero_documento,
+            'codigoMetodoPago' => $factura->metodo_pago,
+            'numeroTarjeta' => $factura->numero_tarjeta,
+            'montoTotal' => $this->monto($factura->monto_total),
+            'montoTotalSujetoIva' => $this->monto($factura->monto_total_sujeto_iva),
+            'codigoMoneda' => $factura->moneda,
+            'tipoCambio' => $this->monto($factura->tipo_cambio),
+            'montoTotalMoneda' => $this->monto($factura->monto_total_moneda),
+            'montoGiftCard' => $this->monto($factura->gift_card),
+            'descuentoAdicional' => $this->monto($factura->descuento_global),
+            'codigoExcepcion' => $factura->codigo_excepcion ?? 0,
+            'cafc' => null,
+            'leyenda' => $factura->leyenda,
+            'usuario' => $factura->usuario,
+            'codigoDocumentoSector' => $factura->codigo_documento_sector,
+        ];
+
+        $this->nodoDesdeArray($doc, $raiz, 'cabecera', $campos, vaciosSinNil: []);
+    }
+
+    /**
+     * Detalle V2: precioUnitario (con IVA) en lugar de precioNetoUnitario, y la
+     * cantidad con 4 decimales.
+     */
+    private function detalleV2(DOMDocument $doc, \DOMElement $raiz, FacturaItem $item): void
+    {
+        $this->nodoDesdeArray($doc, $raiz, 'detalle', [
+            'actividadEconomica' => $item->codigo_actividad,
+            'codigoProductoSin' => $item->codigo_producto_sin,
+            'codigoProducto' => $item->codigo_interno,
+            'descripcion' => $item->descripcion,
+            'cantidad' => $this->monto($item->cantidad, 4),
+            'unidadMedida' => $item->unidad_medida,
+            'precioUnitario' => $this->monto($item->precio_unitario),
+            'montoDescuento' => $this->monto($item->descuento),
+            'subTotal' => $this->monto($item->subtotal),
+            'numeroSerie' => $item->numero_serie,
+            'numeroImei' => $item->numero_imei,
+        ], vaciosSinNil: []);
     }
 
     private function cabecera(DOMDocument $doc, \DOMElement $raiz, Factura $factura): void
@@ -122,7 +208,7 @@ class ConstructorXml
             'nombreRazonSocial' => $factura->comprador_razon_social,
             'codigoTipoDocumentoIdentidad' => $factura->comprador_tipo_documento,
             'numeroDocumento' => $factura->comprador_numero_documento,
-            'complemento' => $factura->comprador_complemento,
+            'complemento' => filled($factura->comprador_complemento) ? $factura->comprador_complemento : self::SIN_COMPLEMENTO,
             'codigoCliente' => $factura->comprador_numero_documento,
             'codigoMetodoPago' => $factura->metodo_pago,
             'numeroTarjeta' => $factura->numero_tarjeta,
@@ -143,7 +229,7 @@ class ConstructorXml
             'codigoExcepcion' => $factura->codigo_excepcion ?? 0,
             'leyenda' => $factura->leyenda,
             'usuario' => $factura->usuario,
-            'codigoInterno' => $empresa->codigo_interno,
+            'codigoInterno' => $factura->codigoInterno(),
             'codigoDocumentoSector' => $factura->codigo_documento_sector,
         ];
 
@@ -220,7 +306,7 @@ class ConstructorXml
             'nombreRazonSocial' => $nota->comprador_razon_social,
             'codigoTipoDocumentoIdentidad' => $nota->comprador_tipo_documento,
             'numeroDocumento' => $nota->comprador_numero_documento,
-            'complemento' => $nota->comprador_complemento,
+            'complemento' => filled($nota->comprador_complemento) ? $nota->comprador_complemento : self::SIN_COMPLEMENTO,
             'codigoCliente' => $nota->comprador_numero_documento,
             // La factura que se ajusta: su numero, su CUF (el SIN lo llama
             // numero de autorizacion) y su fecha de emision.
@@ -249,7 +335,7 @@ class ConstructorXml
             'codigoExcepcion' => $nota->codigo_excepcion ?? 0,
             'leyenda' => $nota->leyenda,
             'usuario' => $nota->usuario,
-            'codigoInterno' => $empresa->codigo_interno,
+            'codigoInterno' => $nota->codigoInterno(),
             'codigoDocumentoSector' => $nota->codigo_documento_sector,
         ];
 
@@ -290,8 +376,10 @@ class ConstructorXml
      * demas de lugar. Verificado contra un sistema en produccion.
      *
      * @param  array<string, mixed>  $campos
+     * @param  list<string>  $vaciosSinNil  campos que vacios van como elemento
+     *                                      vacio y no en xsi:nil (ver VACIO_SIN_NIL).
      */
-    private function nodoDesdeArray(DOMDocument $doc, \DOMElement $padre, string $nombre, array $campos): void
+    private function nodoDesdeArray(DOMDocument $doc, \DOMElement $padre, string $nombre, array $campos, array $vaciosSinNil = self::VACIO_SIN_NIL): void
     {
         // El nodo se engancha al arbol ANTES de llenarlo para que los hijos con
         // xsi:nil hereden la declaracion del prefijo de la raiz en vez de
@@ -304,7 +392,7 @@ class ConstructorXml
 
             $hijo = $nodo->appendChild($doc->createElement($etiqueta));
 
-            if ($vacio && in_array($etiqueta, self::VACIO_SIN_NIL, true)) {
+            if ($vacio && in_array($etiqueta, $vaciosSinNil, true)) {
                 continue;
             }
 

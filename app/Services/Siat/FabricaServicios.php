@@ -24,9 +24,13 @@ class FabricaServicios
         return new SiatClient($empresa);
     }
 
-    public function facturacion(Empresa $empresa): ServicioFacturacion
+    /**
+     * Con version la piden las pruebas del piloto, que el portal cuenta por la
+     * ruta de su recorrido.
+     */
+    public function facturacion(Empresa $empresa, string $version = SiatClient::VERSION_V3): ServicioFacturacion
     {
-        return new ServicioFacturacion($empresa, new SiatClient($empresa));
+        return new ServicioFacturacion($empresa, new SiatClient($empresa, $version));
     }
 
     /**

@@ -468,6 +468,18 @@ test('cada prueba de CUFD lo pide por la ruta de su recorrido y lo guarda con su
         ->and(EjecucionPrueba::where('estado', EjecucionPrueba::ESTADO_EXITOSO)->count())->toBe(2);
 });
 
+test('la etapa IV V.3 son 24 facturas por /sfd, 12 por punto de venta, con los parametros del original', function () {
+    $original = CasoPrueba::where('etapa', 4)->orderBy('orden')->get();
+    $v3 = CasoPrueba::where('etapa', 104)->orderBy('orden')->get();
+
+    expect($v3->pluck('pruebas_esperadas')->all())->toBe([12, 12])
+        ->and($v3->pluck('tipo')->unique()->all())->toBe(['emisionIndividual'])
+        ->and($v3->pluck('payload_ejemplo.version')->unique()->all())->toBe(['v3'])
+        ->and($original->pluck('payload_ejemplo.version')->unique()->all())->toBe(['v2'])
+        ->and($v3->map(fn ($c) => collect($c->payload_ejemplo)->except('version')->all())->all())
+        ->toBe($original->map(fn ($c) => collect($c->payload_ejemplo)->except('version')->all())->all());
+});
+
 test('cada prueba de catalogo consulta por la ruta de su recorrido', function () {
     $empresa = empresaConCuisEnPv1();
 
@@ -756,6 +768,38 @@ test('una factura de la etapa IV se emite, firma, envia en el momento y cuenta c
 
     // Se envio en el momento: no queda ademas un envio en cola (seria doble).
     Queue::assertNotPushed(EnviarFacturaAlSiat::class);
+});
+
+test('la etapa IV original emite la factura en formato V2 por /v2 y la V.3 en formato V3 por /sfd', function () {
+    Queue::fake();
+    $empresa = empresaListaParaFacturar();
+
+    $facturacionV2 = Mockery::mock(ServicioFacturacion::class);
+    $facturacionV2->shouldReceive('recepcionarFactura')->once()
+        ->with(Mockery::on(fn (Factura $f) => $f->version === 'v2'), Mockery::any(), Mockery::any())->andReturn(recepcion('908'));
+    $facturacionV3 = Mockery::mock(ServicioFacturacion::class);
+    $facturacionV3->shouldReceive('recepcionarFactura')->once()
+        ->with(Mockery::on(fn (Factura $f) => $f->version === 'v3'), Mockery::any(), Mockery::any())->andReturn(recepcion('908'));
+
+    test()->mock(FabricaServicios::class, function ($mock) use ($facturacionV2, $facturacionV3) {
+        $mock->shouldReceive('facturacion')->with(Mockery::any(), SiatClient::VERSION_V2)->andReturn($facturacionV2);
+        $mock->shouldReceive('facturacion')->with(Mockery::any(), SiatClient::VERSION_V3)->andReturn($facturacionV3);
+    });
+
+    $this->post(route('admin.pruebas.caso', [$empresa, CasoPrueba::where('etapa', 4)->where('orden', 1)->sole()]));
+    $this->post(route('admin.pruebas.caso', [$empresa, CasoPrueba::where('etapa', 104)->where('orden', 1)->sole()]));
+
+    [$v2, $v3] = Factura::orderBy('id')->get()->all();
+
+    // Precio 10: en V2 el IVA va dentro (total 10), en V3 se suma aparte (11,30).
+    expect(EjecucionPrueba::where('estado', EjecucionPrueba::ESTADO_EXITOSO)->count())->toBe(2)
+        ->and($v2->version)->toBe('v2')
+        ->and((float) $v2->monto_total)->toBe(10.0)
+        ->and($v2->xml_firmado)->toContain('<montoTotal>10.00</montoTotal>')
+        ->and($v2->xml_firmado)->not->toContain('<iva>')
+        ->and($v3->version)->toBe('v3')
+        ->and((float) $v3->monto_total)->toBe(11.3)
+        ->and($v3->xml_firmado)->toContain('<iva>1.30</iva>');
 });
 
 test('una factura observada por el SIN no cuenta y queda OBSERVADA con el motivo', function () {

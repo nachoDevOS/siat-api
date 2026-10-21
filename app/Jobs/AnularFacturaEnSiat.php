@@ -72,7 +72,7 @@ class AnularFacturaEnSiat implements ShouldBeUnique, ShouldQueue
 
         try {
             $respuesta = RespuestaSiat::desde(
-                $fabrica->facturacion($factura->empresa)
+                $fabrica->facturacion($factura->empresa, $factura->version)
                     ->anular($factura, (int) $anulacion->motivo, (string) $cufd, (string) $cuis),
             );
         } catch (SiatException $e) {
@@ -134,7 +134,7 @@ class AnularFacturaEnSiat implements ShouldBeUnique, ShouldQueue
     {
         try {
             $estado = RespuestaSiat::desde(
-                $fabrica->facturacion($factura->empresa)->verificarEstado($factura, $cufd, $cuis),
+                $fabrica->facturacion($factura->empresa, $factura->version)->verificarEstado($factura, $cufd, $cuis),
             );
         } catch (SiatException) {
             return null;

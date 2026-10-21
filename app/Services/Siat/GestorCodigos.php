@@ -459,6 +459,9 @@ class GestorCodigos
                 // Ruta por la que se pidio (/v2 o /sfd), para el panel.
                 'version' => $version,
                 'codigo_control' => $codigoControl,
+                // Solo /sfd lo devuelve; la factura con este CUFD lo lleva en
+                // su cabecera (ver Factura::codigoInterno).
+                'codigo_interno' => data_get($respuesta, 'RespuestaCufd.codigoInterno') ?: null,
                 'direccion' => (string) data_get($respuesta, 'RespuestaCufd.direccion'),
                 // El CUFD dura 24 horas desde su emision.
                 'fecha_vigencia' => $this->vigencia($respuesta, 'RespuestaCufd', now()->addDay()),

@@ -188,7 +188,7 @@ class AnuladorFactura
         $cuis = $factura->puntoVenta->cuisDe($cufd);
 
         $respuesta = RespuestaSiat::desde(
-            $this->fabrica->facturacion($factura->empresa)
+            $this->fabrica->facturacion($factura->empresa, $factura->version)
                 ->revertirAnulacion($factura, (string) $cufd?->codigo, (string) $cuis?->codigo),
         );
 

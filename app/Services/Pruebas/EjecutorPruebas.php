@@ -458,7 +458,7 @@ class EjecutorPruebas
         );
 
         $respuesta = RespuestaSiat::desde(
-            $this->fabrica->facturacion($empresa)
+            $this->fabrica->facturacion($empresa, $this->versionDe($caso))
                 ->recepcionarFactura($factura, (string) $factura->cufd?->codigo, (string) $local->cuisDe($factura->cufd)?->codigo),
         );
 
@@ -850,7 +850,7 @@ class EjecutorPruebas
         $motivo = $this->codigoMotivoAnulacion($local, (string) data_get($caso->payload_ejemplo, 'codigoMotivo'));
 
         $respuesta = RespuestaSiat::desde(
-            $this->fabrica->facturacion($empresa)->anular($factura, $motivo, $cufd->codigo, $cuis->codigo),
+            $this->fabrica->facturacion($empresa, $factura->version)->anular($factura, $motivo, $cufd->codigo, $cuis->codigo),
         );
 
         if (! $respuesta->aceptada) {
@@ -916,7 +916,7 @@ class EjecutorPruebas
         }
 
         $respuesta = RespuestaSiat::desde(
-            $this->fabrica->facturacion($empresa)->revertirAnulacion($factura, $cufd->codigo, $cuis->codigo),
+            $this->fabrica->facturacion($empresa, $factura->version)->revertirAnulacion($factura, $cufd->codigo, $cuis->codigo),
         );
 
         if (! $respuesta->aceptada) {
@@ -1025,6 +1025,9 @@ class EjecutorPruebas
             ],
             'metodo_pago' => 1,
             'usuario' => 'piloto',
+            // Formato de la factura: el de la ruta de su recorrido (V2 para las
+            // etapas originales, V3 para las V.3).
+            'version' => $this->versionDe($caso),
             'items' => [[
                 'codigo_producto_sin' => (int) $producto->codigo_producto,
                 'codigo_interno' => 'PILOTO-1',

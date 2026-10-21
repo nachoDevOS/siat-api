@@ -33,7 +33,7 @@
                     <tr><td class="etiqueta">FACTURA N°</td><td>{{ $factura->numero_factura }}</td></tr>
                     <tr><td class="etiqueta">CÓD. AUTORIZACIÓN</td><td class="cuf">{!! implode('<br>', str_split((string) $factura->cuf, 16)) !!}</td></tr>
                     {{-- El formato V3 muestra el codigoInterno debajo del CUF. --}}
-                    <tr><td></td><td style="text-align:center;">{{ $empresa->codigo_interno }}</td></tr>
+                    <tr><td></td><td style="text-align:center;">{{ $factura->codigoInterno() }}</td></tr>
                 </table>
             </td>
         </tr>

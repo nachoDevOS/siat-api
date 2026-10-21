@@ -175,16 +175,23 @@ class CasosPruebaSeeder extends Seeder
         $pruebas[] = [3 + $v3, 2, 'CUFD sucursal 0 / punto de venta 0', 'solicitudCufd',
             ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0, 'version' => 'v3'], 10];
 
-        // Etapas IV, VI, VII, VIII y XI emiten facturas: siguen por /sfd con el
-        // XML V3, que es el que arma el sistema. Por /v2 harian falta el XML V2
-        // y que /v2 vuelva a registrar facturas (responde -1 desde el 17/10).
+        // Etapa IV original: facturas en formato V2 por /v2 (ConstructorXml
+        // arma los dos formatos). VI, VII, VIII y XI siguen por /sfd hasta
+        // probar la IV por /v2: el 17/10 respondia -1 al recibir facturas.
 
         // Etapa IV: 125 facturas de compra-venta en linea por punto de venta
         // (codigoEmision 1, tipoFacturaDocumento 1, documento sector 1).
         $pruebas[] = [4, 1, 'Factura en linea sucursal 0 / punto de venta 1', 'emisionIndividual',
-            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1, 'codigoEmision' => 1, 'tipoFacturaDocumento' => 1, 'codigoDocumentoSector' => 1], 125];
+            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1, 'codigoEmision' => 1, 'tipoFacturaDocumento' => 1, 'codigoDocumentoSector' => 1] + $v2, 125];
         $pruebas[] = [4, 2, 'Factura en linea sucursal 0 / punto de venta 0', 'emisionIndividual',
-            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0, 'codigoEmision' => 1, 'tipoFacturaDocumento' => 1, 'codigoDocumentoSector' => 1], 125];
+            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0, 'codigoEmision' => 1, 'tipoFacturaDocumento' => 1, 'codigoDocumentoSector' => 1] + $v2, 125];
+
+        // Etapa IV V.3: 24 facturas en linea por /sfd, mitad por punto de venta
+        // como el original.
+        $pruebas[] = [4 + $v3, 1, 'Factura en linea sucursal 0 / punto de venta 1', 'emisionIndividual',
+            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 1, 'codigoEmision' => 1, 'tipoFacturaDocumento' => 1, 'codigoDocumentoSector' => 1, 'version' => 'v3'], 12];
+        $pruebas[] = [4 + $v3, 2, 'Factura en linea sucursal 0 / punto de venta 0', 'emisionIndividual',
+            ['codigoSucursal' => 0, 'codigoPuntoVenta' => 0, 'codigoEmision' => 1, 'tipoFacturaDocumento' => 1, 'codigoDocumentoSector' => 1, 'version' => 'v3'], 12];
 
         // Etapa V: los 7 motivos de evento significativo, 5 veces por punto de
         // venta (impares PV 1, pares PV 0). Descripciones tal cual el portal.

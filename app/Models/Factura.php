@@ -140,6 +140,16 @@ class Factura extends Model
         return $this->belongsTo(Cufd::class);
     }
 
+    /**
+     * codigoInterno de la cabecera: el que el SIN devolvio con el CUFD de esta
+     * factura. Si el CUFD no lo trajo (pedido por /v2, o anterior a guardarlo)
+     * queda el de la empresa.
+     */
+    public function codigoInterno(): string
+    {
+        return $this->cufd?->codigo_interno ?: (string) $this->empresa->codigo_interno;
+    }
+
     public function items(): HasMany
     {
         // En el orden en que se cargaron: es el orden del <detalle> del XML,

@@ -2,6 +2,8 @@
 
 namespace App\Services\Factura;
 
+use App\Services\Siat\SiatClient;
+
 /**
  * Calcula los totales de una factura a partir de sus items y descuentos.
  * Es logica pura (sin base de datos ni SOAP) para poder probarla sola y para
@@ -19,6 +21,13 @@ namespace App\Services\Factura;
  *     montoaPagar      = totalPrecioNeto + iva
  *
  * Todos los montos se redondean a 2 decimales, como exige el SIN.
+ *
+ * Formato V2 (el anterior, que el piloto todavia pide en sus etapas
+ * originales): el precio ya incluye el IVA, no se informa aparte, y el SIN
+ * revalida con
+ *
+ *     montoTotal          = suma de los subTotal - descuentoAdicional
+ *     montoTotalSujetoIva = montoTotal - montoGiftCard
  */
 class CalculadorTotales
 {
@@ -37,6 +46,7 @@ class CalculadorTotales
      *     total_precio_neto: float,
      *     iva: float,
      *     monto_total: float,
+     *     monto_total_sujeto_iva: float,
      *     items: list<array{subtotal: float}>
      * }
      */
@@ -44,6 +54,7 @@ class CalculadorTotales
         array $items,
         float $descuentoGlobal = 0.0,
         float $giftCard = 0.0,
+        string $version = SiatClient::VERSION_V3,
     ): array {
         $subtotalNeto = 0.0;
         $descuentoItems = 0.0;
@@ -67,6 +78,23 @@ class CalculadorTotales
         $descuentoGlobal = $this->redondear($descuentoGlobal);
         $giftCard = $this->redondear($giftCard);
 
+        if ($version === SiatClient::VERSION_V2) {
+            $montoTotal = $this->redondear($subtotalNeto - $descuentoGlobal);
+
+            return [
+                'subtotal' => $subtotalNeto,
+                'descuento_items' => $this->redondear($descuentoItems),
+                'descuento_global' => $descuentoGlobal,
+                'gift_card' => $giftCard,
+                // V2 no separa el IVA: va dentro del precio.
+                'total_precio_neto' => $montoTotal,
+                'iva' => 0.0,
+                'monto_total' => $montoTotal,
+                'monto_total_sujeto_iva' => max(0.0, $this->redondear($montoTotal - $giftCard)),
+                'items' => $itemsCalculados,
+            ];
+        }
+
         $totalPrecioNeto = $this->redondear($subtotalNeto - $descuentoGlobal - $giftCard);
         $iva = $this->redondear($totalPrecioNeto * self::TASA_IVA);
 
@@ -78,6 +106,7 @@ class CalculadorTotales
             'total_precio_neto' => $totalPrecioNeto,
             'iva' => $iva,
             'monto_total' => $this->redondear($totalPrecioNeto + $iva),
+            'monto_total_sujeto_iva' => $totalPrecioNeto,
             'items' => $itemsCalculados,
         ];
     }

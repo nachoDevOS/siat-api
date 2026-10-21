@@ -9,6 +9,7 @@ use App\Jobs\NotificarWebhook;
 use App\Jobs\VerificarEstadoFactura;
 use App\Models\Certificado;
 use App\Models\Cufd;
+use App\Models\Cuis;
 use App\Models\Empresa;
 use App\Models\Factura;
 use App\Models\FacturaItem;
@@ -20,6 +21,7 @@ use App\Services\Factura\EmisorFactura;
 use App\Services\Factura\FirmadorXml;
 use App\Services\Factura\GeneradorCuf;
 use App\Services\Siat\FabricaServicios;
+use App\Services\Siat\GestorCodigos;
 use App\Services\Siat\RespuestaSiat;
 use App\Services\Siat\ServicioFacturacion;
 use App\Services\Siat\SiatClient;
@@ -166,10 +168,10 @@ test('los vacios viajan como xsi:nil, los ceros con su valor y el texto escapado
     expect((new DOMDocument)->loadXML($xml))->toBeTrue();
 });
 
-test('el complemento vacio va como elemento vacio: el XSD V3 lo exige y no lo deja en xsi:nil', function () {
+test('sin complemento va "0": el SIN V3 rechaza el elemento vacio con [1068] y el XSD no deja xsi:nil', function () {
     $xml = app(ConstructorXml::class)->construir(facturaParaXml());
 
-    expect($xml)->toContain('</numeroDocumento><complemento/><codigoCliente>');
+    expect($xml)->toContain('</numeroDocumento><complemento>0</complemento><codigoCliente>');
 });
 
 test('el complemento con valor viaja en su lugar de la secuencia', function () {
@@ -215,13 +217,33 @@ test('el XML de la factura valida contra el XSD V3 oficial del SIN', function (a
     'con complemento' => [['comprador_complemento' => '1A']],
 ]);
 
-test('el codigoInterno sale de la empresa', function () {
+test('el codigoInterno sale del CUFD de la factura, y si el CUFD no lo trajo, de la empresa', function () {
     $factura = facturaParaXml();
     $factura->empresa->update(['codigo_interno' => 'B7']);
+    $cufd = Cufd::factory()->for($factura->puntoVenta)->create(['codigo_interno' => null]);
+    $factura->update(['cufd_id' => $cufd->id]);
 
-    $xml = app(ConstructorXml::class)->construir($factura->fresh());
+    // El CUFD pedido por /v2 no trae codigoInterno: queda el de la empresa.
+    expect(app(ConstructorXml::class)->construir($factura->fresh()))
+        ->toContain('<usuario>caja-01</usuario><codigoInterno>B7</codigoInterno><codigoDocumentoSector>');
 
-    expect($xml)->toContain('<usuario>caja-01</usuario><codigoInterno>B7</codigoInterno><codigoDocumentoSector>');
+    // Por /sfd el SIN lo devuelve con el CUFD y es el que exige: con otro
+    // responde [1077] "Codigo interno esperado C enviado A".
+    $cufd->update(['codigo_interno' => 'C']);
+
+    expect(app(ConstructorXml::class)->construir($factura->fresh()))
+        ->toContain('<codigoInterno>C</codigoInterno>');
+});
+
+test('el CUFD guarda el codigoInterno que devuelve el SIN', function () {
+    $puntoVenta = PuntoVenta::factory()->create();
+    $cuis = Cuis::factory()->for($puntoVenta)->create();
+
+    $cufd = app(GestorCodigos::class)->guardarCufd($puntoVenta, $cuis, (object) ['RespuestaCufd' => (object) [
+        'codigo' => 'CUFD-X', 'codigoControl' => 'CTRL', 'codigoInterno' => 'C', 'direccion' => 'AV', 'fechaVigencia' => now()->addDay()->format('Y-m-d\\TH:i:s.vP'), 'transaccion' => true,
+    ]]);
+
+    expect($cufd->codigo_interno)->toBe('C');
 });
 
 test('la fecha del XML lleva milisegundos y coincide con la de emision', function () {
@@ -571,4 +593,49 @@ test('la API y el webhook entregan los enlaces publicos', function () {
     app()->call([new NotificarWebhook($factura->id, 'factura.validada'), 'handle']);
 
     Http::assertSent(fn ($request) => $request['url_publica'] === $factura->urlPublica());
+});
+
+// --- Formato V2 (etapas originales del piloto, por /v2) ------------------------------
+
+test('el calculador V2 deja el IVA dentro del precio: montoTotal y sujeto a IVA sin gift card', function () {
+    $totales = app(CalculadorTotales::class)->calcular(
+        [['cantidad' => 2, 'precio_unitario' => 50, 'descuento' => 10], ['cantidad' => 1, 'precio_unitario' => 100]],
+        descuentoGlobal: 20,
+        giftCard: 30,
+        version: SiatClient::VERSION_V2,
+    );
+
+    // (2 x 50 - 10) + 100 = 190; - 20 de descuento adicional = 170; - 30 de gift card = 140.
+    expect($totales)->toMatchArray([
+        'subtotal' => 190.0,
+        'monto_total' => 170.0,
+        'monto_total_sujeto_iva' => 140.0,
+        'iva' => 0.0,
+    ]);
+});
+
+test('la factura V2 lleva montoTotal y cafc, sin iva ni codigoInterno, y el complemento vacio en nil', function () {
+    $factura = facturaParaXml();
+    $factura->update(['version' => SiatClient::VERSION_V2, 'monto_total' => 170, 'monto_total_sujeto_iva' => 140]);
+
+    $xml = app(ConstructorXml::class)->construir($factura->fresh());
+    $cabecera = (new SimpleXMLElement($xml))->cabecera;
+    $detalle = (new SimpleXMLElement($xml))->detalle;
+
+    expect(array_keys((array) $cabecera))->toBe([
+        'nitEmisor', 'razonSocialEmisor', 'municipio', 'telefono', 'numeroFactura', 'cuf', 'cufd', 'codigoSucursal',
+        'direccion', 'codigoPuntoVenta', 'fechaEmision', 'nombreRazonSocial', 'codigoTipoDocumentoIdentidad',
+        'numeroDocumento', 'complemento', 'codigoCliente', 'codigoMetodoPago', 'numeroTarjeta', 'montoTotal',
+        'montoTotalSujetoIva', 'codigoMoneda', 'tipoCambio', 'montoTotalMoneda', 'montoGiftCard', 'descuentoAdicional',
+        'codigoExcepcion', 'cafc', 'leyenda', 'usuario', 'codigoDocumentoSector',
+    ])
+        ->and((string) $cabecera->montoTotal)->toBe('170.00')
+        ->and((string) $cabecera->montoTotalSujetoIva)->toBe('140.00')
+        ->and($xml)->toContain('<complemento xsi:nil="true"/>')
+        ->and($xml)->toContain('<cafc xsi:nil="true"/>')
+        ->and($xml)->not->toContain('<iva>')
+        ->and($xml)->not->toContain('<codigoInterno>')
+        ->and(array_keys((array) $detalle))->toContain('precioUnitario')
+        ->and(array_keys((array) $detalle))->not->toContain('precioNetoUnitario')
+        ->and((string) $detalle->cantidad)->toMatch('/^\d+\.\d{4}$/');
 });

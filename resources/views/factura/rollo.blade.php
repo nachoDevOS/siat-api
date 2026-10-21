@@ -73,7 +73,7 @@
         <div class="b">NIT</div><div>{{ $empresa->nit }}</div>
         <div class="b">FACTURA N°</div><div>{{ $factura->numero_factura }}</div>
         <div class="b">CÓD. AUTORIZACIÓN</div><div class="cuf">{{ $factura->cuf }}</div>
-        <div>{{ $empresa->codigo_interno }}</div>
+        <div>{{ $factura->codigoInterno() }}</div>
     </div>
 
     <div class="sep"></div>

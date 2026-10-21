@@ -67,7 +67,7 @@ class EnviarFacturaAlSiat implements ShouldQueue
 
         try {
             $respuesta = RespuestaSiat::desde(
-                $fabrica->facturacion($factura->empresa)
+                $fabrica->facturacion($factura->empresa, $factura->version)
                     ->recepcionarFactura($factura, (string) $cufd, (string) $cuis),
             );
 
@@ -133,7 +133,7 @@ class EnviarFacturaAlSiat implements ShouldQueue
     ): void {
         try {
             $estado = RespuestaSiat::desde(
-                $fabrica->facturacion($factura->empresa)->verificarEstado($factura, $cufd, $cuis),
+                $fabrica->facturacion($factura->empresa, $factura->version)->verificarEstado($factura, $cufd, $cuis),
             );
         } catch (SiatException) {
             // Sin saber si el SIN la tiene no se observa ni se deriva a

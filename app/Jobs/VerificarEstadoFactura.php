@@ -110,7 +110,7 @@ class VerificarEstadoFactura implements ShouldQueue
         $cufd = $factura->cufd?->codigo ?? optional($factura->puntoVenta->cufdVigente())->codigo;
 
         try {
-            $respuesta = $fabrica->facturacion($factura->empresa)
+            $respuesta = $fabrica->facturacion($factura->empresa, $factura->version)
                 ->verificarEstado($factura, (string) $cufd, (string) $factura->puntoVenta->cuisDe(
                     $factura->cufd ?? $factura->puntoVenta->cufdVigente(),
                 )?->codigo);
