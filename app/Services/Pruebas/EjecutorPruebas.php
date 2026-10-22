@@ -535,17 +535,19 @@ class EjecutorPruebas
             );
         }
 
-        // El MAS ANTIGUO de los vigentes, no el ultimo: el evento tiene que caer
-        // despues de que el SIN emitio el cufdEvento (si no, responde 984), asi
-        // que cuanto mas viejo, mas ventana de tiempo hay para ubicar los 140
-        // eventos de las etapas V y VI. Del mismo CUIS que el vigente, porque
-        // el SIN ata cada CUFD al CUIS que lo genero.
+        // El INMEDIATAMENTE ANTERIOR al vigente, como en una contingencia real
+        // (el CUFD que se usaba cuando se corto) y como lo hace el sistema que
+        // factura en produccion (ventas, findPilotEventCufd). Decision del
+        // usuario el 22/10/2026; antes se tomaba el mas antiguo para tener mas
+        // ventana. Con este, si el hueco despues de su emision se llena,
+        // rangoDeEvento() avisa cuanto esperar. Del mismo CUIS que el vigente,
+        // porque el SIN ata cada CUFD al CUIS que lo genero.
         $delEvento = $local->cufds()
             ->where('id', '<', $actual->id)
             ->where('codigo', '!=', $actual->codigo)
             ->where('fecha_vigencia', '>', now())
             ->when($actual->cuis_id !== null, fn ($q) => $q->where('cuis_id', $actual->cuis_id))
-            ->oldest('id')
+            ->latest('id')
             ->first();
 
         // Sin uno anterior, el vigente pasa a ser el del evento y se pide otro.
@@ -557,7 +559,12 @@ class EjecutorPruebas
         // El CUIS va atado al CUFD vigente (ver PuntoVenta::cuisDe).
         $cuis = $local->cuisDe($actual);
 
-        [$inicio, $fin] = $this->rangoDeEvento($empresa, $codigoPuntoVenta, $delEvento);
+        [$inicio, $fin] = $this->rangoDeEvento(
+            $empresa,
+            $codigoPuntoVenta,
+            $delEvento,
+            $this->eventosEnElSin($empresa, $caso, $codigoSucursal, $codigoPuntoVenta, $cuis, $actual, $delEvento),
+        );
 
         $respuesta = RespuestaSiat::desde(
             $this->fabrica->operaciones($empresa, $this->versionDe($caso))->registrarEvento([
@@ -617,11 +624,17 @@ class EjecutorPruebas
      * la emision del cufdEvento, sin pisar los eventos ya registrados de ese
      * punto de venta, y que ya haya terminado.
      *
+     * Los ocupados salen de las ejecuciones guardadas Y de lo que el SIN tiene
+     * registrado: si se limpia el conteo local de una etapa, los eventos
+     * siguen en el SIN y pisarlos da "[981] RANGO DE FECHAS DE EVENTO
+     * SIGNIFICATIVO INVALIDO" (paso el 22/10/2026 tras limpiar la etapa VI).
+     *
+     * @param  list<array{0: Carbon, 1: Carbon}>  $enElSin  eventos ya registrados en el SIN.
      * @return array{0: Carbon, 1: Carbon}
      *
      * @throws SiatException si todavia no hay hueco: hay que esperar.
      */
-    private function rangoDeEvento(Empresa $empresa, int $codigoPuntoVenta, Cufd $cufdEvento): array
+    private function rangoDeEvento(Empresa $empresa, int $codigoPuntoVenta, Cufd $cufdEvento, array $enElSin = []): array
     {
         $casosDelPuntoVenta = CasoPrueba::whereIn('tipo', self::TIPOS_CON_EVENTO)->get()
             ->filter(fn (CasoPrueba $c): bool => (int) data_get($c->payload_ejemplo, 'codigoPuntoVenta') === $codigoPuntoVenta)
@@ -631,6 +644,8 @@ class EjecutorPruebas
             ->whereIn('caso_id', $casosDelPuntoVenta)
             ->where('estado', EjecucionPrueba::ESTADO_EXITOSO)
             ->get()
+            // Coleccion comun: la de Eloquent espera modelos al hacer merge().
+            ->toBase()
             ->map(fn (EjecucionPrueba $e): array => [data_get($e->respuesta, 'inicio'), data_get($e->respuesta, 'fin')])
             ->filter(fn (array $r): bool => filled($r[0]))
             ->map(fn (array $r): array => [
@@ -638,6 +653,7 @@ class EjecutorPruebas
                 // Las ejecuciones viejas solo guardaban el inicio.
                 filled($r[1]) ? Carbon::parse($r[1]) : Carbon::parse($r[0])->addMinute(),
             ])
+            ->merge($enElSin)
             ->sortBy(fn (array $r) => $r[0]->getTimestamp())
             ->values();
 
@@ -666,6 +682,51 @@ class EjecutorPruebas
         }
 
         return [$inicio, $fin];
+    }
+
+    /**
+     * Eventos que el SIN ya tiene registrados para el punto de venta, desde el
+     * dia en que se emitio el cufdEvento hasta hoy (consultaEventoSignificativo
+     * busca de a un dia, por la fecha del evento).
+     *
+     * Si la consulta falla se sigue solo con los eventos guardados aca: es una
+     * ayuda para no pisar eventos, y el SIN igual rechaza el registro si choca.
+     *
+     * @return list<array{0: Carbon, 1: Carbon}>
+     */
+    private function eventosEnElSin(
+        Empresa $empresa,
+        CasoPrueba $caso,
+        int $codigoSucursal,
+        int $codigoPuntoVenta,
+        Cuis $cuis,
+        Cufd $cufd,
+        Cufd $cufdEvento,
+    ): array {
+        $operaciones = $this->fabrica->operaciones($empresa, $this->versionDe($caso));
+        $eventos = [];
+
+        for ($dia = $this->emisionDe($cufdEvento)->startOfDay(); $dia->lessThanOrEqualTo(now()); $dia->addDay()) {
+            try {
+                $respuesta = RespuestaSiat::desde(
+                    $operaciones->consultarEventos($codigoSucursal, $codigoPuntoVenta, $cuis->codigo, $cufd->codigo, $dia->copy()),
+                    'RespuestaListaEventos',
+                );
+            } catch (SiatException) {
+                continue;
+            }
+
+            // Un solo evento llega como objeto suelto; sin eventos, 957 y sin lista.
+            $lista = data_get($respuesta->crudo, 'listaCodigos', []);
+
+            foreach (is_array($lista) ? $lista : [$lista] as $evento) {
+                if (filled($desde = data_get($evento, 'fechaInicio')) && filled($hasta = data_get($evento, 'fechaFin'))) {
+                    $eventos[] = [Carbon::parse($desde), Carbon::parse($hasta)];
+                }
+            }
+        }
+
+        return $eventos;
     }
 
     /**

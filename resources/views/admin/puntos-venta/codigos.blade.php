@@ -10,7 +10,10 @@
                 — {{ $puntoVenta->sucursal->nombre }} · {{ $puntoVenta->nombre }}
             </div>
         </div>
-        <a class="btn gris" href="{{ route('admin.empresas.show', $empresa) }}">Volver a la ficha</a>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <a class="btn gris" href="{{ route('admin.puntos-venta.eventos', $puntoVenta) }}">Eventos significativos</a>
+            <a class="btn gris" href="{{ route('admin.empresas.show', $empresa) }}">Volver a la ficha</a>
+        </div>
     </div>
 
     {{-- Lo que el sistema usa AHORA. Es la pregunta que se hace el 90% de las

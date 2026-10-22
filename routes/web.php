@@ -10,6 +10,7 @@ use App\Http\Controllers\Admin\ComunicacionSiatController;
 use App\Http\Controllers\Admin\ConfiguracionController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\EmpresaController;
+use App\Http\Controllers\Admin\EventoSignificativoController;
 use App\Http\Controllers\Admin\FacturaController;
 use App\Http\Controllers\Admin\MonitorController;
 use App\Http\Controllers\Admin\PruebaPilotoController;
@@ -161,6 +162,11 @@ Route::prefix('admin')->name('admin.')->middleware('auth')->group(function () {
     // el SIN emite un CUFD por dia, asi que la lista crece sin techo.
     Route::get('puntos-venta/{puntoVenta}/codigos', [CodigoController::class, 'historial'])
         ->name('puntos-venta.codigos');
+
+    // Eventos significativos que el SIN tiene registrados para el punto de
+    // venta: consulta de solo lectura (consultaEventoSignificativo).
+    Route::get('puntos-venta/{puntoVenta}/eventos', [EventoSignificativoController::class, 'index'])
+        ->name('puntos-venta.eventos');
 
     // Codigos CUIS / CUFD de un punto de venta: siempre se piden al SIAT.
     Route::post('puntos-venta/{puntoVenta}/cuis', [CodigoController::class, 'solicitarCuis'])->name('codigos.cuis');

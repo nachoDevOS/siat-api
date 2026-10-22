@@ -3,6 +3,7 @@
 namespace App\Services\Siat;
 
 use App\Models\PuntoVenta;
+use Illuminate\Support\Carbon;
 
 /**
  * Servicio FacturacionOperaciones: alta/consulta/cierre de puntos de venta y
@@ -84,6 +85,32 @@ class ServicioOperaciones extends ServicioBase
 
         return $this->invocar('operaciones', 'cierreOperacionesSistema', [
             'SolicitudOperaciones' => $solicitud,
+        ]);
+    }
+
+    /**
+     * Lista los eventos significativos registrados en el SIN para un dia.
+     *
+     * VERIFICADO CONTRA LOS WSDL DEL PILOTO /v2 y /sfd (2026-10-21): struct
+     * solicitudConsultaEvento { codigoAmbiente, codigoPuntoVenta, codigoSistema,
+     * codigoSucursal, cufd, cuis, fechaEvento, nit }, respuesta en
+     * RespuestaListaEventos.listaCodigos. El SIN busca por la fecha DEL EVENTO
+     * (inicio/fin), no por el dia en que se registro, y exige un CUFD vigente
+     * (914 si no). Sin eventos ese dia responde 957.
+     */
+    public function consultarEventos(int $codigoSucursal, int $codigoPuntoVenta, string $cuis, string $cufd, Carbon $fecha): mixed
+    {
+        $solicitud = $this->solicitudBase();
+        // No es parte de solicitudConsultaEvento.
+        unset($solicitud['codigoModalidad']);
+        $solicitud['codigoSucursal'] = $codigoSucursal;
+        $solicitud['codigoPuntoVenta'] = $codigoPuntoVenta;
+        $solicitud['cuis'] = $cuis;
+        $solicitud['cufd'] = $cufd;
+        $solicitud['fechaEvento'] = $fecha->copy()->startOfDay()->format('Y-m-d\TH:i:s.v');
+
+        return $this->invocar('operaciones', 'consultaEventoSignificativo', [
+            'SolicitudConsultaEvento' => $solicitud,
         ]);
     }
 

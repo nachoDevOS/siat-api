@@ -30,6 +30,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Sleep;
+use Mockery\MockInterface;
 
 uses(RefreshDatabase::class);
 
@@ -53,13 +54,28 @@ function respuestaCuis(string $codigo, string $vigencia = '2027-10-07T10:00:00.0
 }
 
 /**
+ * Operaciones del SIN simuladas. Por defecto el SIN no tiene eventos
+ * registrados (957): cada prueba que los necesite lo pisa.
+ */
+function operacionesSimuladas(): ServicioOperaciones&MockInterface
+{
+    $operaciones = Mockery::mock(ServicioOperaciones::class);
+    $operaciones->shouldReceive('consultarEventos')->byDefault()->andReturn((object) ['RespuestaListaEventos' => (object) [
+        'transaccion' => false,
+        'mensajesList' => (object) ['codigo' => 957, 'descripcion' => 'NO EXISTE REGISTRO DE EVENTO SIGNIFICATIVO EN LA BASE DE DATOS DEL SIN'],
+    ]]);
+
+    return $operaciones;
+}
+
+/**
  * Sustituye la capa SOAP: ninguna prueba debe salir al SIAT real.
  */
 function codigosSimulados(ServicioCodigos $codigos, ?ServicioOperaciones $operaciones = null): void
 {
     test()->mock(FabricaServicios::class, function ($mock) use ($codigos, $operaciones) {
         $mock->shouldReceive('codigos')->andReturn($codigos);
-        $mock->shouldReceive('operaciones')->andReturn($operaciones ?? Mockery::mock(ServicioOperaciones::class));
+        $mock->shouldReceive('operaciones')->andReturn($operaciones ?? operacionesSimuladas());
     });
 }
 
@@ -314,7 +330,7 @@ test('cerrar operaciones manda al SIN el CUIS vigente del punto de venta de la p
         ->andReturn(respuestaCuisYaVigente('F533CEF5'), respuestaCuis('CUIS-NUEVO'));
     $codigos->shouldReceive('solicitarCufd')->once()->with(Mockery::any(), 'CUIS-NUEVO')->andReturn(respuestaCufd('CUFD-NUEVO'));
 
-    $operaciones = Mockery::mock(ServicioOperaciones::class);
+    $operaciones = operacionesSimuladas();
     $operaciones->shouldReceive('cerrarOperacionesSistema')->once()->with(0, 0, 'F533CEF5')
         ->andReturn((object) ['RespuestaCierreSistemas' => (object) ['codigoSistema' => 'X', 'transaccion' => true]]);
     codigosSimulados($codigos, $operaciones);
@@ -333,7 +349,7 @@ test('la prueba V2 cierra operaciones y pide el CUIS nuevo por las rutas /v2', f
     $codigosV2 = Mockery::mock(ServicioCodigos::class);
     $codigosV2->shouldReceive('solicitarCuisPara')->twice()->with(0, 0)
         ->andReturn(respuestaCuisYaVigente('D66814EB'), respuestaCuis('CUIS-V2-NUEVO'));
-    $operacionesV2 = Mockery::mock(ServicioOperaciones::class);
+    $operacionesV2 = operacionesSimuladas();
     $operacionesV2->shouldReceive('cerrarOperacionesSistema')->once()->with(0, 0, 'D66814EB')
         ->andReturn((object) ['RespuestaCierreSistemas' => (object) ['codigoSistema' => 'X', 'transaccion' => true]]);
 
@@ -361,7 +377,7 @@ test('si el SIN no cierra las operaciones se muestra su motivo', function () {
     $codigos = Mockery::mock(ServicioCodigos::class);
     $codigos->shouldReceive('solicitarCuisPara')->andReturn(respuestaCuisYaVigente('F533CEF5'));
 
-    $operaciones = Mockery::mock(ServicioOperaciones::class);
+    $operaciones = operacionesSimuladas();
     $operaciones->shouldReceive('cerrarOperacionesSistema')->andReturn((object) ['RespuestaCierreSistemas' => (object) [
         'transaccion' => false,
         'mensajesList' => (object) ['codigo' => 1, 'descripcion' => 'MOTIVO DEL SIN'],
@@ -988,9 +1004,9 @@ test('cada evento se registra por la ruta de su recorrido y V2 y V3 no se pisan 
         return eventoAceptado();
     };
 
-    $operacionesV2 = Mockery::mock(ServicioOperaciones::class);
+    $operacionesV2 = operacionesSimuladas();
     $operacionesV2->shouldReceive('registrarEvento')->once()->andReturnUsing($registrar);
-    $operacionesV3 = Mockery::mock(ServicioOperaciones::class);
+    $operacionesV3 = operacionesSimuladas();
     $operacionesV3->shouldReceive('registrarEvento')->once()->andReturnUsing($registrar);
 
     test()->mock(FabricaServicios::class, function ($mock) use ($operacionesV2, $operacionesV3) {
@@ -1021,7 +1037,7 @@ test('un evento va con el CUFD vigente, el anterior como cufdEvento y un rango y
     [$empresa, $anterior] = empresaConDosCufd();
     $caso = CasoPrueba::where('etapa', 5)->where('orden', 1)->sole();
 
-    $operaciones = Mockery::mock(ServicioOperaciones::class);
+    $operaciones = operacionesSimuladas();
     $operaciones->shouldReceive('registrarEvento')->once()
         ->with(Mockery::on(function (array $datos) use ($anterior): bool {
             $inicio = Carbon\Carbon::parse($datos['fechaHoraInicioEvento']);
@@ -1051,7 +1067,7 @@ test('los eventos de un mismo punto de venta no se pisan entre si', function () 
     $caso = CasoPrueba::where('etapa', 5)->where('orden', 1)->sole();
 
     $rangos = [];
-    $operaciones = Mockery::mock(ServicioOperaciones::class);
+    $operaciones = operacionesSimuladas();
     $operaciones->shouldReceive('registrarEvento')->times(3)
         ->andReturnUsing(function (array $datos) use (&$rangos) {
             $rangos[] = [$datos['fechaHoraInicioEvento'], $datos['fechaHoraFinEvento']];
@@ -1069,12 +1085,62 @@ test('los eventos de un mismo punto de venta no se pisan entre si', function () 
         ->and($rangos[2][0] > $rangos[1][1])->toBeTrue();
 });
 
+test('el cufdEvento es el inmediatamente anterior al vigente, no el mas antiguo', function () {
+    [$empresa, $masAntiguo] = empresaConDosCufd();
+    $pv1 = PuntoVenta::where('codigo_punto_venta', 1)->sole();
+    // El vigente pasa a ser uno nuevo: CUFD-NUEVO queda como el anterior.
+    Cufd::factory()->create(['punto_venta_id' => $pv1->id, 'codigo' => 'CUFD-ULTIMO']);
+    $caso = CasoPrueba::where('etapa', 5)->where('orden', 1)->sole();
+
+    $operaciones = operacionesSimuladas();
+    $operaciones->shouldReceive('registrarEvento')->once()
+        ->withArgs(fn (array $datos): bool => $datos['cufd'] === 'CUFD-ULTIMO' && $datos['cufdEvento'] === 'CUFD-NUEVO')
+        ->andReturn(eventoAceptado());
+    codigosSimulados(Mockery::mock(ServicioCodigos::class), $operaciones);
+
+    test()->travel(30)->minutes();
+    $this->post(route('admin.pruebas.caso', [$empresa, $caso]));
+
+    expect($masAntiguo->codigo)->toBe('CUFD-VIEJO')
+        ->and(EjecucionPrueba::latest('id')->first()->estado)->toBe(EjecucionPrueba::ESTADO_EXITOSO);
+});
+
+test('no pisa los eventos que el SIN ya tiene aunque se haya limpiado el conteo local (error 981)', function () {
+    [$empresa, $anterior] = empresaConDosCufd();
+    $caso = CasoPrueba::where('etapa', 5)->where('orden', 1)->sole();
+    // Lo que dejo una etapa ya limpiada: dos eventos seguidos desde la
+    // emision del cufdEvento, que en la base local ya no figuran.
+    $emision = $anterior->created_at->copy();
+    $ocupadoHasta = $emision->copy()->addMinutes(3);
+
+    $inicio = null;
+    $operaciones = operacionesSimuladas();
+    $operaciones->shouldReceive('consultarEventos')->andReturn((object) ['RespuestaListaEventos' => (object) [
+        'transaccion' => true,
+        'listaCodigos' => [
+            (object) ['fechaInicio' => $emision->copy()->addSeconds(5)->format('Y-m-d\TH:i:s.v'), 'fechaFin' => $emision->copy()->addMinutes(2)->format('Y-m-d\TH:i:s.v')],
+            (object) ['fechaInicio' => $emision->copy()->addMinutes(2)->addSecond()->format('Y-m-d\TH:i:s.v'), 'fechaFin' => $ocupadoHasta->format('Y-m-d\TH:i:s.v')],
+        ],
+    ]]);
+    $operaciones->shouldReceive('registrarEvento')->once()
+        ->andReturnUsing(function (array $datos) use (&$inicio) {
+            $inicio = Carbon\Carbon::parse($datos['fechaHoraInicioEvento']);
+
+            return eventoAceptado();
+        });
+    codigosSimulados(Mockery::mock(ServicioCodigos::class), $operaciones);
+
+    $this->post(route('admin.pruebas.caso', [$empresa, $caso]));
+
+    expect($inicio->greaterThan($ocupadoHasta))->toBeTrue();
+});
+
 test('ningun evento empieza antes de la emision del CUFD del evento (error 984 del SIN)', function () {
     [$empresa, $anterior] = empresaConDosCufd();
     $caso = CasoPrueba::where('etapa', 5)->where('orden', 1)->sole();
 
     $inicios = [];
-    $operaciones = Mockery::mock(ServicioOperaciones::class);
+    $operaciones = operacionesSimuladas();
     $operaciones->shouldReceive('registrarEvento')
         ->andReturnUsing(function (array $datos) use (&$inicios) {
             $inicios[] = Carbon\Carbon::parse($datos['fechaHoraInicioEvento']);
@@ -1105,7 +1171,7 @@ test('rellena el hueco entre la emision del CUFD y los eventos ya registrados', 
         'respuesta' => ['inicio' => $ocupadoDesde->toDateTimeString(), 'fin' => $ocupadoDesde->copy()->addMinute()->toDateTimeString()],
         'ejecutado_en' => now()]);
 
-    $operaciones = Mockery::mock(ServicioOperaciones::class);
+    $operaciones = operacionesSimuladas();
     $operaciones->shouldReceive('registrarEvento')->once()
         ->with(Mockery::on(fn (array $d) => Carbon\Carbon::parse($d['fechaHoraFinEvento'])->lessThan($ocupadoDesde)))
         ->andReturn(eventoAceptado());
@@ -1122,7 +1188,7 @@ test('sin ventana de tiempo no llama al SIN y avisa cuanto esperar', function ()
     test()->travelBack();
     $caso = CasoPrueba::where('etapa', 5)->where('orden', 1)->sole();
 
-    $operaciones = Mockery::mock(ServicioOperaciones::class);
+    $operaciones = operacionesSimuladas();
     $operaciones->shouldNotReceive('registrarEvento');
     codigosSimulados(Mockery::mock(ServicioCodigos::class), $operaciones);
 
@@ -1135,7 +1201,7 @@ test('un evento rechazado por el SIN queda FALLIDO con su motivo', function () {
     [$empresa] = empresaConDosCufd();
     $caso = CasoPrueba::where('etapa', 5)->where('orden', 1)->sole();
 
-    $operaciones = Mockery::mock(ServicioOperaciones::class);
+    $operaciones = operacionesSimuladas();
     $operaciones->shouldReceive('registrarEvento')->andReturn((object) ['RespuestaListaEventos' => (object) [
         'transaccion' => false,
         'mensajesList' => (object) ['codigo' => 2001, 'descripcion' => 'FECHAS DEL EVENTO FUERA DE RANGO'],
@@ -1157,7 +1223,7 @@ test('sin CUFD anterior se pide uno nuevo y el que habia pasa a ser el del event
     $codigos = Mockery::mock(ServicioCodigos::class);
     $codigos->shouldReceive('solicitarCufd')->once()->andReturn(respuestaCufd('CUFD-ROTADO'));
 
-    $operaciones = Mockery::mock(ServicioOperaciones::class);
+    $operaciones = operacionesSimuladas();
     $operaciones->shouldReceive('registrarEvento')->once()
         ->with(Mockery::on(fn (array $d) => $d['cufd'] === 'CUFD-ROTADO' && $d['cufdEvento'] === 'CUFD-UNICO'))
         ->andReturn(eventoAceptado());
@@ -1239,7 +1305,7 @@ test('un paquete lleva el evento registrado y un TAR de facturas firmadas fuera 
     $caso = CasoPrueba::where('etapa', 6)->where('orden', 1)->sole();
     $caso->update(['payload_ejemplo' => [...$caso->payload_ejemplo, 'cantidadFacturas' => 3]]);
 
-    $operaciones = Mockery::mock(ServicioOperaciones::class);
+    $operaciones = operacionesSimuladas();
     $operaciones->shouldReceive('registrarEvento')->once()->andReturn(eventoAceptado(777));
 
     $enviado = null;

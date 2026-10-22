@@ -541,6 +541,10 @@
                                     Ver historial de CUIS y CUFD
                                     ({{ $pv->cuis->count() }} CUIS, {{ $pv->cufds->count() }} CUFD) →
                                 </a>
+                                ·
+                                <a href="{{ route('admin.puntos-venta.eventos', $pv) }}" style="font-size:13px;">
+                                    Eventos significativos en el SIN →
+                                </a>
                             </p>
 
                             {{-- Solicitud al SIAT. El CUFD exige CUIS: el boton queda
