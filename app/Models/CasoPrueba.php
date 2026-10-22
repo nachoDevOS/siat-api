@@ -55,6 +55,7 @@ class CasoPrueba extends Model
         102 => 'Sincronizacion de Catalogos',
         103 => 'Obtencion CUFD',
         104 => 'Consumo de metodos de emision individual',
+        105 => 'Registro de Eventos Significativos',
     ];
 
     public static function esV3(int $etapa): bool

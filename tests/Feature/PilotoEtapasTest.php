@@ -622,6 +622,21 @@ test('el job no se pasa de las esperadas ni sigue despues de un fallo del mismo 
 
 // --- Etapa III: obtencion de CUFD -------------------------------------------
 
+test('el CUFD pedido por /sfd guarda el codigoInterno que devuelve el SIN (si no, la factura V3 cae en 1077)', function () {
+    $empresa = empresaConCuisEnPv1();
+
+    $respuesta = respuestaCufd('CUFD-V3');
+    $respuesta->RespuestaCufd->codigoInterno = 'C';
+
+    $codigos = Mockery::mock(ServicioCodigos::class);
+    $codigos->shouldReceive('solicitarCufd')->once()->andReturn($respuesta);
+    codigosSimulados($codigos);
+
+    $this->post(route('admin.pruebas.caso', [$empresa, CasoPrueba::where('etapa', 103)->where('orden', 1)->sole()]));
+
+    expect(Cufd::sole()->codigo_interno)->toBe('C');
+});
+
 function respuestaCufd(string $codigo, bool $transaccion = true): object
 {
     return (object) ['RespuestaCufd' => (object) [
@@ -947,6 +962,59 @@ test('el seeder carga la etapa V: 7 motivos x 2 puntos de venta, 5 cada uno', fu
         ->and($casos->pluck('payload_ejemplo.codigoMotivoEvento')->unique()->values()->all())->toBe([1, 2, 3, 4, 5, 6, 7])
         ->and($casos[0]->payload_ejemplo['codigoPuntoVenta'])->toBe(1)
         ->and($casos[1]->payload_ejemplo['codigoPuntoVenta'])->toBe(0);
+});
+
+test('la etapa V original va por /v2 y la V.3 son las mismas 70 por /sfd', function () {
+    $original = CasoPrueba::where('etapa', 5)->orderBy('orden')->get();
+    $v3 = CasoPrueba::where('etapa', 105)->orderBy('orden')->get();
+
+    expect($v3)->toHaveCount(14)
+        ->and($v3->sum('pruebas_esperadas'))->toBe(70)
+        ->and($v3->pluck('tipo')->unique()->all())->toBe(['eventoSignificativo'])
+        ->and($original->pluck('payload_ejemplo.version')->unique()->all())->toBe(['v2'])
+        ->and($v3->pluck('payload_ejemplo.version')->unique()->all())->toBe(['v3'])
+        ->and($v3->map(fn ($c) => collect($c->payload_ejemplo)->except('version')->all())->all())
+        ->toBe($original->map(fn ($c) => collect($c->payload_ejemplo)->except('version')->all())->all())
+        ->and(CasoPrueba::nombreCorto(105))->toBe('etapa V V.3');
+});
+
+test('cada evento se registra por la ruta de su recorrido y V2 y V3 no se pisan en el mismo punto de venta', function () {
+    [$empresa] = empresaConDosCufd();
+
+    $rangos = [];
+    $registrar = function (array $datos) use (&$rangos): object {
+        $rangos[] = [Carbon\Carbon::parse($datos['fechaHoraInicioEvento']), Carbon\Carbon::parse($datos['fechaHoraFinEvento'])];
+
+        return eventoAceptado();
+    };
+
+    $operacionesV2 = Mockery::mock(ServicioOperaciones::class);
+    $operacionesV2->shouldReceive('registrarEvento')->once()->andReturnUsing($registrar);
+    $operacionesV3 = Mockery::mock(ServicioOperaciones::class);
+    $operacionesV3->shouldReceive('registrarEvento')->once()->andReturnUsing($registrar);
+
+    test()->mock(FabricaServicios::class, function ($mock) use ($operacionesV2, $operacionesV3) {
+        $mock->shouldReceive('operaciones')->with(Mockery::any(), SiatClient::VERSION_V2)->andReturn($operacionesV2);
+        $mock->shouldReceive('operaciones')->with(Mockery::any(), SiatClient::VERSION_V3)->andReturn($operacionesV3);
+    });
+
+    $this->post(route('admin.pruebas.caso', [$empresa, CasoPrueba::where('etapa', 5)->where('orden', 1)->sole()]));
+    $this->post(route('admin.pruebas.caso', [$empresa, CasoPrueba::where('etapa', 105)->where('orden', 1)->sole()]));
+
+    [[$inicioV2, $finV2], [$inicioV3]] = $rangos;
+
+    expect(EjecucionPrueba::where('estado', EjecucionPrueba::ESTADO_EXITOSO)->count())->toBe(2)
+        ->and($inicioV3->greaterThan($finV2))->toBeTrue()
+        ->and($inicioV2->lessThan($finV2))->toBeTrue();
+});
+
+test('la etapa V V.3 va a la cola: 70 llamadas', function () {
+    Queue::fake();
+    [$empresa] = empresaConDosCufd();
+
+    $this->post(route('admin.pruebas.etapa', [$empresa, 105]));
+
+    Queue::assertPushed(EjecutarCasoPrueba::class, 70);
 });
 
 test('un evento va con el CUFD vigente, el anterior como cufdEvento y un rango ya terminado', function () {

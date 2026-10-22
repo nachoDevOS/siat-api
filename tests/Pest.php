@@ -52,14 +52,17 @@ expect()->extend('toBeOne', function () {
  * Al XSD se le quita la firma (<ds:Signature> y su import): el XML se arma sin
  * firmar y la firma la prueba FirmadorXml por su lado.
  *
+ * Con $carpeta 'xsd-v2' valida contra los XSD V2 (siatinfo), los de las
+ * etapas originales del piloto por /v2.
+ *
  * @return list<string>
  */
-function erroresContraXsdV3(string $xml, string $xsd): array
+function erroresContraXsdV3(string $xml, string $xsd, string $carpeta = 'xsd-v3'): array
 {
     $esquema = preg_replace(
         ['/<xs:import[^>]*\/>/', '/<xs:element ref="ds:Signature"\/>/'],
         '',
-        file_get_contents(base_path("tests/Fixtures/xsd-v3/{$xsd}")),
+        file_get_contents(base_path("tests/Fixtures/{$carpeta}/{$xsd}")),
     );
 
     $doc = new DOMDocument;

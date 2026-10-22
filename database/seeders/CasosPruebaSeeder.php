@@ -205,16 +205,20 @@ class CasosPruebaSeeder extends Seeder
             7 => 'CORTE DE SUMINISTRO DE ENERGIA ELECTRICA',
         ];
 
-        $orden = 1;
+        // Etapa V V.3: las mismas 70 por /sfd. Comparten la linea de tiempo de
+        // eventos del punto de venta con la original, asi que no se pisan.
+        foreach ([5 => $v2, 5 + $v3 => ['version' => 'v3']] as $etapa => $ruta) {
+            $orden = 1;
 
-        foreach ($motivos as $motivo => $descripcion) {
-            foreach ([1, 0] as $puntoVenta) {
-                $pruebas[] = [5, $orden++, "Evento {$motivo}: {$descripcion} (PV {$puntoVenta})", 'eventoSignificativo', [
-                    'codigoSucursal' => 0,
-                    'codigoPuntoVenta' => $puntoVenta,
-                    'codigoMotivoEvento' => $motivo,
-                    'descripcion' => $descripcion,
-                ] + $v2, 5];
+            foreach ($motivos as $motivo => $descripcion) {
+                foreach ([1, 0] as $puntoVenta) {
+                    $pruebas[] = [$etapa, $orden++, "Evento {$motivo}: {$descripcion} (PV {$puntoVenta})", 'eventoSignificativo', [
+                        'codigoSucursal' => 0,
+                        'codigoPuntoVenta' => $puntoVenta,
+                        'codigoMotivoEvento' => $motivo,
+                        'descripcion' => $descripcion,
+                    ] + $ruta, 5];
+                }
             }
         }
 

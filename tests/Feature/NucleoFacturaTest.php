@@ -639,3 +639,12 @@ test('la factura V2 lleva montoTotal y cafc, sin iva ni codigoInterno, y el comp
         ->and(array_keys((array) $detalle))->not->toContain('precioNetoUnitario')
         ->and((string) $detalle->cantidad)->toMatch('/^\d+\.\d{4}$/');
 });
+
+test('la factura V2 pasa el XSD V2 oficial del SIN', function () {
+    $factura = facturaParaXml();
+    $factura->update(['version' => SiatClient::VERSION_V2, 'monto_total' => 170, 'monto_total_sujeto_iva' => 140]);
+
+    $xml = app(ConstructorXml::class)->construir($factura->fresh());
+
+    expect(erroresContraXsdV3($xml, 'facturaElectronicaCompraVenta.xsd', 'xsd-v2'))->toBe([]);
+});
