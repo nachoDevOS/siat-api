@@ -251,6 +251,35 @@ class CasosPruebaSeeder extends Seeder
             ] + $v2, 70];
         }
 
+        // Etapa VI V.3: 28 por /sfd. El portal pone primero las validaciones
+        // (7 por punto de venta, una por paquete) y despues un paquete por
+        // motivo y punto de venta. Se respeta su numeracion; el ejecutor igual
+        // corre las validaciones al final.
+        $orden = 1;
+
+        foreach ([1, 0] as $puntoVenta) {
+            $pruebas[] = [6 + $v3, $orden++, "Validar paquetes enviados (PV {$puntoVenta})", 'validacionPaquete', [
+                'codigoSucursal' => 0,
+                'codigoPuntoVenta' => $puntoVenta,
+                'codigoEmision' => 2,
+                'version' => 'v3',
+            ], 7];
+        }
+
+        foreach ($motivos as $motivo => $descripcion) {
+            foreach ([1 => 500, 0 => 10] as $puntoVenta => $cantidad) {
+                $pruebas[] = [6 + $v3, $orden++, "Paquete motivo {$motivo}: {$cantidad} facturas (PV {$puntoVenta})", 'paqueteContingencia', [
+                    'codigoSucursal' => 0,
+                    'codigoPuntoVenta' => $puntoVenta,
+                    'codigoMotivoEvento' => $motivo,
+                    'descripcion' => $descripcion,
+                    'codigoEmision' => 2,
+                    'cantidadFacturas' => $cantidad,
+                    'version' => 'v3',
+                ], 1];
+            }
+        }
+
         // Etapa VII: anular 125 facturas por punto de venta, con el motivo
         // FACTURA MAL EMITIDA. Se anulan las que valido la etapa IV.
         foreach ([1 => 1, 0 => 2] as $puntoVenta => $ordenAnulacion) {

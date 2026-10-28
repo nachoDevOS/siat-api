@@ -28,6 +28,7 @@ use App\Services\Siat\GestorCodigos;
 use App\Services\Siat\RespuestaSiat;
 use App\Services\Siat\SiatClient;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Sleep;
 use Throwable;
 
@@ -78,10 +79,7 @@ class EjecutorPruebas
      */
     public function ejecutarEtapa(Empresa $empresa, int $etapa): array
     {
-        $casos = CasoPrueba::where('fase', CasoPrueba::FASE_PILOTO)
-            ->where('etapa', $etapa)
-            ->orderBy('orden')
-            ->get();
+        $casos = $this->casosEnOrdenDeEjecucion($etapa);
 
         $correctas = $this->correctasPorCaso($empresa);
         $ejecutadas = 0;
@@ -1048,12 +1046,15 @@ class EjecutorPruebas
     /**
      * Codigo de recepcion del paquete enviado mas antiguo de ese punto de venta
      * que todavia no tiene una validacion exitosa.
+     *
+     * Solo los paquetes de la misma etapa: la VI original los envia por /v2 y
+     * la V.3 por /sfd, y cada una valida por su ruta los suyos.
      */
     private function siguientePaqueteSinValidar(Empresa $empresa, CasoPrueba $validacion, int $codigoPuntoVenta): ?string
     {
         $exitosas = fn (array $tipos) => EjecucionPrueba::where('empresa_id', $empresa->id)
             ->where('estado', EjecucionPrueba::ESTADO_EXITOSO)
-            ->whereIn('caso_id', CasoPrueba::whereIn('tipo', $tipos)->get()
+            ->whereIn('caso_id', CasoPrueba::where('etapa', $validacion->etapa)->whereIn('tipo', $tipos)->get()
                 ->filter(fn (CasoPrueba $c): bool => (int) data_get($c->payload_ejemplo, 'codigoPuntoVenta') === $codigoPuntoVenta)
                 ->pluck('id'))
             ->orderBy('id')
@@ -1162,12 +1163,25 @@ class EjecutorPruebas
      */
     public function encolarEtapa(Empresa $empresa, int $etapa): int
     {
-        $casos = CasoPrueba::where('fase', CasoPrueba::FASE_PILOTO)
+        return $this->casosEnOrdenDeEjecucion($etapa)
+            ->sum(fn (CasoPrueba $caso): int => $this->encolarCaso($empresa, $caso));
+    }
+
+    /**
+     * Pruebas de una etapa en el orden en que hay que correrlas: el del portal,
+     * salvo las validaciones de paquete, que van al final porque necesitan los
+     * paquetes ya enviados (la etapa VI V.3 las numera primero).
+     *
+     * @return Collection<int, CasoPrueba>
+     */
+    private function casosEnOrdenDeEjecucion(int $etapa): Collection
+    {
+        return CasoPrueba::where('fase', CasoPrueba::FASE_PILOTO)
             ->where('etapa', $etapa)
             ->orderBy('orden')
-            ->get();
-
-        return $casos->sum(fn (CasoPrueba $caso): int => $this->encolarCaso($empresa, $caso));
+            ->get()
+            ->sortBy(fn (CasoPrueba $caso): array => [$caso->tipo === 'validacionPaquete' ? 1 : 0, $caso->orden])
+            ->values();
     }
 
     /**

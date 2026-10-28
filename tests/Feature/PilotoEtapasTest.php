@@ -1408,9 +1408,9 @@ test('la validacion toma el paquete enviado sin validar y cuenta solo con 908', 
  *
  * @return array{datos: array<string, mixed>, xmls: array<string, string>, version: string}
  */
-function enviarPaqueteDeMotivo(Empresa $empresa, int $motivo): array
+function enviarPaqueteDeMotivo(Empresa $empresa, int $motivo, int $etapa = 6): array
 {
-    $caso = CasoPrueba::where('etapa', 6)->where('tipo', 'paqueteContingencia')->get()
+    $caso = CasoPrueba::where('etapa', $etapa)->where('tipo', 'paqueteContingencia')->get()
         ->first(fn (CasoPrueba $c) => $c->payload_ejemplo['codigoMotivoEvento'] === $motivo && $c->payload_ejemplo['codigoPuntoVenta'] === 1);
     $caso->update(['payload_ejemplo' => [...$caso->payload_ejemplo, 'cantidadFacturas' => 2]]);
 
@@ -1546,6 +1546,87 @@ test('la validacion de un paquete V2 pregunta por /v2', function () {
     $this->post(route('admin.pruebas.caso', [$empresa, $validacion]));
 
     expect(EjecucionPrueba::where('caso_id', $validacion->id)->sole()->estado)->toBe(EjecucionPrueba::ESTADO_EXITOSO);
+});
+
+// --- Etapa VI V.3: paquetes por /sfd ------------------------------------------
+
+test('el seeder carga la etapa VI V.3 como el portal: 2 validaciones de 7 y 14 paquetes de a uno', function () {
+    $casos = CasoPrueba::where('etapa', 106)->orderBy('orden')->get();
+    $paquetes = $casos->where('tipo', 'paqueteContingencia')->values();
+
+    expect($casos)->toHaveCount(16)
+        ->and($casos->sum('pruebas_esperadas'))->toBe(28)
+        ->and($casos->pluck('payload_ejemplo.version')->unique()->all())->toBe(['v3'])
+        ->and($casos->take(2)->pluck('tipo')->unique()->all())->toBe(['validacionPaquete'])
+        ->and($casos->take(2)->pluck('payload_ejemplo.codigoPuntoVenta')->all())->toBe([1, 0])
+        ->and($casos->take(2)->pluck('pruebas_esperadas')->all())->toBe([7, 7])
+        ->and($paquetes)->toHaveCount(14)
+        ->and($paquetes->pluck('pruebas_esperadas')->unique()->all())->toBe([1])
+        ->and($paquetes->pluck('payload_ejemplo.codigoMotivoEvento')->unique()->values()->all())->toBe([1, 2, 3, 4, 5, 6, 7])
+        ->and($paquetes[0]->payload_ejemplo['cantidadFacturas'])->toBe(500)
+        ->and($paquetes[0]->payload_ejemplo['codigoPuntoVenta'])->toBe(1)
+        ->and($paquetes[1]->payload_ejemplo['cantidadFacturas'])->toBeLessThan(500)
+        ->and($paquetes[1]->payload_ejemplo['codigoPuntoVenta'])->toBe(0)
+        ->and(CasoPrueba::nombreCorto(106))->toBe('etapa VI V.3');
+});
+
+test('un paquete V3 de motivo 5 viaja por /sfd sin cafc y sin exigir CAFC activo', function () {
+    $empresa = empresaListaParaPaquetes();
+
+    $enviado = enviarPaqueteDeMotivo($empresa, 5, 106);
+
+    expect(EjecucionPrueba::sole()->estado)->toBe(EjecucionPrueba::ESTADO_EXITOSO)
+        ->and($enviado['version'])->toBe(SiatClient::VERSION_V3)
+        ->and($enviado['datos'])->not->toHaveKey('cafc')
+        ->and($enviado['xmls'])->toHaveCount(2);
+
+    foreach ($enviado['xmls'] as $xml) {
+        expect($xml)->not->toContain('<cafc');
+    }
+});
+
+test('la validacion V3 pregunta por /sfd y solo por los paquetes de su etapa', function () {
+    $empresa = empresaListaParaPaquetes();
+    $envioV2 = CasoPrueba::where('etapa', 6)->where('orden', 1)->sole();
+    $envioV3 = CasoPrueba::where('etapa', 106)->where('tipo', 'paqueteContingencia')->orderBy('orden')->first();
+    $validacion = CasoPrueba::where('etapa', 106)->where('orden', 1)->sole();
+
+    foreach ([[$envioV2, 'PAQ-V2'], [$envioV3, 'PAQ-V3']] as [$envio, $codigo]) {
+        EjecucionPrueba::create(['empresa_id' => $empresa->id, 'caso_id' => $envio->id, 'estado' => EjecucionPrueba::ESTADO_EXITOSO,
+            'respuesta' => ['codigoRecepcion' => $codigo, 'inicio' => now()->subHour()->toDateTimeString()], 'ejecutado_en' => now()]);
+    }
+
+    $pedido = null;
+    $facturacion = Mockery::mock(ServicioFacturacion::class);
+    $facturacion->shouldReceive('validarRecepcionPaquete')->once()
+        ->andReturnUsing(function (array $datos) use (&$pedido) {
+            $pedido = $datos['codigoRecepcion'];
+
+            return recepcion('908');
+        });
+    test()->mock(FabricaServicios::class, function ($mock) use ($facturacion) {
+        $mock->shouldReceive('facturacion')->with(Mockery::any(), SiatClient::VERSION_V3)->once()->andReturn($facturacion);
+    });
+
+    $this->post(route('admin.pruebas.caso', [$empresa, $validacion]));
+
+    expect($pedido)->toBe('PAQ-V3')
+        ->and(EjecucionPrueba::where('caso_id', $validacion->id)->sole()->estado)->toBe(EjecucionPrueba::ESTADO_EXITOSO);
+});
+
+test('la etapa VI V.3 encola sus 28 llamadas con las validaciones al final', function () {
+    Queue::fake();
+    $empresa = empresaListaParaPaquetes();
+
+    $this->post(route('admin.pruebas.etapa', [$empresa, 106]));
+
+    $tipos = Queue::pushed(EjecutarCasoPrueba::class)
+        ->map(fn (EjecutarCasoPrueba $job) => CasoPrueba::find($job->casoId)->tipo)
+        ->values();
+
+    expect($tipos)->toHaveCount(28)
+        ->and($tipos->take(14)->unique()->all())->toBe(['paqueteContingencia'])
+        ->and($tipos->skip(14)->unique()->values()->all())->toBe(['validacionPaquete']);
 });
 
 test('el archivo del paquete es un TAR valido', function () {
