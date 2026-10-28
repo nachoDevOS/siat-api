@@ -225,7 +225,9 @@ class CasosPruebaSeeder extends Seeder
         // Etapa VI: por cada motivo, 10 paquetes en el PV 1 con 500 facturas
         // ("igual a 500") y 10 en el PV 0 con menos ("menor a 500": se usan 10
         // para no firmar de mas). Al final, la validacion de los 70 paquetes de
-        // cada punto de venta.
+        // cada punto de venta. Va por /v2 como el resto del recorrido original:
+        // sin la version, el evento, las facturas y el paquete viajaban por
+        // /sfd y el portal no los contaba aca.
         $orden = 1;
 
         foreach ($motivos as $motivo => $descripcion) {
@@ -237,7 +239,7 @@ class CasosPruebaSeeder extends Seeder
                     'descripcion' => $descripcion,
                     'codigoEmision' => 2,
                     'cantidadFacturas' => $cantidad,
-                ], 10];
+                ] + $v2, 10];
             }
         }
 
@@ -246,7 +248,7 @@ class CasosPruebaSeeder extends Seeder
                 'codigoSucursal' => 0,
                 'codigoPuntoVenta' => $puntoVenta,
                 'codigoEmision' => 2,
-            ], 70];
+            ] + $v2, 70];
         }
 
         // Etapa VII: anular 125 facturas por punto de venta, con el motivo

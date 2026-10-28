@@ -119,7 +119,7 @@ class ConstructorXml
      * etapas originales del piloto por /v2. Es la que armaba este sistema
      * hasta el 12/10/2026 (commit 769f83a): precio con IVA incluido y
      * montoTotal/montoTotalSujetoIva en lugar de los montos netos e iva; sin
-     * codigoInterno; con cafc (nil: es de la computarizada); el complemento
+     * codigoInterno; con cafc (nil salvo contingencia de motivos 5 a 7); el complemento
      * vacio va en xsi:nil, como lo manda el sistema que factura en
      * produccion en V2.
      */
@@ -155,7 +155,8 @@ class ConstructorXml
             'montoGiftCard' => $this->monto($factura->gift_card),
             'descuentoAdicional' => $this->monto($factura->descuento_global),
             'codigoExcepcion' => $factura->codigo_excepcion ?? 0,
-            'cafc' => null,
+            // Solo lo trae una factura de contingencia de los motivos 5 a 7.
+            'cafc' => $factura->getAttribute('cafc'),
             'leyenda' => $factura->leyenda,
             'usuario' => $factura->usuario,
             'codigoDocumentoSector' => $factura->codigo_documento_sector,

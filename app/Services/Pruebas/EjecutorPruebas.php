@@ -8,6 +8,7 @@ use App\Exceptions\SiatException;
 use App\Jobs\AnularFacturaEnSiat;
 use App\Jobs\EjecutarCasoPrueba;
 use App\Jobs\EnviarPaqueteContingencia;
+use App\Models\Cafc;
 use App\Models\CasoPrueba;
 use App\Models\Catalogo;
 use App\Models\Cufd;
@@ -770,30 +771,38 @@ class EjecutorPruebas
             throw new SiatException("El punto de venta {$codigoPuntoVenta} no esta configurado en este sistema.");
         }
 
-        // Catalogos y venta ANTES del evento: si falta algo, no se gasta un
-        // evento registrado en el SIN para nada.
+        // Catalogos, venta y CAFC ANTES del evento: si falta algo, no se gasta
+        // un evento registrado en el SIN para nada.
         $this->asegurarCatalogos($empresa, $local);
         $venta = $this->ventaDePrueba($empresa, $caso, $codigoSucursal, $codigoPuntoVenta);
+        $version = $this->versionDe($caso);
+        $cafc = $this->cafcDelPaquete($empresa, $caso);
 
         $evento = $this->registrarEventoPrueba($empresa, $caso);
         $codigoEvento = $evento['respuesta']['codigoRecepcionEventoSignificativo'];
 
-        $paquete = $this->paquetes->armar($empresa, $local, $evento['cufdEvento'], $venta, $cantidad, $evento['inicio']);
+        $paquete = $this->paquetes->armar($empresa, $local, $evento['cufdEvento'], $venta, $cantidad, $evento['inicio'], $cafc);
+
+        $solicitud = [
+            'codigoSucursal' => $codigoSucursal,
+            'codigoPuntoVenta' => $codigoPuntoVenta,
+            'codigoDocumentoSector' => config('siat.codigos.documento_sector'),
+            'codigoEmision' => Factura::EMISION_CONTINGENCIA,
+            'tipoFacturaDocumento' => config('siat.codigos.tipo_factura_documento'),
+            'cufd' => $evento['cufd']->codigo,
+            'cuis' => $evento['cuis']->codigo,
+            'cantidadFacturas' => $cantidad,
+            'codigoEvento' => $codigoEvento,
+        ];
+
+        // solicitudRecepcionPaquete de /v2 trae cafc (nil en los motivos 1 a
+        // 4); la de /sfd ya no lo tiene.
+        if ($version === SiatClient::VERSION_V2) {
+            $solicitud['cafc'] = $cafc?->codigo;
+        }
 
         $respuesta = RespuestaSiat::desde(
-            $this->fabrica->facturacion($empresa)->recepcionarPaquete([
-                'codigoSucursal' => $codigoSucursal,
-                'codigoPuntoVenta' => $codigoPuntoVenta,
-                'codigoDocumentoSector' => config('siat.codigos.documento_sector'),
-                'codigoEmision' => Factura::EMISION_CONTINGENCIA,
-                'tipoFacturaDocumento' => config('siat.codigos.tipo_factura_documento'),
-                'cufd' => $evento['cufd']->codigo,
-                'cuis' => $evento['cuis']->codigo,
-                // El CAFC es de la modalidad computarizada: aca no aplica.
-                'cafc' => null,
-                'cantidadFacturas' => $cantidad,
-                'codigoEvento' => $codigoEvento,
-            ], $paquete['tar']),
+            $this->fabrica->facturacion($empresa, $version)->recepcionarPaquete($solicitud, $paquete['tar']),
         );
 
         if (! $respuesta->aceptada || blank($respuesta->codigoRecepcion)) {
@@ -808,6 +817,26 @@ class EjecutorPruebas
             'cantidadFacturas' => $cantidad,
             'facturas' => "{$paquete['desde']} a {$paquete['hasta']}",
         ];
+    }
+
+    /**
+     * CAFC con el que viajan las facturas de un paquete: el activo de la
+     * empresa, solo en los motivos 5 a 7 y por /v2. En /sfd el CAFC no existe
+     * (ni en la solicitud ni en el XSD de la factura V3).
+     *
+     * @throws SiatException si el motivo lo exige y la empresa no tiene CAFC activo.
+     */
+    private function cafcDelPaquete(Empresa $empresa, CasoPrueba $caso): ?Cafc
+    {
+        $motivo = (int) data_get($caso->payload_ejemplo, 'codigoMotivoEvento');
+
+        if (! $this->esV2($caso) || ! in_array($motivo, Cafc::MOTIVOS_EVENTO, true)) {
+            return null;
+        }
+
+        return $empresa->cafcActivo ?? throw new SiatException(
+            "El motivo {$motivo} lleva CAFC y la empresa no tiene uno activo: cargalo en su ficha.",
+        );
     }
 
     /**
@@ -846,7 +875,7 @@ class EjecutorPruebas
         }
 
         $respuesta = RespuestaSiat::desde(
-            $this->fabrica->facturacion($empresa)->validarRecepcionPaquete([
+            $this->fabrica->facturacion($empresa, $this->versionDe($caso))->validarRecepcionPaquete([
                 'codigoSucursal' => $codigoSucursal,
                 'codigoPuntoVenta' => $codigoPuntoVenta,
                 'codigoDocumentoSector' => config('siat.codigos.documento_sector'),

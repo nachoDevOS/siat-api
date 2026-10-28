@@ -2,6 +2,7 @@
 
 use App\Jobs\EjecutarCasoPrueba;
 use App\Jobs\EnviarFacturaAlSiat;
+use App\Models\Cafc;
 use App\Models\CasoPrueba;
 use App\Models\Catalogo;
 use App\Models\Certificado;
@@ -1398,6 +1399,153 @@ test('la validacion toma el paquete enviado sin validar y cuenta solo con 908', 
     // 901 no consume el paquete: se vuelve a preguntar por PAQ-1.
     expect($pedidos)->toBe(['PAQ-1', 'PAQ-1', 'PAQ-2'])
         ->and(EjecucionPrueba::where('caso_id', $validacion->id)->where('estado', EjecucionPrueba::ESTADO_EXITOSO)->count())->toBe(2);
+});
+
+/**
+ * Corre una prueba de envio de paquete de la etapa VI con 2 facturas y
+ * devuelve la solicitud y los XML que llegaron al SIN, y la version con la que
+ * se pidio el servicio de facturacion.
+ *
+ * @return array{datos: array<string, mixed>, xmls: array<string, string>, version: string}
+ */
+function enviarPaqueteDeMotivo(Empresa $empresa, int $motivo): array
+{
+    $caso = CasoPrueba::where('etapa', 6)->where('tipo', 'paqueteContingencia')->get()
+        ->first(fn (CasoPrueba $c) => $c->payload_ejemplo['codigoMotivoEvento'] === $motivo && $c->payload_ejemplo['codigoPuntoVenta'] === 1);
+    $caso->update(['payload_ejemplo' => [...$caso->payload_ejemplo, 'cantidadFacturas' => 2]]);
+
+    $operaciones = operacionesSimuladas();
+    $operaciones->shouldReceive('registrarEvento')->andReturn(eventoAceptado(555));
+
+    $enviado = [];
+    $facturacion = Mockery::mock(ServicioFacturacion::class);
+    $facturacion->shouldReceive('recepcionarPaquete')
+        ->andReturnUsing(function (array $datos, string $tar) use (&$enviado) {
+            $enviado += ['datos' => $datos, 'xmls' => leerTar($tar)];
+
+            return recepcion('901');
+        });
+
+    test()->mock(FabricaServicios::class, function ($mock) use ($operaciones, $facturacion, &$enviado) {
+        $mock->shouldReceive('operaciones')->andReturn($operaciones);
+        $mock->shouldReceive('facturacion')->andReturnUsing(function (Empresa $empresa, string $version) use ($facturacion, &$enviado) {
+            $enviado['version'] = $version;
+
+            return $facturacion;
+        });
+    });
+
+    test()->post(route('admin.pruebas.caso', [$empresa, $caso]));
+
+    return $enviado;
+}
+
+test('la etapa VI original va por /v2: envios y validaciones', function () {
+    $casos = CasoPrueba::where('etapa', 6)->get();
+
+    expect($casos)->toHaveCount(16)
+        ->and($casos->pluck('payload_ejemplo.version')->unique()->all())->toBe(['v2']);
+});
+
+test('un paquete V2 de motivo 1 viaja por /v2 en formato V2 y con el cafc en nil', function () {
+    $empresa = empresaListaParaPaquetes();
+    Cafc::factory()->for($empresa)->create(['codigo' => 'CAFC-PILOTO']);
+
+    $enviado = enviarPaqueteDeMotivo($empresa, 1);
+
+    expect(EjecucionPrueba::sole()->estado)->toBe(EjecucionPrueba::ESTADO_EXITOSO)
+        ->and($enviado['version'])->toBe(SiatClient::VERSION_V2)
+        ->and($enviado['datos'])->toHaveKey('cafc')
+        ->and($enviado['datos']['cafc'])->toBeNull()
+        ->and($enviado['xmls'])->toHaveCount(2);
+
+    foreach ($enviado['xmls'] as $xml) {
+        // Cabecera V2: IVA dentro del precio, sin <iva> ni codigoInterno.
+        expect($xml)->toContain('<montoTotalSujetoIva>10.00</montoTotalSujetoIva>')
+            ->toContain('<cafc xsi:nil="true"/>')
+            ->not->toContain('<iva>')
+            ->not->toContain('CAFC-PILOTO');
+    }
+
+    // Sin CAFC los numeros salen del correlativo del punto de venta.
+    expect(PuntoVenta::where('codigo_punto_venta', 1)->sole()->siguiente_factura)->toBe(3)
+        ->and(Cafc::sole()->ultimo_numero)->toBeNull();
+});
+
+test('un paquete V2 de motivo 5 lleva el CAFC en la solicitud y en cada factura, con numeros de su rango', function () {
+    $empresa = empresaListaParaPaquetes();
+    Cafc::factory()->for($empresa)->create(['codigo' => 'CAFC-PILOTO', 'numero_inicio' => 1, 'numero_fin' => 1000, 'ultimo_numero' => 40]);
+
+    $enviado = enviarPaqueteDeMotivo($empresa, 5);
+
+    expect(EjecucionPrueba::sole()->estado)->toBe(EjecucionPrueba::ESTADO_EXITOSO)
+        ->and($enviado['version'])->toBe(SiatClient::VERSION_V2)
+        ->and($enviado['datos']['cafc'])->toBe('CAFC-PILOTO');
+
+    $numeros = collect($enviado['xmls'])->map(function (string $xml) {
+        expect($xml)->toContain('<cafc>CAFC-PILOTO</cafc>');
+
+        preg_match('/<numeroFactura>(\d+)<\/numeroFactura>/', $xml, $m);
+
+        return (int) $m[1];
+    })->sort()->values()->all();
+
+    // Numeros del rango del CAFC; el correlativo del punto de venta no se toca.
+    expect($numeros)->toBe([41, 42])
+        ->and(Cafc::sole()->ultimo_numero)->toBe(42)
+        ->and(PuntoVenta::where('codigo_punto_venta', 1)->sole()->siguiente_factura)->toBe(1);
+});
+
+test('un paquete de motivo 5 sin CAFC activo falla sin registrar el evento', function () {
+    $empresa = empresaListaParaPaquetes();
+    $caso = CasoPrueba::where('etapa', 6)->where('tipo', 'paqueteContingencia')->get()
+        ->first(fn (CasoPrueba $c) => $c->payload_ejemplo['codigoMotivoEvento'] === 5);
+
+    $operaciones = operacionesSimuladas();
+    $operaciones->shouldNotReceive('registrarEvento');
+    test()->mock(FabricaServicios::class, fn ($mock) => $mock->shouldReceive('operaciones')->andReturn($operaciones));
+
+    $this->post(route('admin.pruebas.caso', [$empresa, $caso]));
+
+    $ejecucion = EjecucionPrueba::sole();
+    expect($ejecucion->estado)->toBe(EjecucionPrueba::ESTADO_FALLIDO)
+        ->and($ejecucion->respuesta['error'])->toContain('CAFC');
+});
+
+test('el rango del CAFC vuelve al inicio cuando el bloque no entra en lo que queda', function () {
+    $empresa = empresaListaParaPaquetes();
+    $pv1 = PuntoVenta::where('codigo_punto_venta', 1)->sole();
+    $cafc = Cafc::factory()->for($empresa)->create(['numero_inicio' => 1, 'numero_fin' => 10, 'ultimo_numero' => 9]);
+
+    $paquete = app(GeneradorPaquetePrueba::class)->armar(
+        $empresa, $pv1, $pv1->cufds()->orderBy('id')->first(),
+        ['version' => 'v2', 'comprador' => ['tipo_documento' => 1, 'numero_documento' => '1', 'razon_social' => 'X'], 'metodo_pago' => 1,
+            'items' => [['codigo_producto_sin' => 83141, 'descripcion' => 'X', 'cantidad' => 1, 'unidad_medida' => 58, 'precio_unitario' => 10]]],
+        3, now()->subHour()->startOfSecond(), $cafc,
+    );
+
+    expect([$paquete['desde'], $paquete['hasta']])->toBe([1, 3])
+        ->and($cafc->fresh()->ultimo_numero)->toBe(3);
+});
+
+test('la validacion de un paquete V2 pregunta por /v2', function () {
+    $empresa = empresaListaParaPaquetes();
+    $envio = CasoPrueba::where('etapa', 6)->where('orden', 1)->sole();
+    $validacion = CasoPrueba::where('etapa', 6)->where('tipo', 'validacionPaquete')
+        ->get()->first(fn ($c) => $c->payload_ejemplo['codigoPuntoVenta'] === 1);
+
+    EjecucionPrueba::create(['empresa_id' => $empresa->id, 'caso_id' => $envio->id, 'estado' => EjecucionPrueba::ESTADO_EXITOSO,
+        'respuesta' => ['codigoRecepcion' => 'PAQ-1', 'inicio' => now()->subHour()->toDateTimeString()], 'ejecutado_en' => now()]);
+
+    $facturacion = Mockery::mock(ServicioFacturacion::class);
+    $facturacion->shouldReceive('validarRecepcionPaquete')->once()->andReturn(recepcion('908'));
+    test()->mock(FabricaServicios::class, function ($mock) use ($facturacion) {
+        $mock->shouldReceive('facturacion')->with(Mockery::any(), SiatClient::VERSION_V2)->once()->andReturn($facturacion);
+    });
+
+    $this->post(route('admin.pruebas.caso', [$empresa, $validacion]));
+
+    expect(EjecucionPrueba::where('caso_id', $validacion->id)->sole()->estado)->toBe(EjecucionPrueba::ESTADO_EXITOSO);
 });
 
 test('el archivo del paquete es un TAR valido', function () {

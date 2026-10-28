@@ -20,6 +20,14 @@ class Cafc extends Model
     /** @use HasFactory<CafcFactory> */
     use HasFactory;
 
+    /**
+     * Motivos de evento significativo cuyas facturas llevan CAFC. Los demas
+     * (1 a 4) van con el cafc en nil: si llevan valor, el SIN las rechaza.
+     *
+     * @var list<int>
+     */
+    public const MOTIVOS_EVENTO = [5, 6, 7];
+
     protected $guarded = ['id'];
 
     protected function casts(): array
