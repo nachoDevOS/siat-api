@@ -519,9 +519,10 @@ class EjecutorPruebas
      *   - el evento dura un minuto, ya termino, y no se pisa con otro del mismo
      *     punto de venta.
      *
+     * @param  Carbon|null  $noAntesDe  momento antes del cual el evento no puede empezar (ver rangoDeEvento).
      * @return array{respuesta: array<string, mixed>, puntoVenta: PuntoVenta, cuis: Cuis, cufd: Cufd, cufdEvento: Cufd, inicio: Carbon, fin: Carbon}
      */
-    private function registrarEventoPrueba(Empresa $empresa, CasoPrueba $caso): array
+    private function registrarEventoPrueba(Empresa $empresa, CasoPrueba $caso, ?Carbon $noAntesDe = null): array
     {
         [$codigoSucursal, $codigoPuntoVenta] = $this->codigosDePrueba($caso);
         $local = $this->puntoVentaLocal($empresa, $codigoSucursal, $codigoPuntoVenta);
@@ -563,6 +564,7 @@ class EjecutorPruebas
             $codigoPuntoVenta,
             $delEvento,
             $this->eventosEnElSin($empresa, $caso, $codigoSucursal, $codigoPuntoVenta, $cuis, $actual, $delEvento),
+            $noAntesDe,
         );
 
         $respuesta = RespuestaSiat::desde(
@@ -628,12 +630,18 @@ class EjecutorPruebas
      * siguen en el SIN y pisarlos da "[981] RANGO DE FECHAS DE EVENTO
      * SIGNIFICATIVO INVALIDO" (paso el 22/10/2026 tras limpiar la etapa VI).
      *
+     * Con $noAntesDe el evento tampoco empieza antes de ese momento: los
+     * paquetes pasan el inicio de vigencia del certificado, porque sus
+     * facturas llevan la fecha del evento y el SIN rechaza con 965 las
+     * fechadas antes de que el certificado valiera (paso el 28/10/2026 con un
+     * autofirmado nuevo y CUFD del dia anterior).
+     *
      * @param  list<array{0: Carbon, 1: Carbon}>  $enElSin  eventos ya registrados en el SIN.
      * @return array{0: Carbon, 1: Carbon}
      *
      * @throws SiatException si todavia no hay hueco: hay que esperar.
      */
-    private function rangoDeEvento(Empresa $empresa, int $codigoPuntoVenta, Cufd $cufdEvento, array $enElSin = []): array
+    private function rangoDeEvento(Empresa $empresa, int $codigoPuntoVenta, Cufd $cufdEvento, array $enElSin = [], ?Carbon $noAntesDe = null): array
     {
         $casosDelPuntoVenta = CasoPrueba::whereIn('tipo', self::TIPOS_CON_EVENTO)->get()
             ->filter(fn (CasoPrueba $c): bool => (int) data_get($c->payload_ejemplo, 'codigoPuntoVenta') === $codigoPuntoVenta)
@@ -657,6 +665,10 @@ class EjecutorPruebas
             ->values();
 
         $inicio = $this->emisionDe($cufdEvento)->addSeconds(self::SEGUNDOS_TRAS_EMISION);
+
+        if ($noAntesDe !== null && $noAntesDe->greaterThan($inicio)) {
+            $inicio = $noAntesDe->copy()->startOfSecond()->addSeconds(self::SEGUNDOS_TRAS_EMISION);
+        }
 
         foreach ($ocupados as [$desde, $hasta]) {
             // Entra entero antes de este evento: listo.
@@ -776,7 +788,7 @@ class EjecutorPruebas
         $version = $this->versionDe($caso);
         $cafc = $this->cafcDelPaquete($empresa, $caso);
 
-        $evento = $this->registrarEventoPrueba($empresa, $caso);
+        $evento = $this->registrarEventoPrueba($empresa, $caso, $empresa->certificadoActivo?->inicioVigenciaDelP12());
         $codigoEvento = $evento['respuesta']['codigoRecepcionEventoSignificativo'];
 
         $paquete = $this->paquetes->armar($empresa, $local, $evento['cufdEvento'], $venta, $cantidad, $evento['inicio'], $cafc);

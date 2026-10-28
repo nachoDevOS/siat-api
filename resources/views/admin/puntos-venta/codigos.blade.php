@@ -143,7 +143,7 @@
         <div style="overflow-x:auto;">
             <table>
                 <tr>
-                    <th>Codigo</th><th>Pedido por</th><th>Codigo control</th><th>Estado</th><th>Vigencia</th><th>CUIS</th>
+                    <th>Codigo</th><th>Pedido por</th><th>Codigo control</th><th>Estado</th><th>Vigencia</th><th>CUIS</th><th>Solicitado</th>
                 </tr>
                 @forelse ($listaCufd as $unCufd)
                     @php
@@ -162,9 +162,12 @@
                             {{-- Null en los pedidos antes de que se registrara el vinculo. --}}
                             {{ $unCufd->cuis?->codigo ?? '—' }}
                         </td>
+                        {{-- Con segundos: los eventos de contingencia se ubican
+                             despues de la emision del CUFD del evento. --}}
+                        <td>{{ $unCufd->created_at?->format('d/m/Y H:i:s') ?? '—' }}</td>
                     </tr>
                 @empty
-                    <tr><td colspan="6" style="color:var(--suave);">
+                    <tr><td colspan="7" style="color:var(--suave);">
                         Todavia no se solicito ningun CUFD.
                         @if ($cuisEnUso) Se pide solo al emitir la primera factura, o con "Solicitar CUFD". @endif
                     </td></tr>

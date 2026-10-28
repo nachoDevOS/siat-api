@@ -1350,6 +1350,42 @@ test('un paquete lleva el evento registrado y un TAR de facturas firmadas fuera 
         ->and(PuntoVenta::where('codigo_punto_venta', 1)->sole()->siguiente_factura)->toBe(4);
 });
 
+test('el evento de un paquete no empieza antes de que valga el certificado (error 965 del SIN)', function () {
+    // CUFD emitidos tres horas antes de que se generara el certificado: el
+    // primer hueco despues de su emision dejaria las facturas fechadas antes.
+    $ahora = now();
+    test()->travelTo($ahora->copy()->subHours(3));
+    $empresa = empresaListaParaPaquetes();
+    test()->travelTo($ahora->copy()->addHour());
+
+    $vigenteDesde = $empresa->certificadoActivo->inicioVigenciaDelP12();
+    $caso = CasoPrueba::where('etapa', 6)->where('orden', 1)->sole();
+    $caso->update(['payload_ejemplo' => [...$caso->payload_ejemplo, 'cantidadFacturas' => 1]]);
+
+    $inicio = null;
+    $operaciones = operacionesSimuladas();
+    $operaciones->shouldReceive('registrarEvento')->once()
+        ->andReturnUsing(function (array $datos) use (&$inicio) {
+            $inicio = Carbon\Carbon::parse($datos['fechaHoraInicioEvento']);
+
+            return eventoAceptado();
+        });
+
+    $facturacion = Mockery::mock(ServicioFacturacion::class);
+    $facturacion->shouldReceive('recepcionarPaquete')->once()->andReturn(recepcion('901'));
+
+    test()->mock(FabricaServicios::class, function ($mock) use ($operaciones, $facturacion) {
+        $mock->shouldReceive('operaciones')->andReturn($operaciones);
+        $mock->shouldReceive('facturacion')->andReturn($facturacion);
+    });
+
+    $this->post(route('admin.pruebas.caso', [$empresa, $caso]));
+
+    expect($vigenteDesde)->not->toBeNull()
+        ->and(EjecucionPrueba::sole()->estado)->toBe(EjecucionPrueba::ESTADO_EXITOSO)
+        ->and($inicio->greaterThan($vigenteDesde))->toBeTrue();
+});
+
 test('el CUF de una factura del paquete codifica tipo de emision 2', function () {
     $empresa = empresaListaParaPaquetes();
     $pv1 = PuntoVenta::where('codigo_punto_venta', 1)->sole();

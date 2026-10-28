@@ -185,6 +185,17 @@ test('el historial de codigos pagina los CUFD con la vista propia del panel', fu
         ->assertSee('Mostrando 26–30 de 30');
 });
 
+test('el historial de CUFD muestra cuando se solicito cada uno, con segundos', function () {
+    $this->actingAs(User::factory()->create());
+    $puntoVenta = PuntoVenta::factory()->create();
+    $cufd = Cufd::factory()->for($puntoVenta)->create(['version' => 'v3']);
+
+    $this->get(route('admin.puntos-venta.codigos', $puntoVenta))
+        ->assertOk()
+        ->assertSeeInOrder(['CUIS</th>', 'Solicitado</th>'], false)
+        ->assertSee($cufd->created_at->format('d/m/Y H:i:s'));
+});
+
 // --- F: filtros de la API -----------------------------------------------------------
 
 test('GET /facturas filtra por estado, referencia y punto de venta', function () {

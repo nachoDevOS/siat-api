@@ -83,6 +83,32 @@ class Certificado extends Model
     }
 
     /**
+     * Momento desde el que vale el certificado, leido de su propio .p12, en
+     * hora de Bolivia; null si no se puede abrir.
+     *
+     * El SIN rechaza con 965 ("NO CUENTA CON FIRMA VIGENTE") una factura
+     * fechada antes de este momento, aunque se firme despues: pasa con los
+     * paquetes fuera de linea, cuyas facturas llevan la fecha del evento.
+     */
+    public function inicioVigenciaDelP12(): ?Carbon
+    {
+        $almacen = [];
+        $binario = base64_decode((string) $this->contenido_p12, true);
+
+        if ($binario === false || ! openssl_pkcs12_read($binario, $almacen, (string) $this->passphrase)) {
+            return null;
+        }
+
+        $datos = openssl_x509_parse((string) ($almacen['cert'] ?? ''));
+
+        if ($datos === false || ! isset($datos['validFrom_time_t'])) {
+            return null;
+        }
+
+        return Carbon::createFromTimestamp($datos['validFrom_time_t'], config('app.timezone'));
+    }
+
+    /**
      * Si ya vencio. Vale hasta el final del dia de vencimiento. Sin fecha
      * cargada no se puede afirmar que este vencido.
      */
